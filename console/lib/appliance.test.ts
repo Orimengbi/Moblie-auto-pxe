@@ -11,10 +11,11 @@ import {
   renderDebianPreseed,
   renderDiagTask,
   renderIpxeMenu,
+  renderIpmiScript,
   renderKickstart,
   renderUbuntuAutoinstall,
 } from "./render.ts";
-import { createProfile, createProject, createReport, getState, listImages, saveMachine, saveNetwork } from "./store.ts";
+import { createIpmi, createProfile, createProject, createReport, getIpmiBySn, getState, listImages, saveMachine, saveNetwork } from "./store.ts";
 import { DEFAULT_STATE, type ImageRecord, type Profile } from "./types.ts";
 
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pxe-test-"));
@@ -221,6 +222,38 @@ test("project pools stay separate from the fixed address written after install",
   });
   assert.match(kickstart, /network --bootproto=dhcp/);
   assert.match(kickstart, /10\.1\.8\.21\/24/);
+});
+
+test("install looks up IPMI settings by serial number", async () => {
+  const setting = await createIpmi({
+    sn: "sn-abc 123",
+    mode: "static",
+    address: "10.8.0.21",
+    netmask: "255.255.255.0",
+    gateway: "10.8.0.1",
+    channel: 1,
+    vlanId: 20,
+    note: "带外",
+  });
+  assert.equal(setting.sn, "SN-ABC123");
+  assert.equal(getIpmiBySn("sn-abc123")?.address, "10.8.0.21");
+  await assert.rejects(
+    createIpmi({
+      sn: "SN-ABC123",
+      mode: "dhcp",
+      channel: 1,
+    }),
+    /已经有 IPMI/,
+  );
+  const script = renderIpmiScript(setting);
+  assert.match(script, /ipmitool lan set "\$ch" ipaddr 10\.8\.0\.21/);
+  assert.match(script, /vlan id 20/);
+  assert.match(renderIpmiScript(null), /跳过/);
+  const answer = renderUbuntuAutoinstall(profile, "srv-eeff");
+  const decoded = [...answer.userData.matchAll(/echo ([A-Za-z0-9+/=]+) \| base64/g)].map((match) =>
+    Buffer.from(match[1], "base64").toString("utf8"),
+  );
+  assert.ok(decoded.some((item) => item.includes("/boot/ipmi.sh?sn=")));
 });
 
 test("profile creation hashes the password", async () => {

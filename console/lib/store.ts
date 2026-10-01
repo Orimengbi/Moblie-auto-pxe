@@ -6,13 +6,16 @@ import {
   assertAddressRanges,
   assertDiskName,
   assertInterface,
+  assertIpmiChannel,
   assertIpv4,
   assertLeaseHours,
   assertPackages,
   assertTimeout,
   assertUsername,
+  assertVlanId,
   netmaskToPrefix,
   normalizeMac,
+  normalizeSn,
   sameSubnet,
 } from "./net.ts";
 import { hashPassword } from "./password.ts";
@@ -23,6 +26,7 @@ import {
   ensureDataDirs,
   imageDir,
   incomingDir,
+  ipmiPath,
   leasePath,
   machinePath,
   profilePath,
@@ -41,6 +45,7 @@ import {
   type DiskPolicy,
   type ImageRecord,
   type InstalledNetwork,
+  type IpmiSetting,
   type Machine,
   type MachineAction,
   type NetworkConfig,
@@ -462,6 +467,106 @@ export function installedNetworkForMac(mac: string): InstalledNetwork | null {
     gateway: project.fixed.gateway,
     dns: project.fixed.dns.split(",").filter(Boolean),
   };
+}
+
+export interface IpmiInput {
+  sn: string;
+  projectId?: string;
+  mode: "static" | "dhcp";
+  address?: string;
+  netmask?: string;
+  gateway?: string;
+  channel?: number;
+  vlanId?: number | null;
+  note?: string;
+}
+
+function normalizeIpmi(input: IpmiInput, existingId?: string): Omit<IpmiSetting, "id" | "createdAt" | "updatedAt"> {
+  const sn = normalizeSn(input.sn);
+  const duplicate = listIpmi().find((item) => item.sn === sn && item.id !== existingId);
+  if (duplicate) throw new Error(`序列号 ${sn} 已经有 IPMI 网络设置`);
+  if (input.mode !== "static" && input.mode !== "dhcp") throw new Error("IPMI 地址方式只能是固定或 DHCP");
+  let projectId = input.projectId || "";
+  if (projectId) {
+    const project = getProject(projectId);
+    if (!project) throw new Error("项目不存在");
+    projectId = project.id;
+  }
+  const channel = assertIpmiChannel(Number(input.channel ?? 1));
+  const vlanId = assertVlanId(input.vlanId);
+  const netmask = assertIpv4(input.netmask || "255.255.255.0", "IPMI 掩码");
+  const gateway = assertIpv4(input.gateway || "0.0.0.0", "IPMI 网关");
+  let address: string | undefined;
+  if (input.mode === "static") {
+    address = assertIpv4(input.address || "", "IPMI 地址");
+    netmaskToPrefix(netmask);
+    if (!sameSubnet(address, gateway, netmask)) throw new Error("IPMI 地址和网关不在同一个子网");
+    const used = listIpmi().find((item) => item.id !== existingId && item.address === address);
+    if (used) throw new Error(`IPMI 地址 ${address} 已经分给序列号 ${used.sn}`);
+  }
+  return {
+    sn,
+    projectId: projectId || undefined,
+    mode: input.mode,
+    address,
+    netmask,
+    gateway,
+    channel,
+    vlanId,
+    note: (input.note || "").slice(0, 200),
+  };
+}
+
+export function listIpmi(): IpmiSetting[] {
+  ensureDataDirs();
+  return listJson<IpmiSetting>(path.join(dataDir(), "ipmi")).sort((a, b) => a.sn.localeCompare(b.sn));
+}
+
+export function getIpmi(id: string): IpmiSetting | null {
+  if (!/^[a-zA-Z0-9_-]{8,80}$/.test(id)) return null;
+  return readJson<IpmiSetting>(ipmiPath(id));
+}
+
+export function getIpmiBySn(sn: string): IpmiSetting | null {
+  const normalized = normalizeSn(sn);
+  return listIpmi().find((item) => item.sn === normalized) || null;
+}
+
+export async function createIpmi(input: IpmiInput): Promise<IpmiSetting> {
+  return withLock(() => {
+    const now = new Date().toISOString();
+    const setting: IpmiSetting = {
+      id: crypto.randomUUID(),
+      ...normalizeIpmi(input),
+      createdAt: now,
+      updatedAt: now,
+    };
+    writeJson(ipmiPath(setting.id), setting);
+    return setting;
+  });
+}
+
+export async function updateIpmi(id: string, input: IpmiInput): Promise<IpmiSetting> {
+  return withLock(() => {
+    const existing = getIpmi(id);
+    if (!existing) throw new Error("IPMI 设置不存在");
+    const setting: IpmiSetting = {
+      ...existing,
+      ...normalizeIpmi(input, existing.id),
+      id: existing.id,
+      createdAt: existing.createdAt,
+      updatedAt: new Date().toISOString(),
+    };
+    writeJson(ipmiPath(setting.id), setting);
+    return setting;
+  });
+}
+
+export async function deleteIpmi(id: string): Promise<void> {
+  return withLock(() => {
+    if (!getIpmi(id)) throw new Error("IPMI 设置不存在");
+    fs.rmSync(ipmiPath(id), { force: true });
+  });
 }
 
 export function listMachines(): Machine[] {

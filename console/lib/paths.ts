@@ -15,6 +15,7 @@ export function ensureDataDirs(): void {
     "profiles",
     "projects",
     "machines",
+    "ipmi",
     "scripts",
     "reports",
     "tftp",
@@ -39,6 +40,10 @@ export function profilePath(id: string): string {
 
 export function projectPath(id: string): string {
   return path.join(dataDir(), "projects", `${id}.json`);
+}
+
+export function ipmiPath(id: string): string {
+  return path.join(dataDir(), "ipmi", `${id}.json`);
 }
 
 export function machinePath(mac: string): string {

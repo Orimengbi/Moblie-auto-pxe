@@ -81,6 +81,29 @@ export function assertAddressRanges(serverIp: string, ranges: AddressRange[]): v
   }
 }
 
+export function normalizeSn(input: string): string {
+  const sn = input.trim().replace(/\s+/g, "").toUpperCase();
+  if (!/^[A-Z0-9][A-Z0-9._:/-]{1,63}$/.test(sn)) {
+    throw new Error("序列号需要 2 到 64 位，只允许字母、数字和 . _ : / -");
+  }
+  return sn;
+}
+
+export function assertIpmiChannel(value: number): number {
+  if (!Number.isInteger(value) || value < 1 || value > 15) {
+    throw new Error("IPMI 通道需要是 1 到 15 的整数");
+  }
+  return value;
+}
+
+export function assertVlanId(value: number | undefined | null): number | undefined {
+  if (value === undefined || value === null || value === 0) return undefined;
+  if (!Number.isInteger(value) || value < 1 || value > 4094) {
+    throw new Error("VLAN 需要是 1 到 4094 的整数，留空表示关闭");
+  }
+  return value;
+}
+
 export function assertLeaseHours(value: number): number {
   if (!Number.isInteger(value) || value < 1 || value > 48) {
     throw new Error("临时地址租约需要是 1 到 48 小时的整数");

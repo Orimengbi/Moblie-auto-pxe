@@ -1,4 +1,4 @@
-import type { DiskPolicy, Family, ImageRecord, InstalledNetwork, Profile } from "./types.ts";
+import type { DiskPolicy, Family, ImageRecord, InstalledNetwork, IpmiSetting, Profile } from "./types.ts";
 import { FAMILY_LABEL } from "./types.ts";
 import { applyHostname } from "./net.ts";
 
@@ -82,6 +82,60 @@ chmod 600 /etc/NetworkManager/system-connections/pxe-fixed.nmconnection
 `;
 }
 
+export function ipmiLookupShell(serverIp: string): string {
+  return `sn=$(cat /sys/class/dmi/id/product_serial 2>/dev/null || true)
+sn=$(printf '%s' "$sn" | tr -d '[:space:]')
+if [ -z "$sn" ]; then
+  echo "读不到序列号，跳过 IPMI 网络设置"
+  exit 0
+fi
+if ! command -v curl >/dev/null 2>&1; then
+  if command -v apt-get >/dev/null 2>&1; then apt-get update && apt-get install -y curl
+  elif command -v dnf >/dev/null 2>&1; then dnf install -y curl
+  elif command -v yum >/dev/null 2>&1; then yum install -y curl
+  else
+    echo "没有 curl，无法按序列号领取 IPMI 设置" >&2
+    exit 1
+  fi
+fi
+curl -fsS "http://${serverIp}/boot/ipmi.sh?sn=$sn" -o /tmp/pxe-ipmi.sh
+sh /tmp/pxe-ipmi.sh
+`;
+}
+
+export function renderIpmiScript(setting: IpmiSetting | null): string {
+  if (!setting) {
+    return "#!/bin/sh\necho \"没有和这个序列号匹配的 IPMI 网络设置，跳过\"\nexit 0\n";
+  }
+  const lines = [
+    "#!/bin/sh",
+    "set -eu",
+    "modprobe ipmi_devintf 2>/dev/null || true",
+    "modprobe ipmi_si 2>/dev/null || true",
+    "if ! command -v ipmitool >/dev/null 2>&1; then",
+    "  if command -v apt-get >/dev/null 2>&1; then apt-get update && apt-get install -y ipmitool",
+    "  elif command -v dnf >/dev/null 2>&1; then dnf install -y ipmitool",
+    "  elif command -v yum >/dev/null 2>&1; then yum install -y ipmitool",
+    "  else echo \"系统里没有 ipmitool，无法写入 IPMI 网络\" >&2; exit 1; fi",
+    "fi",
+    `ch=${setting.channel}`,
+  ];
+  if (setting.mode === "dhcp") {
+    lines.push('ipmitool lan set "$ch" ipsrc dhcp');
+  } else {
+    lines.push(
+      'ipmitool lan set "$ch" ipsrc static',
+      `ipmitool lan set "$ch" ipaddr ${setting.address}`,
+      `ipmitool lan set "$ch" netmask ${setting.netmask}`,
+      `ipmitool lan set "$ch" defgw ipaddr ${setting.gateway}`,
+    );
+  }
+  if (setting.vlanId) lines.push(`ipmitool lan set "$ch" vlan id ${setting.vlanId}`);
+  else lines.push('ipmitool lan set "$ch" vlan id off || true');
+  lines.push('ipmitool lan set "$ch" access on', 'ipmitool lan print "$ch"');
+  return `${lines.join("\n")}\n`;
+}
+
 function diskMatch(policy: DiskPolicy, diskName: string): string {
   if (policy === "named") {
     return `        path: /dev/${diskName}`;
@@ -93,10 +147,12 @@ export function renderUbuntuAutoinstall(
   profile: Profile,
   hostname: string,
   installed?: InstalledNetwork | null,
+  serverIp = "192.168.77.1",
 ): { userData: string; metaData: string } {
   const packages = profile.packages.map((pkg) => `    - ${pkg}`).join("\n");
   const lateCommands = [
     installed ? postCommand(fixedShell(installed, "ubuntu"), "ubuntu") : null,
+    postCommand(ipmiLookupShell(serverIp), "ubuntu"),
     postCommand(profile.postScript, "ubuntu"),
   ].filter((item): item is string => Boolean(item));
   const lateBlock = lateCommands.length
@@ -136,7 +192,9 @@ export function renderDebianPreseed(
   installed?: InstalledNetwork | null,
 ): string {
   const disk = profile.diskPolicy === "named" ? `/dev/${profile.diskName}` : "/dev/sda";
-  const lateScript = [installed ? fixedShell(installed, "debian") : "", profile.postScript].filter((item) => item.trim()).join("\n");
+  const lateScript = [installed ? fixedShell(installed, "debian") : "", ipmiLookupShell(serverIp), profile.postScript]
+    .filter((item) => item.trim())
+    .join("\n");
   const late = postCommand(lateScript, "debian");
   const lines = [
     `d-i debian-installer/locale string ${profile.locale}`,
@@ -220,6 +278,7 @@ export function renderKickstart(
   const pkgs = profile.packages.length ? profile.packages.join("\n") : "openssh-server";
   const postParts = ["%post --interpreter=/bin/bash --erroronfail"];
   if (installed) postParts.push(fixedShell(installed, "rocky").trimEnd());
+  postParts.push(ipmiLookupShell(serverIp).trimEnd());
   const userScript = postCommand(profile.postScript, "rocky");
   if (userScript) {
     postParts.push(`echo ${userScript} | base64 -d > /root/pxe-post.sh`, "chmod 700 /root/pxe-post.sh", "bash /root/pxe-post.sh");
@@ -363,7 +422,7 @@ export function renderAnswer(
 ): { contentType: string; filename: string; body: string }[] {
   const hostname = applyHostname(profile.hostnamePattern, mac);
   if (image.family === "ubuntu") {
-    const rendered = renderUbuntuAutoinstall(profile, hostname, installed);
+    const rendered = renderUbuntuAutoinstall(profile, hostname, installed, serverIp);
     return [
       { contentType: "text/plain; charset=utf-8", filename: "user-data", body: rendered.userData },
       { contentType: "text/plain; charset=utf-8", filename: "meta-data", body: rendered.metaData },

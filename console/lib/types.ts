@@ -82,6 +82,21 @@ export interface InstalledNetwork {
   dns: string[];
 }
 
+export interface IpmiSetting {
+  id: string;
+  sn: string;
+  projectId?: string;
+  mode: "static" | "dhcp";
+  address?: string;
+  netmask: string;
+  gateway: string;
+  channel: number;
+  vlanId?: number;
+  note: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface DiagScript {
   id: string;
   name: string;

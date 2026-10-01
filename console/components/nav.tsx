@@ -11,6 +11,7 @@ const LINKS = [
   { href: "/profiles", label: "安装配置" },
   { href: "/menu", label: "启动菜单" },
   { href: "/machines", label: "机器" },
+  { href: "/ipmi", label: "IPMI" },
   { href: "/diag", label: "验机" },
   { href: "/reports", label: "报告" },
 ];
