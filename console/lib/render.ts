@@ -1,6 +1,6 @@
 import type { DiskPolicy, Family, ImageRecord, InstalledNetwork, IpmiSetting, Profile } from "./types.ts";
 import { FAMILY_LABEL } from "./types.ts";
-import { applyHostname } from "./net.ts";
+import { applyHostname, bootOrigin } from "./net.ts";
 
 function yamlQuote(value: string): string {
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
@@ -82,7 +82,8 @@ chmod 600 /etc/NetworkManager/system-connections/pxe-fixed.nmconnection
 `;
 }
 
-export function ipmiLookupShell(serverIp: string): string {
+export function ipmiLookupShell(serverIp: string, httpPort = 80): string {
+  const origin = bootOrigin(serverIp, httpPort);
   return `sn=$(cat /sys/class/dmi/id/product_serial 2>/dev/null || true)
 sn=$(printf '%s' "$sn" | tr -d '[:space:]')
 if [ -z "$sn" ]; then
@@ -98,7 +99,7 @@ if ! command -v curl >/dev/null 2>&1; then
     exit 1
   fi
 fi
-curl -fsS "http://${serverIp}/boot/ipmi.sh?sn=$sn" -o /tmp/pxe-ipmi.sh
+curl -fsS "${origin}/boot/ipmi.sh?sn=$sn" -o /tmp/pxe-ipmi.sh
 sh /tmp/pxe-ipmi.sh
 `;
 }
@@ -148,11 +149,12 @@ export function renderUbuntuAutoinstall(
   hostname: string,
   installed?: InstalledNetwork | null,
   serverIp = "192.168.77.1",
+  httpPort = 80,
 ): { userData: string; metaData: string } {
   const packages = profile.packages.map((pkg) => `    - ${pkg}`).join("\n");
   const lateCommands = [
     installed ? postCommand(fixedShell(installed, "ubuntu"), "ubuntu") : null,
-    postCommand(ipmiLookupShell(serverIp), "ubuntu"),
+    postCommand(ipmiLookupShell(serverIp, httpPort), "ubuntu"),
     postCommand(profile.postScript, "ubuntu"),
   ].filter((item): item is string => Boolean(item));
   const lateBlock = lateCommands.length
@@ -190,9 +192,11 @@ export function renderDebianPreseed(
   serverIp: string,
   imageId: string,
   installed?: InstalledNetwork | null,
+  httpPort = 80,
 ): string {
   const disk = profile.diskPolicy === "named" ? `/dev/${profile.diskName}` : "/dev/sda";
-  const lateScript = [installed ? fixedShell(installed, "debian") : "", ipmiLookupShell(serverIp), profile.postScript]
+  const mirrorHost = httpPort === 80 ? serverIp : `${serverIp}:${httpPort}`;
+  const lateScript = [installed ? fixedShell(installed, "debian") : "", ipmiLookupShell(serverIp, httpPort), profile.postScript]
     .filter((item) => item.trim())
     .join("\n");
   const late = postCommand(lateScript, "debian");
@@ -208,7 +212,7 @@ export function renderDebianPreseed(
     "d-i clock-setup/utc boolean true",
     `d-i time/zone string ${profile.timezone}`,
     "d-i mirror/country string manual",
-    `d-i mirror/http/hostname string ${serverIp}`,
+    `d-i mirror/http/hostname string ${mirrorHost}`,
     `d-i mirror/http/directory string /images/${imageId}/tree`,
     "d-i mirror/http/proxy string",
     "d-i partman-auto/method string regular",
@@ -274,11 +278,12 @@ export function renderKickstart(
   serverIp: string,
   imageId: string,
   installed?: InstalledNetwork | null,
+  httpPort = 80,
 ): string {
   const pkgs = profile.packages.length ? profile.packages.join("\n") : "openssh-server";
   const postParts = ["%post --interpreter=/bin/bash --erroronfail"];
   if (installed) postParts.push(fixedShell(installed, "rocky").trimEnd());
-  postParts.push(ipmiLookupShell(serverIp).trimEnd());
+  postParts.push(ipmiLookupShell(serverIp, httpPort).trimEnd());
   const userScript = postCommand(profile.postScript, "rocky");
   if (userScript) {
     postParts.push(`echo ${userScript} | base64 -d > /root/pxe-post.sh`, "chmod 700 /root/pxe-post.sh", "bash /root/pxe-post.sh");
@@ -293,7 +298,7 @@ export function renderKickstart(
     `rootpw --iscrypted ${profile.passwordHash}`,
     `user --name=${profile.username} --groups=wheel --iscrypted --password=${profile.passwordHash}`,
     `network --bootproto=dhcp --device=link --activate --hostname=${hostname}`,
-    `url --url="http://${serverIp}/images/${imageId}/tree"`,
+    `url --url="${bootOrigin(serverIp, httpPort)}/images/${imageId}/tree"`,
     "zerombr",
     "%include /tmp/pxe-disk.cfg",
     "reboot",
@@ -350,12 +355,13 @@ function kernelLine(server: string, image: ImageRecord, profile: Profile, family
 
 export function renderIpxeMenu(input: {
   serverIp: string;
+  httpPort?: number;
   timeoutSec: number;
   entries: MenuProfile[];
   diagReady: boolean;
   binding?: MenuBinding | null;
 }): string {
-  const server = `http://${input.serverIp}`;
+  const server = bootOrigin(input.serverIp, input.httpPort ?? 80);
   const timeoutMs = Math.max(0, input.timeoutSec) * 1000;
   const lines = ["#!ipxe", `set server ${server}`, "menu PXE 装机台", "item --gap -- 安装系统（将清空所选磁盘）"];
   const installIds = new Set<string>();
@@ -419,10 +425,11 @@ export function renderAnswer(
   mac: string,
   serverIp: string,
   installed?: InstalledNetwork | null,
+  httpPort = 80,
 ): { contentType: string; filename: string; body: string }[] {
   const hostname = applyHostname(profile.hostnamePattern, mac);
   if (image.family === "ubuntu") {
-    const rendered = renderUbuntuAutoinstall(profile, hostname, installed, serverIp);
+    const rendered = renderUbuntuAutoinstall(profile, hostname, installed, serverIp, httpPort);
     return [
       { contentType: "text/plain; charset=utf-8", filename: "user-data", body: rendered.userData },
       { contentType: "text/plain; charset=utf-8", filename: "meta-data", body: rendered.metaData },
@@ -433,7 +440,7 @@ export function renderAnswer(
       {
         contentType: "text/plain; charset=utf-8",
         filename: "preseed.cfg",
-        body: renderDebianPreseed(profile, hostname, serverIp, image.id, installed),
+        body: renderDebianPreseed(profile, hostname, serverIp, image.id, installed, httpPort),
       },
     ];
   }
@@ -441,7 +448,7 @@ export function renderAnswer(
     {
       contentType: "text/plain; charset=utf-8",
       filename: "kickstart.cfg",
-      body: renderKickstart(profile, hostname, serverIp, image.id, installed),
+      body: renderKickstart(profile, hostname, serverIp, image.id, installed, httpPort),
     },
   ];
 }
@@ -454,6 +461,7 @@ export function enabledCheckNames(flags: Record<string, boolean>): string[] {
 
 export function renderDiagTask(input: {
   serverIp: string;
+  httpPort?: number;
   mac: string;
   checks: string[];
   scripts: { id: string; name: string; timeoutSec: number }[];
@@ -461,7 +469,7 @@ export function renderDiagTask(input: {
   const lines = [
     "# 由 PXE 控制台生成，验机代理 source 这个文件。",
     `PXE_MAC=${input.mac}`,
-    `PXE_REPORT=http://${input.serverIp}/boot/reports`,
+    `PXE_REPORT=${bootOrigin(input.serverIp, input.httpPort ?? 80)}/boot/reports`,
     `PXE_CHECKS=${input.checks.join(" ")}`,
     `PXE_SCRIPT_COUNT=${input.scripts.length}`,
   ];
@@ -469,7 +477,7 @@ export function renderDiagTask(input: {
     const n = index + 1;
     lines.push(`PXE_SCRIPT_${n}_ID=${script.id}`);
     lines.push(`PXE_SCRIPT_${n}_NAME_B64=${Buffer.from(script.name, "utf8").toString("base64")}`);
-    lines.push(`PXE_SCRIPT_${n}_URL=http://${input.serverIp}/boot/scripts/${script.id}`);
+    lines.push(`PXE_SCRIPT_${n}_URL=${bootOrigin(input.serverIp, input.httpPort ?? 80)}/boot/scripts/${script.id}`);
     lines.push(`PXE_SCRIPT_${n}_TIMEOUT=${script.timeoutSec}`);
   });
   return `${lines.join("\n")}\n`;

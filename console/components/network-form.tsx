@@ -15,6 +15,7 @@ const FIELDS: { key: keyof NetworkConfig; label: string }[] = [
   { key: "netmask", label: "装机网掩码" },
   { key: "gateway", label: "装机网关" },
   { key: "dns", label: "装机 DNS" },
+  { key: "httpPort", label: "启动 HTTP 端口" },
   { key: "menuTimeoutSec", label: "菜单超时（秒）" },
 ];
 
@@ -55,7 +56,12 @@ export function NetworkForm({ network }: { network: NetworkConfig }) {
           <Input
             id={field.key}
             value={String(form[field.key])}
-            onChange={(event) => setForm({ ...form, [field.key]: field.key === "menuTimeoutSec" ? Number(event.target.value) : event.target.value })}
+            onChange={(event) =>
+              setForm({
+                ...form,
+                [field.key]: field.key === "menuTimeoutSec" || field.key === "httpPort" ? Number(event.target.value) : event.target.value,
+              })
+            }
           />
         </div>
       ))}

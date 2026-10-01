@@ -5,6 +5,7 @@ import {
   applyHostname,
   assertAddressRanges,
   assertDiskName,
+  assertHttpPort,
   assertInterface,
   assertIpmiChannel,
   assertIpv4,
@@ -124,7 +125,7 @@ function dhcpRanges(network: NetworkConfig, projects: Project[]) {
 export function syncBootFiles(network: NetworkConfig): void {
   ensureDataDirs();
   fs.writeFileSync(dnsmasqConfPath(), renderDnsmasq(network, listProjects(), listMachines()));
-  fs.writeFileSync(path.join(tftpDir(), "boot.ipxe"), renderBootIpxe(network.serverIp));
+  fs.writeFileSync(path.join(tftpDir(), "boot.ipxe"), renderBootIpxe(network.serverIp, network.httpPort));
 }
 
 export async function saveNetwork(input: NetworkConfig): Promise<ApplianceState> {
@@ -139,6 +140,7 @@ export async function saveNetwork(input: NetworkConfig): Promise<ApplianceState>
       gateway: assertIpv4(input.gateway, "网关"),
       dns: assertIpv4(input.dns, "DNS"),
       menuTimeoutSec: assertTimeout(Number(input.menuTimeoutSec)),
+      httpPort: assertHttpPort(Number(input.httpPort ?? 80)),
     };
     assertIpv4(network.dns, "DNS");
     assertAddressRanges(network.serverIp, dhcpRanges(network, listProjects()));

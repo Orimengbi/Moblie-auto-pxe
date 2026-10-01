@@ -13,7 +13,8 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     const image = getImage(profile.imageId);
     if (!image) return jsonError(new Error("镜像不存在"), 404);
     const mac = normalizeMac(new URL(request.url).searchParams.get("mac") || "00:11:22:33:44:55");
-    const files = renderAnswer(profile, image, mac, getState().network.serverIp, installedNetworkForMac(mac));
+    const state = getState();
+    const files = renderAnswer(profile, image, mac, state.network.serverIp, installedNetworkForMac(mac), state.network.httpPort);
     return Response.json({ files });
   } catch (error) {
     return jsonError(error);

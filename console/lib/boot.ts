@@ -37,6 +37,7 @@ export async function menuFor(macRaw: string | null): Promise<string> {
   const boundProfile = machine?.profileId ? getProfile(machine.profileId) : null;
   return renderIpxeMenu({
     serverIp: state.network.serverIp,
+    httpPort: state.network.httpPort,
     timeoutSec: state.network.menuTimeoutSec,
     entries,
     diagReady: diagReady(),
@@ -70,7 +71,7 @@ export function answerFile(profileId: string, macRaw: string, filename: string):
     const message = error instanceof Error ? error.message : "固定网络还没配好";
     return new Response(`${message}\n`, { status: 409 });
   }
-  const files = renderAnswer(profile, image, mac, state.network.serverIp, installed);
+  const files = renderAnswer(profile, image, mac, state.network.serverIp, installed, state.network.httpPort);
   const file = files.find((item) => item.filename === filename);
   if (!file) return new Response("这个镜像不使用该应答文件\n", { status: 404 });
   return new Response(file.body, { headers: { "content-type": file.contentType } });
@@ -95,7 +96,7 @@ export function diagTask(macRaw: string | null): string {
   const scripts = listScripts()
     .filter((script) => script.enabled && (chosen.size === 0 || chosen.has(script.id)))
     .map((script) => ({ id: script.id, name: script.name, timeoutSec: 120 }));
-  return renderDiagTask({ serverIp: state.network.serverIp, mac, checks, scripts });
+  return renderDiagTask({ serverIp: state.network.serverIp, httpPort: state.network.httpPort, mac, checks, scripts });
 }
 
 export function scriptResponse(id: string): Response {

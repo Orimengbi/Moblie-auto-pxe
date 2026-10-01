@@ -147,6 +147,17 @@ export function assertPackages(packages: string[]): string[] {
   return cleaned;
 }
 
+export function assertHttpPort(value: number): number {
+  if (!Number.isInteger(value) || value < 1 || value > 65535) {
+    throw new Error("启动 HTTP 端口需要是 1 到 65535 的整数");
+  }
+  return value;
+}
+
+export function bootOrigin(serverIp: string, httpPort = 80): string {
+  return httpPort === 80 ? `http://${serverIp}` : `http://${serverIp}:${httpPort}`;
+}
+
 export function assertTimeout(value: number): number {
   if (!Number.isInteger(value) || value < 0 || value > 120) {
     throw new Error("菜单超时需要是 0 到 120 秒的整数");

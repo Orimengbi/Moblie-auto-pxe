@@ -1,3 +1,4 @@
+import { bootOrigin } from "./net.ts";
 import type { Machine, NetworkConfig, Project } from "./types.ts";
 
 export function projectTag(id: string): string {
@@ -5,7 +6,7 @@ export function projectTag(id: string): string {
 }
 
 export function renderDnsmasq(network: NetworkConfig, projects: Project[] = [], machines: Machine[] = []): string {
-  const httpBoot = `http://${network.serverIp}/boot/menu.ipxe`;
+  const httpBoot = `${bootOrigin(network.serverIp, network.httpPort)}/boot/menu.ipxe`;
   const lines = [
     "# 由 PXE 控制台生成。只监听装机网口。",
     "# 装机阶段使用临时地址。项目里的机器进入对应地址池，其余机器使用未归类地址池。",
@@ -53,11 +54,11 @@ export function renderDnsmasq(network: NetworkConfig, projects: Project[] = [], 
   return `${lines.join("\n")}\n`;
 }
 
-export function renderBootIpxe(serverIp: string): string {
+export function renderBootIpxe(serverIp: string, httpPort = 80): string {
   return [
     "#!ipxe",
     "dhcp",
-    `set server http://${serverIp}`,
+    `set server ${bootOrigin(serverIp, httpPort)}`,
     "chain ${server}/boot/menu.ipxe?mac=${mac:hexhyp} || shell",
     "",
   ].join("\n");

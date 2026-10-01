@@ -141,6 +141,7 @@ export interface NetworkConfig {
   gateway: string;
   dns: string;
   menuTimeoutSec: number;
+  httpPort: number;
 }
 
 export interface BuiltinDiag {
@@ -180,6 +181,7 @@ export const DEFAULT_STATE: ApplianceState = {
     gateway: "192.168.77.1",
     dns: "192.168.77.1",
     menuTimeoutSec: 15,
+    httpPort: 80,
   },
   builtinDiag: {
     cpu: true,

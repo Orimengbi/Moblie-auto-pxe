@@ -103,6 +103,8 @@ test("dnsmasq stays on the install interface", () => {
   assert.match(conf, /interface=eth1/);
   assert.match(conf, /dhcp-range=tag:!pxeproject,192\.168\.77\.50,192\.168\.77\.200,255\.255\.255\.0,12h/);
   assert.match(conf, /dhcp-boot=tag:ipxe,http:\/\/192\.168\.77\.1\/boot\/menu\.ipxe/);
+  const ported = renderDnsmasq({ ...DEFAULT_STATE.network, httpPort: 8080 });
+  assert.match(ported, /http:\/\/192\.168\.77\.1:8080\/boot\/menu\.ipxe/);
   assert.doesNotMatch(conf, /interface=eth0/);
   const leases = parseLeases("4102444800 aa:bb:cc:dd:ee:ff 192.168.77.50 srv *\n", 1_700_000_000);
   assert.equal(leases[0]?.active, true);
