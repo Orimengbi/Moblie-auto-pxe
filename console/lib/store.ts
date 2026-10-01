@@ -818,9 +818,10 @@ export interface MachineInput {
 export async function saveMachine(input: MachineInput): Promise<Machine> {
   return withLock(() => {
     const mac = normalizeMac(input.mac);
-    if (!["menu", "install", "diag"].includes(input.action)) throw new Error("绑定动作不合法");
+    const action = input.action === "diag" ? "menu" : input.action;
+    if (!["menu", "install"].includes(action)) throw new Error("绑定动作不合法");
     let profileId = input.profileId || "";
-    if (input.action === "install") {
+    if (action === "install") {
       const profile = getProfile(profileId);
       if (!profile) throw new Error("绑定安装时要选择一个安装配置");
       profileId = profile.id;
@@ -846,7 +847,7 @@ export async function saveMachine(input: MachineInput): Promise<Machine> {
     const existing = getMachine(mac);
     const machine: Machine = {
       mac,
-      action: input.action,
+      action,
       profileId: profileId || undefined,
       projectId: projectId || undefined,
       fixedIp: fixedIp || undefined,

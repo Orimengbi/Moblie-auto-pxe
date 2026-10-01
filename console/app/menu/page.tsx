@@ -1,5 +1,5 @@
 import { PageHeader } from "@/components/page-header";
-import { activeProject, diagReady, getImage, getState, profilesForProject } from "@/lib/store";
+import { activeProject, getImage, getState, profilesForProject } from "@/lib/store";
 import { renderIpxeMenu } from "@/lib/render";
 
 export const dynamic = "force-dynamic";
@@ -17,7 +17,6 @@ export default function MenuPage() {
     httpPort: state.network.httpPort,
     timeoutSec: state.network.menuTimeoutSec,
     entries,
-    diagReady: diagReady(),
   });
 
   return (

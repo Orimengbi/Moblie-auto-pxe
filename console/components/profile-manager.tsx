@@ -187,7 +187,7 @@ export function ProfileManager({
             <form onSubmit={save} className="grid gap-3">
               <DialogHeader>
                 <DialogTitle>{editing ? "编辑安装配置" : "新建安装配置"}</DialogTitle>
-                <DialogDescription>安装会按磁盘策略清空目标盘。验机入口不会使用这份配置。</DialogDescription>
+                <DialogDescription>安装会按磁盘策略清空目标盘。</DialogDescription>
               </DialogHeader>
               <Field label="名称">
                 <Input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required />

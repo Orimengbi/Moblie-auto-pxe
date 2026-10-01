@@ -384,7 +384,7 @@ export function renderKickstart(
 }
 
 export interface MenuBinding {
-  action: "menu" | "install" | "diag";
+  action: "menu" | "install";
   profileId?: string;
   profileName?: string;
 }
@@ -427,7 +427,6 @@ export function renderIpxeMenu(input: {
   httpPort?: number;
   timeoutSec: number;
   entries: MenuProfile[];
-  diagReady: boolean;
   binding?: MenuBinding | null;
 }): string {
   const server = bootOrigin(input.serverIp, input.httpPort ?? 80);
@@ -443,12 +442,6 @@ export function renderIpxeMenu(input: {
     const label = `${entry.profile.name} · ${FAMILY_LABEL[entry.image.family]} ${entry.image.version}`.replace(/:/g, " ");
     lines.push(`item ${id} ${label}`);
   }
-  lines.push("item --gap -- 诊断");
-  if (input.diagReady) {
-    lines.push("item diag 内存验机（不写入本地硬盘）");
-  } else {
-    lines.push("item --gap -- （验机镜像还没准备好）");
-  }
   lines.push("item --gap --");
   lines.push("item local 从本地硬盘启动");
 
@@ -457,9 +450,6 @@ export function renderIpxeMenu(input: {
   if (input.binding?.action === "install" && input.binding.profileId && installIds.has(input.binding.profileId)) {
     defaultItem = `install-${input.binding.profileId}`;
     banner = `echo 本机已绑定安装：${(input.binding.profileName || "安装配置").replace(/:/g, " ")}。超时后开始，将清空所选磁盘。`;
-  } else if (input.binding?.action === "diag" && input.diagReady) {
-    defaultItem = "diag";
-    banner = "echo 本机已绑定验机。超时后进入内存验机，不写入本地硬盘。";
   }
 
   lines.push(`choose --default ${defaultItem} --timeout ${timeoutMs} selected || goto local`);
@@ -469,14 +459,6 @@ export function renderIpxeMenu(input: {
   lines.push("echo 从本地硬盘启动");
   lines.push("exit");
   lines.push("");
-
-  if (input.diagReady) {
-    lines.push(":diag");
-    lines.push("kernel ${server}/diag/vmlinuz-lts initrd=initramfs-lts ip=dhcp modloop=${server}/diag/modloop-lts apkovl=${server}/diag/diag.apkovl.tar.gz PXE_SERVER=${server}");
-    lines.push("initrd ${server}/diag/initramfs-lts");
-    lines.push("boot");
-    lines.push("");
-  }
 
   for (const entry of input.entries) {
     lines.push(`:install-${entry.profile.id}`);

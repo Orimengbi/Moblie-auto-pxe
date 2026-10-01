@@ -1,17 +1,13 @@
 import { normalizeMac } from "./net.ts";
-import { renderAnswer, renderDiagTask, renderIpxeMenu } from "./render.ts";
+import { renderAnswer, renderIpxeMenu } from "./render.ts";
 import {
-  diagReady,
   getImage,
   getMachine,
   getProfile,
-  getScript,
   getState,
   installedNetworkForMac,
   activeProject,
   profilesForProject,
-  listScripts,
-  readScriptBody,
   touchMachine,
 } from "./store.ts";
 import type { Machine } from "./types.ts";
@@ -42,10 +38,9 @@ export async function menuFor(macRaw: string | null): Promise<string> {
     httpPort: state.network.httpPort,
     timeoutSec: state.network.menuTimeoutSec,
     entries,
-    diagReady: diagReady(),
     binding: machine
       ? {
-          action: machine.action,
+          action: machine.action === "install" ? "install" : "menu",
           profileId: machine.profileId,
           profileName: boundProfile?.name,
         }
@@ -79,32 +74,3 @@ export function answerFile(profileId: string, macRaw: string, filename: string):
   return new Response(file.body, { headers: { "content-type": file.contentType } });
 }
 
-export function diagTask(macRaw: string | null): string {
-  const state = getState();
-  let mac = "00:00:00:00:00:00";
-  let machine: Machine | null = null;
-  if (macRaw) {
-    try {
-      mac = normalizeMac(macRaw);
-      machine = getMachine(mac);
-    } catch {
-      mac = "00:00:00:00:00:00";
-    }
-  }
-  const checks = Object.entries(state.builtinDiag)
-    .filter(([, on]) => on)
-    .map(([name]) => name);
-  const chosen = new Set(machine?.scriptIds || []);
-  const scripts = listScripts()
-    .filter((script) => script.enabled && (chosen.size === 0 || chosen.has(script.id)))
-    .map((script) => ({ id: script.id, name: script.name, timeoutSec: 120 }));
-  return renderDiagTask({ serverIp: state.network.serverIp, httpPort: state.network.httpPort, mac, checks, scripts });
-}
-
-export function scriptResponse(id: string): Response {
-  const script = getScript(id);
-  if (!script || !script.enabled) return new Response("脚本不存在\n", { status: 404 });
-  return new Response(readScriptBody(id), {
-    headers: { "content-type": "text/plain; charset=utf-8" },
-  });
-}

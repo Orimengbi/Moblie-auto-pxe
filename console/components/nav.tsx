@@ -10,8 +10,6 @@ const LINKS = [
   { href: "/images", label: "镜像" },
   { href: "/menu", label: "启动菜单" },
   { href: "/machines", label: "机器" },
-  { href: "/diag", label: "验机" },
-  { href: "/reports", label: "报告" },
 ];
 
 export function Nav() {

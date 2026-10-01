@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "PXE 装机台",
-  description: "移动小主机上的 Linux 无人值守安装与内存验机",
+  description: "移动小主机上的 Linux 无人值守安装",
 };
 
 export const dynamic = "force-dynamic";

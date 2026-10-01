@@ -84,21 +84,20 @@ test("menu defaults to the local disk unless a machine is bound", () => {
     serverIp: "192.168.77.1",
     timeoutSec: 15,
     entries: [{ profile, image: ubuntu }],
-    diagReady: false,
   });
   assert.match(menu, /choose --default local --timeout 15000/);
   assert.match(menu, /将清空所选磁盘/);
+  assert.doesNotMatch(menu, /验机/);
   assert.match(menu, /ds=nocloud-net\\;s=/);
 
   const bound = renderIpxeMenu({
     serverIp: "192.168.77.1",
     timeoutSec: 15,
     entries: [{ profile, image: ubuntu }],
-    diagReady: true,
-    binding: { action: "diag" },
+    binding: { action: "install", profileId: profile.id, profileName: profile.name },
   });
-  assert.match(bound, /choose --default diag/);
-  assert.match(bound, /不写入本地硬盘/);
+  assert.match(bound, new RegExp(`choose --default install-${profile.id}`));
+  assert.match(bound, /将清空所选磁盘/);
 });
 
 test("dnsmasq stays on the install interface", () => {

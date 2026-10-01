@@ -1,5 +1,5 @@
 import { renderIpxeMenu } from "@/lib/render";
-import { activeProject, diagReady, getImage, getState, profilesForProject } from "@/lib/store";
+import { activeProject, getImage, getState, profilesForProject } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
@@ -16,7 +16,6 @@ export function GET() {
     httpPort: state.network.httpPort,
     timeoutSec: state.network.menuTimeoutSec,
     entries,
-    diagReady: diagReady(),
   });
   return new Response(body, { headers: { "content-type": "text/plain; charset=utf-8" } });
 }
