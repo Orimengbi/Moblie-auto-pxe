@@ -7,7 +7,7 @@ import { ProjectDhcpForm } from "@/components/project-dhcp-form";
 import { ProjectMachineList } from "@/components/project-machine-list";
 import { ProjectPlanImport } from "@/components/project-plan-import";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { getProject, listImages, listIpmi, listMachines, listNicPlans, listProfiles, publicProfile } from "@/lib/store";
+import { getProject, listImages, listIpmi, listMachineFacts, listMachines, listNicPlans, listProfiles, publicProfile } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +21,7 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
   const settings = listIpmi().filter((setting) => setting.projectId === project.id);
   const nics = listNicPlans().filter((plan) => plan.projectId === project.id);
   const machines = listMachines().filter((machine) => machine.projectId === project.id);
+  const facts = listMachineFacts().filter((fact) => fact.projectId === project.id);
   return (
     <div className="grid gap-4">
       <div>
@@ -71,7 +72,7 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
           <CardTitle>机器列表</CardTitle>
         </CardHeader>
         <CardContent>
-          <ProjectMachineList machines={machines} nics={nics} ipmi={settings} />
+          <ProjectMachineList machines={machines} nics={nics} ipmi={settings} facts={facts} />
         </CardContent>
       </Card>
     </div>

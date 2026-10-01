@@ -29,6 +29,7 @@ import {
   imageDir,
   incomingDir,
   ipmiPath,
+  factPath,
   nicPath,
   leasePath,
   machinePath,
@@ -49,7 +50,9 @@ import {
   type ImageRecord,
   type InstalledNetwork,
   type IpmiSetting,
+  type MachineFact,
   type NicPlan,
+  type PowerState,
   type Machine,
   type MachineAction,
   type NetworkConfig,
@@ -512,6 +515,10 @@ export async function deleteProject(id: string): Promise<void> {
       if (plan.projectId !== id) continue;
       fs.rmSync(nicPath(plan.id), { force: true });
     }
+    for (const fact of listMachineFacts()) {
+      if (fact.projectId !== id) continue;
+      fs.rmSync(factPath(fact.id), { force: true });
+    }
     fs.rmSync(projectPath(id), { force: true });
     syncBootFiles(getState().network);
   });
@@ -629,6 +636,45 @@ export async function updateIpmi(id: string, input: IpmiInput): Promise<IpmiSett
     };
     writeJson(ipmiPath(setting.id), setting);
     return setting;
+  });
+}
+
+export function listMachineFacts(): MachineFact[] {
+  ensureDataDirs();
+  return listJson<MachineFact>(path.join(dataDir(), "facts")).sort((a, b) => a.sn.localeCompare(b.sn));
+}
+
+export interface MachineFactInput {
+  sn: string;
+  mac?: string;
+  ipmiAddress?: string;
+  biosVersion?: string;
+  bmcVersion?: string;
+  osVersion?: string;
+  power?: PowerState;
+}
+
+export async function saveMachineFact(projectId: string, input: MachineFactInput): Promise<MachineFact> {
+  return withLock(() => {
+    const project = getProject(projectId);
+    if (!project) throw new Error("项目不存在");
+    const sn = normalizeSn(input.sn);
+    const power: PowerState = input.power === "on" || input.power === "off" ? input.power : "unknown";
+    const existing = listMachineFacts().find((item) => item.projectId === project.id && item.sn === sn);
+    const fact: MachineFact = {
+      id: existing?.id || crypto.randomUUID(),
+      projectId: project.id,
+      sn,
+      mac: input.mac ? normalizeMac(input.mac) : existing?.mac,
+      ipmiAddress: input.ipmiAddress ? assertIpv4(input.ipmiAddress, "IPMI 地址") : existing?.ipmiAddress,
+      biosVersion: (input.biosVersion ?? existing?.biosVersion ?? "").slice(0, 80),
+      bmcVersion: (input.bmcVersion ?? existing?.bmcVersion ?? "").slice(0, 80),
+      osVersion: (input.osVersion ?? existing?.osVersion ?? "").slice(0, 120),
+      power,
+      updatedAt: new Date().toISOString(),
+    };
+    writeJson(factPath(fact.id), fact);
+    return fact;
   });
 }
 

@@ -84,6 +84,21 @@ export interface InstalledNetwork {
   dns: string[];
 }
 
+export type PowerState = "on" | "off" | "unknown";
+
+export interface MachineFact {
+  id: string;
+  projectId: string;
+  sn: string;
+  mac?: string;
+  ipmiAddress?: string;
+  biosVersion?: string;
+  bmcVersion?: string;
+  osVersion?: string;
+  power: PowerState;
+  updatedAt: string;
+}
+
 export interface NicPlan {
   id: string;
   projectId: string;

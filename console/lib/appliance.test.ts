@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { parseLeases, renderDnsmasq } from "./dnsmasq.ts";
 import { detectFromListing, inspectIso } from "./iso.ts";
+import { mergeMachineRows } from "./machine-rows.ts";
 import { parsePlanTable } from "./plan-sheet.ts";
 import { applyHostname, normalizeMac } from "./net.ts";
 import {
@@ -16,7 +17,7 @@ import {
   renderKickstart,
   renderUbuntuAutoinstall,
 } from "./render.ts";
-import { createIpmi, createProfile, createProject, createReport, getIpmiBySn, getNicBySn, getProject, getState, importProjectPlan, listImages, listProjects, saveMachine, saveNetwork, setProjectEnabled, updateProjectNetwork } from "./store.ts";
+import { createIpmi, createProfile, createProject, createReport, getIpmiBySn, getNicBySn, getProject, getState, importProjectPlan, listImages, listProjects, saveMachine, saveMachineFact, saveNetwork, setProjectEnabled, updateProjectNetwork } from "./store.ts";
 import { DEFAULT_STATE, type ImageRecord, type Profile } from "./types.ts";
 
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pxe-test-"));
@@ -284,6 +285,31 @@ test("excel rows import nic and ipmi plans for one project", async () => {
   await setProjectEnabled(projectId, true);
   assert.equal(getNicBySn("SN-PLAN1")?.address, "10.1.8.41");
   assert.equal(getIpmiBySn("sn-plan1")?.address, "10.8.0.41");
+});
+
+test("machine list shows serial, firmware, os, and power", async () => {
+  const projectId = listProjects().find((item) => item.name === "机房A")?.id || "";
+  const fact = await saveMachineFact(projectId, {
+    sn: "sn-plan 1",
+    mac: "aa:bb:cc:dd:ee:41",
+    ipmiAddress: "10.8.0.41",
+    biosVersion: "2.8.1",
+    bmcVersion: "1.30",
+    osVersion: "Ubuntu 24.04.1",
+    power: "on",
+  });
+  const rows = mergeMachineRows({
+    machines: [],
+    nics: [],
+    ipmi: [],
+    facts: [fact],
+  });
+  assert.equal(rows[0]?.sn, "SN-PLAN1");
+  assert.equal(rows[0]?.ipmi, "10.8.0.41");
+  assert.equal(rows[0]?.biosVersion, "2.8.1");
+  assert.equal(rows[0]?.bmcVersion, "1.30");
+  assert.equal(rows[0]?.osVersion, "Ubuntu 24.04.1");
+  assert.equal(rows[0]?.power, "on");
 });
 
 test("profile creation hashes the password", async () => {
