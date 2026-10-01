@@ -7,6 +7,7 @@ import {
   getProfile,
   getScript,
   getState,
+  installedNetworkForMac,
   listProfiles,
   listScripts,
   readScriptBody,
@@ -62,7 +63,14 @@ export function answerFile(profileId: string, macRaw: string, filename: string):
     return new Response(`${message}\n`, { status: 400 });
   }
   const state = getState();
-  const files = renderAnswer(profile, image, mac, state.network.serverIp);
+  let installed = null;
+  try {
+    installed = installedNetworkForMac(mac);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "固定网络还没配好";
+    return new Response(`${message}\n`, { status: 409 });
+  }
+  const files = renderAnswer(profile, image, mac, state.network.serverIp, installed);
   const file = files.find((item) => item.filename === filename);
   if (!file) return new Response("这个镜像不使用该应答文件\n", { status: 404 });
   return new Response(file.body, { headers: { "content-type": file.contentType } });

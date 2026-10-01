@@ -6,6 +6,7 @@ import { cn } from "cn";
 
 const LINKS = [
   { href: "/", label: "总览" },
+  { href: "/projects", label: "项目" },
   { href: "/images", label: "镜像" },
   { href: "/profiles", label: "安装配置" },
   { href: "/menu", label: "启动菜单" },

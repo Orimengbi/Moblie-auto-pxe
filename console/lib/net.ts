@@ -26,6 +26,68 @@ export function assertIpv4(value: string, label: string): string {
   return v;
 }
 
+export function ipv4ToInt(value: string): number {
+  const parts = assertIpv4(value, "地址").split(".").map(Number);
+  return ((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0;
+}
+
+export function netmaskToPrefix(mask: string): number {
+  const bits = ipv4ToInt(mask).toString(2).padStart(32, "0");
+  if (!/^1*0*$/.test(bits)) throw new Error("子网掩码必须是连续的 1，例如 255.255.255.0");
+  const zero = bits.indexOf("0");
+  return zero === -1 ? 32 : zero;
+}
+
+export function sameSubnet(left: string, right: string, mask: string): boolean {
+  const bits = ipv4ToInt(mask);
+  return (ipv4ToInt(left) & bits) === (ipv4ToInt(right) & bits);
+}
+
+export interface AddressRange {
+  label: string;
+  start: string;
+  end: string;
+  netmask: string;
+  gateway: string;
+}
+
+export function assertAddressRanges(serverIp: string, ranges: AddressRange[]): void {
+  const parsed = ranges.map((range) => {
+    const start = ipv4ToInt(range.start);
+    const end = ipv4ToInt(range.end);
+    netmaskToPrefix(range.netmask);
+    if (start > end) throw new Error(`${range.label}的地址池起点不能大于终点`);
+    if (!sameSubnet(range.start, range.end, range.netmask)) {
+      throw new Error(`${range.label}的起点和终点不在同一个子网`);
+    }
+    if (!sameSubnet(range.gateway, range.start, range.netmask)) {
+      throw new Error(`${range.label}的网关不在地址池子网里`);
+    }
+    if (!sameSubnet(serverIp, range.start, range.netmask)) {
+      throw new Error(`${range.label}必须和本机地址 ${serverIp} 在同一个子网，装机时才能访问这台小主机`);
+    }
+    const server = ipv4ToInt(serverIp);
+    if (server >= start && server <= end) throw new Error(`本机地址不能落在${range.label}里`);
+    return { ...range, start, end };
+  });
+  for (let i = 0; i < parsed.length; i += 1) {
+    for (let j = i + 1; j < parsed.length; j += 1) {
+      const left = parsed[i];
+      const right = parsed[j];
+      if (left.start <= right.end && right.start <= left.end) {
+        throw new Error(`${left.label}和${right.label}的临时地址池重叠`);
+      }
+    }
+  }
+}
+
+export function assertLeaseHours(value: number): number {
+  if (!Number.isInteger(value) || value < 1 || value > 48) {
+    throw new Error("临时地址租约需要是 1 到 48 小时的整数");
+  }
+  return value;
+}
+
 export function assertInterface(value: string): string {
   const v = value.trim();
   if (!IFACE_RE.test(v)) throw new Error("网口名不合法");

@@ -1,6 +1,6 @@
 #!/bin/sh
 set -eu
-mkdir -p /data/tftp /data/dnsmasq /data/diag /data/incoming /data/images /data/profiles /data/machines /data/scripts /data/reports
+mkdir -p /data/tftp /data/dnsmasq /data/diag /data/incoming /data/images /data/profiles /data/projects /data/machines /data/scripts /data/reports
 if [ ! -f /data/state.json ]; then
   cp /opt/default-state.json /data/state.json
 fi

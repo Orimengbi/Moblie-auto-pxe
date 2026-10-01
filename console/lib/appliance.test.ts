@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { parseLeases, renderDnsmasq } from "./dnsmasq.ts";
+import { parseLeases, projectTag, renderDnsmasq } from "./dnsmasq.ts";
 import { detectFromListing, inspectIso } from "./iso.ts";
 import { applyHostname, normalizeMac } from "./net.ts";
 import {
@@ -14,7 +14,7 @@ import {
   renderKickstart,
   renderUbuntuAutoinstall,
 } from "./render.ts";
-import { createProfile, createReport, getState, listImages, saveNetwork } from "./store.ts";
+import { createProfile, createProject, createReport, getState, listImages, saveMachine, saveNetwork } from "./store.ts";
 import { DEFAULT_STATE, type ImageRecord, type Profile } from "./types.ts";
 
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pxe-test-"));
@@ -100,6 +100,7 @@ test("menu defaults to the local disk unless a machine is bound", () => {
 test("dnsmasq stays on the install interface", () => {
   const conf = renderDnsmasq(DEFAULT_STATE.network);
   assert.match(conf, /interface=eth1/);
+  assert.match(conf, /dhcp-range=tag:!pxeproject,192\.168\.77\.50,192\.168\.77\.200,255\.255\.255\.0,12h/);
   assert.match(conf, /dhcp-boot=tag:ipxe,http:\/\/192\.168\.77\.1\/boot\/menu\.ipxe/);
   assert.doesNotMatch(conf, /interface=eth0/);
   const leases = parseLeases("4102444800 aa:bb:cc:dd:ee:ff 192.168.77.50 srv *\n", 1_700_000_000);
@@ -155,6 +156,71 @@ test("stores network settings and a diag report without the password hash", asyn
   });
   assert.match(task, /PXE_CHECKS=cpu disk/);
   assert.match(task, /PXE_SCRIPT_1_NAME_B64=/);
+});
+
+test("project pools stay separate from the fixed address written after install", async () => {
+  const project = await createProject({
+    name: "机房A",
+    dhcp: {
+      start: "192.168.77.10",
+      end: "192.168.77.20",
+      netmask: "255.255.255.0",
+      gateway: "192.168.77.1",
+      dns: "192.168.77.1",
+      leaseHours: 2,
+    },
+    fixed: {
+      mode: "static",
+      netmask: "255.255.255.0",
+      gateway: "10.1.8.1",
+      dns: "10.1.8.1,1.1.1.1",
+    },
+  });
+  await assert.rejects(
+    createProject({
+      name: "重叠池",
+      dhcp: {
+        start: "192.168.77.15",
+        end: "192.168.77.25",
+        netmask: "255.255.255.0",
+        gateway: "192.168.77.1",
+        dns: "192.168.77.1",
+        leaseHours: 2,
+      },
+      fixed: { mode: "dhcp", netmask: "255.255.255.0", gateway: "192.168.77.1", dns: "192.168.77.1" },
+    }),
+    /重叠/,
+  );
+  const machine = await saveMachine({
+    mac: "aa:bb:cc:dd:ee:21",
+    action: "menu",
+    projectId: project.id,
+    fixedIp: "10.1.8.21",
+  });
+  assert.equal(machine.fixedIp, "10.1.8.21");
+  const tagged = renderDnsmasq(getState().network, [project], [machine]);
+  assert.match(tagged, new RegExp(`dhcp-range=tag:${projectTag(project.id)},192\\.168\\.77\\.10,192\\.168\\.77\\.20`));
+  assert.match(tagged, new RegExp(`dhcp-host=${machine.mac},set:pxeproject,set:${projectTag(project.id)}`));
+  const answer = renderUbuntuAutoinstall(profile, "srv-ee21", {
+    address: "10.1.8.21",
+    netmask: "255.255.255.0",
+    prefix: 24,
+    gateway: "10.1.8.1",
+    dns: ["10.1.8.1", "1.1.1.1"],
+  });
+  const scripts = [...answer.userData.matchAll(/echo ([A-Za-z0-9+/=]+) \| base64/g)].map((match) =>
+    Buffer.from(match[1], "base64").toString("utf8"),
+  );
+  assert.ok(scripts.some((script) => script.includes("10.1.8.21/24") && script.includes("99-pxe-fixed.yaml")));
+  const kickstart = renderKickstart(profile, "srv-ee21", "192.168.77.1", profile.imageId, {
+    address: "10.1.8.21",
+    netmask: "255.255.255.0",
+    prefix: 24,
+    gateway: "10.1.8.1",
+    dns: ["10.1.8.1"],
+  });
+  assert.match(kickstart, /network --bootproto=dhcp/);
+  assert.match(kickstart, /10\.1\.8\.21\/24/);
 });
 
 test("profile creation hashes the password", async () => {

@@ -41,9 +41,45 @@ export interface Machine {
   mac: string;
   action: MachineAction;
   profileId?: string;
+  projectId?: string;
+  fixedIp?: string;
   scriptIds: string[];
   note: string;
   lastSeen?: string;
+}
+
+export interface ProjectDhcp {
+  start: string;
+  end: string;
+  netmask: string;
+  gateway: string;
+  dns: string;
+  leaseHours: number;
+}
+
+export interface ProjectFixed {
+  mode: "static" | "dhcp";
+  netmask: string;
+  gateway: string;
+  dns: string;
+}
+
+export interface Project {
+  id: string;
+  name: string;
+  note: string;
+  dhcp: ProjectDhcp;
+  fixed: ProjectFixed;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface InstalledNetwork {
+  address: string;
+  netmask: string;
+  prefix: number;
+  gateway: string;
+  dns: string[];
 }
 
 export interface DiagScript {

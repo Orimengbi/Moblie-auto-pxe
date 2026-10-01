@@ -13,6 +13,7 @@ export function ensureDataDirs(): void {
     "incoming",
     "images",
     "profiles",
+    "projects",
     "machines",
     "scripts",
     "reports",
@@ -34,6 +35,10 @@ export function imageDir(id: string): string {
 
 export function profilePath(id: string): string {
   return path.join(dataDir(), "profiles", `${id}.json`);
+}
+
+export function projectPath(id: string): string {
+  return path.join(dataDir(), "projects", `${id}.json`);
 }
 
 export function machinePath(mac: string): string {

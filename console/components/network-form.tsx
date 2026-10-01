@@ -10,11 +10,11 @@ import type { NetworkConfig } from "@/lib/types";
 const FIELDS: { key: keyof NetworkConfig; label: string }[] = [
   { key: "pxeInterface", label: "装机网口" },
   { key: "serverIp", label: "本机地址" },
-  { key: "dhcpStart", label: "地址池起点" },
-  { key: "dhcpEnd", label: "地址池终点" },
-  { key: "netmask", label: "子网掩码" },
-  { key: "gateway", label: "网关" },
-  { key: "dns", label: "DNS" },
+  { key: "dhcpStart", label: "未归类地址池起点" },
+  { key: "dhcpEnd", label: "未归类地址池终点" },
+  { key: "netmask", label: "装机网掩码" },
+  { key: "gateway", label: "装机网关" },
+  { key: "dns", label: "装机 DNS" },
   { key: "menuTimeoutSec", label: "菜单超时（秒）" },
 ];
 

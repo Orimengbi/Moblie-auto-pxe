@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import type { DiagScript, Machine, MachineAction } from "@/lib/types";
+import type { DiagScript, Machine, MachineAction, Project } from "@/lib/types";
 
 interface ProfileOption {
   id: string;
@@ -22,24 +22,31 @@ export function MachineManager({
   machines,
   profiles,
   scripts,
+  projects,
 }: {
   machines: Machine[];
   profiles: ProfileOption[];
   scripts: DiagScript[];
+  projects: Project[];
 }) {
   const router = useRouter();
   const [mac, setMac] = useState("");
   const [action, setAction] = useState<MachineAction>("menu");
   const [profileId, setProfileId] = useState(profiles[0]?.id || "");
+  const [projectId, setProjectId] = useState("");
+  const [fixedIp, setFixedIp] = useState("");
   const [scriptIds, setScriptIds] = useState<string[]>([]);
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
+  const selectedProject = projects.find((project) => project.id === projectId);
 
   function load(machine: Machine) {
     setMac(machine.mac);
     setAction(machine.action);
     setProfileId(machine.profileId || profiles[0]?.id || "");
+    setProjectId(machine.projectId || "");
+    setFixedIp(machine.fixedIp || "");
     setScriptIds(machine.scriptIds);
     setNote(machine.note);
   }
@@ -51,7 +58,7 @@ export function MachineManager({
     const response = await fetch("/api/machines", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ mac, action, profileId, scriptIds, note }),
+      body: JSON.stringify({ mac, action, profileId, projectId, fixedIp, scriptIds, note }),
     });
     const body = await response.json();
     setPending(false);
@@ -61,6 +68,8 @@ export function MachineManager({
     }
     setMac("");
     setNote("");
+    setProjectId("");
+    setFixedIp("");
     setScriptIds([]);
     router.refresh();
   }
@@ -99,6 +108,28 @@ export function MachineManager({
             <option value="diag">超时后进入验机</option>
           </select>
         </div>
+        <div className="grid gap-1.5">
+          <Label htmlFor="project">项目</Label>
+          <select
+            id="project"
+            className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm"
+            value={projectId}
+            onChange={(event) => setProjectId(event.target.value)}
+          >
+            <option value="">不归入项目，使用未归类临时地址</option>
+            {projects.map((project) => (
+              <option key={project.id} value={project.id}>
+                {project.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        {selectedProject?.fixed.mode === "static" ? (
+          <div className="grid gap-1.5">
+            <Label htmlFor="fixed-ip">装完后的固定 IP</Label>
+            <Input id="fixed-ip" value={fixedIp} onChange={(event) => setFixedIp(event.target.value)} placeholder={`网关 ${selectedProject.fixed.gateway}`} required />
+          </div>
+        ) : null}
         {action === "install" ? (
           <div className="grid gap-1.5">
             <Label htmlFor="profile">安装配置</Label>
@@ -147,7 +178,9 @@ export function MachineManager({
                 <span className="text-sm">{ACTION_LABEL[machine.action]}</span>
               </div>
               <p className="mt-2 text-sm text-muted-foreground">
-                {machine.note || "无备注"}
+                {projects.find((project) => project.id === machine.projectId)?.name || "未归类"}
+                {machine.fixedIp ? ` · 装完后 ${machine.fixedIp}` : ""}
+                {machine.note ? ` · ${machine.note}` : ""}
                 {machine.lastSeen ? ` · 最近出现 ${machine.lastSeen.replace("T", " ").slice(0, 19)}` : ""}
               </p>
               <div className="mt-3 flex gap-2">

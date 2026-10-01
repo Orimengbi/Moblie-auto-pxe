@@ -3,13 +3,17 @@ import path from "node:path";
 import { renderBootIpxe, renderDnsmasq } from "./dnsmasq.ts";
 import {
   applyHostname,
+  assertAddressRanges,
   assertDiskName,
   assertInterface,
   assertIpv4,
+  assertLeaseHours,
   assertPackages,
   assertTimeout,
   assertUsername,
+  netmaskToPrefix,
   normalizeMac,
+  sameSubnet,
 } from "./net.ts";
 import { hashPassword } from "./password.ts";
 import {
@@ -22,6 +26,7 @@ import {
   leasePath,
   machinePath,
   profilePath,
+  projectPath,
   reportPath,
   scriptBodyPath,
   scriptMetaPath,
@@ -35,10 +40,14 @@ import {
   type DiagScript,
   type DiskPolicy,
   type ImageRecord,
+  type InstalledNetwork,
   type Machine,
   type MachineAction,
   type NetworkConfig,
   type Profile,
+  type Project,
+  type ProjectDhcp,
+  type ProjectFixed,
   type Report,
 } from "./types.ts";
 
@@ -88,9 +97,28 @@ export function getState(): ApplianceState {
   };
 }
 
+function dhcpRanges(network: NetworkConfig, projects: Project[]) {
+  return [
+    {
+      label: "未归类机器的临时地址池",
+      start: network.dhcpStart,
+      end: network.dhcpEnd,
+      netmask: network.netmask,
+      gateway: network.gateway,
+    },
+    ...projects.map((project) => ({
+      label: `项目「${project.name}」`,
+      start: project.dhcp.start,
+      end: project.dhcp.end,
+      netmask: project.dhcp.netmask,
+      gateway: project.dhcp.gateway,
+    })),
+  ];
+}
+
 export function syncBootFiles(network: NetworkConfig): void {
   ensureDataDirs();
-  fs.writeFileSync(dnsmasqConfPath(), renderDnsmasq(network));
+  fs.writeFileSync(dnsmasqConfPath(), renderDnsmasq(network, listProjects(), listMachines()));
   fs.writeFileSync(path.join(tftpDir(), "boot.ipxe"), renderBootIpxe(network.serverIp));
 }
 
@@ -107,6 +135,8 @@ export async function saveNetwork(input: NetworkConfig): Promise<ApplianceState>
       dns: assertIpv4(input.dns, "DNS"),
       menuTimeoutSec: assertTimeout(Number(input.menuTimeoutSec)),
     };
+    assertIpv4(network.dns, "DNS");
+    assertAddressRanges(network.serverIp, dhcpRanges(network, listProjects()));
     state.network = network;
     writeJson(statePath(), state);
     syncBootFiles(network);
@@ -301,6 +331,139 @@ export async function deleteProfile(id: string): Promise<void> {
   });
 }
 
+function assertDnsList(value: string, label: string): string {
+  const items = value.split(/[,\s]+/).map((item) => item.trim()).filter(Boolean);
+  if (!items.length) throw new Error(`${label}不能为空`);
+  return items.map((item) => assertIpv4(item, label)).join(",");
+}
+
+function normalizeDhcp(input: ProjectDhcp, label: string): ProjectDhcp {
+  return {
+    start: assertIpv4(input.start, `${label}起点`),
+    end: assertIpv4(input.end, `${label}终点`),
+    netmask: assertIpv4(input.netmask, `${label}掩码`),
+    gateway: assertIpv4(input.gateway, `${label}网关`),
+    dns: assertDnsList(input.dns, `${label}DNS`).split(",")[0],
+    leaseHours: assertLeaseHours(Number(input.leaseHours)),
+  };
+}
+
+function normalizeFixed(input: ProjectFixed): ProjectFixed {
+  if (input.mode !== "static" && input.mode !== "dhcp") throw new Error("装完后的网络方式只能是固定地址或 DHCP");
+  return {
+    mode: input.mode,
+    netmask: assertIpv4(input.netmask || "255.255.255.0", "固定网络掩码"),
+    gateway: assertIpv4(input.gateway || "0.0.0.0", "固定网络网关"),
+    dns: assertDnsList(input.dns || input.gateway || "0.0.0.0", "固定网络 DNS"),
+  };
+}
+
+export function listProjects(): Project[] {
+  ensureDataDirs();
+  return listJson<Project>(path.join(dataDir(), "projects")).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+export function getProject(id: string): Project | null {
+  if (!/^[a-zA-Z0-9_-]{8,80}$/.test(id)) return null;
+  return readJson<Project>(projectPath(id));
+}
+
+export interface ProjectInput {
+  name: string;
+  note?: string;
+  dhcp: ProjectDhcp;
+  fixed: ProjectFixed;
+}
+
+function normalizeProject(input: ProjectInput, existingId?: string): Omit<Project, "id" | "createdAt" | "updatedAt"> {
+  const name = input.name.trim();
+  if (name.length < 2 || name.length > 80) throw new Error("项目名称需要 2 到 80 个字符");
+  const dhcp = normalizeDhcp(input.dhcp, "临时地址池");
+  const fixed = normalizeFixed(input.fixed);
+  if (fixed.mode === "static") {
+    netmaskToPrefix(fixed.netmask);
+    if (!sameSubnet(fixed.gateway, fixed.gateway, fixed.netmask)) {
+      throw new Error("固定网络的网关不合法");
+    }
+  }
+  const network = getState().network;
+  const others = listProjects().filter((project) => project.id !== existingId);
+  assertAddressRanges(network.serverIp, dhcpRanges(network, [...others, { id: existingId || "draft", name, note: "", dhcp, fixed, createdAt: "", updatedAt: "" }]));
+  if (existingId && fixed.mode === "static") {
+    for (const machine of listMachines()) {
+      if (machine.projectId !== existingId || !machine.fixedIp) continue;
+      if (!sameSubnet(machine.fixedIp, fixed.gateway, fixed.netmask)) {
+        throw new Error(`机器 ${machine.mac} 的固定 IP 不在新的固定网络里`);
+      }
+    }
+  }
+  return { name, note: (input.note || "").slice(0, 200), dhcp, fixed };
+}
+
+export async function createProject(input: ProjectInput): Promise<Project> {
+  return withLock(() => {
+    const now = new Date().toISOString();
+    const project: Project = {
+      id: crypto.randomUUID(),
+      ...normalizeProject(input),
+      createdAt: now,
+      updatedAt: now,
+    };
+    writeJson(projectPath(project.id), project);
+    syncBootFiles(getState().network);
+    return project;
+  });
+}
+
+export async function updateProject(id: string, input: ProjectInput): Promise<Project> {
+  return withLock(() => {
+    const existing = getProject(id);
+    if (!existing) throw new Error("项目不存在");
+    const project: Project = {
+      ...existing,
+      ...normalizeProject(input, existing.id),
+      id: existing.id,
+      createdAt: existing.createdAt,
+      updatedAt: new Date().toISOString(),
+    };
+    writeJson(projectPath(project.id), project);
+    syncBootFiles(getState().network);
+    return project;
+  });
+}
+
+export async function deleteProject(id: string): Promise<void> {
+  return withLock(() => {
+    if (!getProject(id)) throw new Error("项目不存在");
+    const used = listMachines().filter((machine) => machine.projectId === id);
+    if (used.length) throw new Error(`还有机器属于这个项目：${used.map((item) => item.mac).join("、")}`);
+    fs.rmSync(projectPath(id), { force: true });
+    syncBootFiles(getState().network);
+  });
+}
+
+export function installedNetworkForMac(mac: string): InstalledNetwork | null {
+  let machine: Machine | null = null;
+  try {
+    machine = getMachine(mac);
+  } catch {
+    return null;
+  }
+  if (!machine?.projectId) return null;
+  const project = getProject(machine.projectId);
+  if (!project || project.fixed.mode !== "static") return null;
+  if (!machine.fixedIp) {
+    throw new Error(`机器 ${machine.mac} 属于项目「${project.name}」，装完要使用固定地址，但还没有填写固定 IP`);
+  }
+  return {
+    address: machine.fixedIp,
+    netmask: project.fixed.netmask,
+    prefix: netmaskToPrefix(project.fixed.netmask),
+    gateway: project.fixed.gateway,
+    dns: project.fixed.dns.split(",").filter(Boolean),
+  };
+}
+
 export function listMachines(): Machine[] {
   ensureDataDirs();
   return listJson<Machine>(path.join(dataDir(), "machines")).sort((a, b) => (b.lastSeen || "").localeCompare(a.lastSeen || ""));
@@ -318,6 +481,8 @@ export interface MachineInput {
   mac: string;
   action: MachineAction;
   profileId?: string;
+  projectId?: string;
+  fixedIp?: string;
   scriptIds?: string[];
   note?: string;
 }
@@ -335,16 +500,34 @@ export async function saveMachine(input: MachineInput): Promise<Machine> {
       profileId = "";
     }
     const scriptIds = (input.scriptIds || []).filter((id) => getScript(id));
+    let projectId = input.projectId || "";
+    let fixedIp = "";
+    if (projectId) {
+      const project = getProject(projectId);
+      if (!project) throw new Error("项目不存在");
+      projectId = project.id;
+      if (project.fixed.mode === "static") {
+        fixedIp = assertIpv4(input.fixedIp || "", "固定 IP");
+        if (!sameSubnet(fixedIp, project.fixed.gateway, project.fixed.netmask)) {
+          throw new Error(`固定 IP 必须和项目网关 ${project.fixed.gateway} 在同一个子网`);
+        }
+        const duplicate = listMachines().find((item) => item.mac !== mac && item.fixedIp === fixedIp);
+        if (duplicate) throw new Error(`固定 IP ${fixedIp} 已经分给 ${duplicate.mac}`);
+      }
+    }
     const existing = getMachine(mac);
     const machine: Machine = {
       mac,
       action: input.action,
       profileId: profileId || undefined,
+      projectId: projectId || undefined,
+      fixedIp: fixedIp || undefined,
       scriptIds,
       note: (input.note || "").slice(0, 200),
       lastSeen: existing?.lastSeen,
     };
     writeJson(machinePath(mac), machine);
+    syncBootFiles(getState().network);
     return machine;
   });
 }
@@ -368,6 +551,7 @@ export async function deleteMachine(mac: string): Promise<void> {
   return withLock(() => {
     const normalized = normalizeMac(mac);
     fs.rmSync(machinePath(normalized), { force: true });
+    syncBootFiles(getState().network);
   });
 }
 

@@ -1,4 +1,4 @@
-import type { DiskPolicy, Family, ImageRecord, Profile } from "./types.ts";
+import type { DiskPolicy, Family, ImageRecord, InstalledNetwork, Profile } from "./types.ts";
 import { FAMILY_LABEL } from "./types.ts";
 import { applyHostname } from "./net.ts";
 
@@ -19,6 +19,69 @@ function postCommand(script: string, kind: Family): string | null {
   return b64;
 }
 
+function fixedShell(network: InstalledNetwork, kind: Family): string {
+  const dns = network.dns.join(" ");
+  const dnsYaml = network.dns.map((item) => `"${item}"`).join(", ");
+  const iface = `iface=$(ls /sys/class/net | grep -vx lo | head -n 1)
+test -n "$iface"`;
+  if (kind === "ubuntu") {
+    return `${iface}
+mkdir -p /etc/netplan
+cat > /etc/netplan/99-pxe-fixed.yaml << EOF
+network:
+  version: 2
+  ethernets:
+    $iface:
+      dhcp4: false
+      dhcp6: false
+      addresses:
+        - ${network.address}/${network.prefix}
+      routes:
+        - to: default
+          via: ${network.gateway}
+      nameservers:
+        addresses: [${dnsYaml}]
+EOF
+chmod 600 /etc/netplan/99-pxe-fixed.yaml
+`;
+  }
+  if (kind === "debian") {
+    return `${iface}
+cat > /etc/network/interfaces << EOF
+auto lo
+iface lo inet loopback
+auto $iface
+iface $iface inet static
+  address ${network.address}
+  netmask ${network.netmask}
+  gateway ${network.gateway}
+  dns-nameservers ${dns}
+EOF
+`;
+  }
+  return `${iface}
+mkdir -p /etc/NetworkManager/system-connections
+cat > /etc/NetworkManager/system-connections/pxe-fixed.nmconnection << EOF
+[connection]
+id=pxe-fixed
+type=ethernet
+interface-name=$iface
+autoconnect=true
+autoconnect-priority=999
+
+[ipv4]
+method=manual
+addresses=${network.address}/${network.prefix}
+gateway=${network.gateway}
+dns=${network.dns.join(";")};
+
+[ipv6]
+method=disabled
+EOF
+chmod 600 /etc/NetworkManager/system-connections/pxe-fixed.nmconnection
+`;
+}
+
 function diskMatch(policy: DiskPolicy, diskName: string): string {
   if (policy === "named") {
     return `        path: /dev/${diskName}`;
@@ -26,10 +89,19 @@ function diskMatch(policy: DiskPolicy, diskName: string): string {
   return `        size: ${policy}`;
 }
 
-export function renderUbuntuAutoinstall(profile: Profile, hostname: string): { userData: string; metaData: string } {
+export function renderUbuntuAutoinstall(
+  profile: Profile,
+  hostname: string,
+  installed?: InstalledNetwork | null,
+): { userData: string; metaData: string } {
   const packages = profile.packages.map((pkg) => `    - ${pkg}`).join("\n");
-  const late = postCommand(profile.postScript, "ubuntu");
-  const lateBlock = late ? `  late-commands:\n    - ${yamlQuote(late)}\n` : "";
+  const lateCommands = [
+    installed ? postCommand(fixedShell(installed, "ubuntu"), "ubuntu") : null,
+    postCommand(profile.postScript, "ubuntu"),
+  ].filter((item): item is string => Boolean(item));
+  const lateBlock = lateCommands.length
+    ? `  late-commands:\n${lateCommands.map((item) => `    - ${yamlQuote(item)}`).join("\n")}\n`
+    : "";
   const userData = `#cloud-config
 autoinstall:
   version: 1
@@ -56,9 +128,16 @@ ${lateBlock}`.replace(/\n{3,}/g, "\n\n");
   return { userData, metaData };
 }
 
-export function renderDebianPreseed(profile: Profile, hostname: string, serverIp: string, imageId: string): string {
+export function renderDebianPreseed(
+  profile: Profile,
+  hostname: string,
+  serverIp: string,
+  imageId: string,
+  installed?: InstalledNetwork | null,
+): string {
   const disk = profile.diskPolicy === "named" ? `/dev/${profile.diskName}` : "/dev/sda";
-  const late = postCommand(profile.postScript, "debian");
+  const lateScript = [installed ? fixedShell(installed, "debian") : "", profile.postScript].filter((item) => item.trim()).join("\n");
+  const late = postCommand(lateScript, "debian");
   const lines = [
     `d-i debian-installer/locale string ${profile.locale}`,
     "d-i keyboard-configuration/xkb-keymap select us",
@@ -131,12 +210,21 @@ function kickstartDiskPre(profile: Profile): string {
   ].join("\n");
 }
 
-export function renderKickstart(profile: Profile, hostname: string, serverIp: string, imageId: string): string {
+export function renderKickstart(
+  profile: Profile,
+  hostname: string,
+  serverIp: string,
+  imageId: string,
+  installed?: InstalledNetwork | null,
+): string {
   const pkgs = profile.packages.length ? profile.packages.join("\n") : "openssh-server";
-  const b64 = postCommand(profile.postScript, "rocky");
-  const post = b64
-    ? ["%post --interpreter=/bin/bash --erroronfail", `echo ${b64} | base64 -d > /root/pxe-post.sh`, "chmod 700 /root/pxe-post.sh", "bash /root/pxe-post.sh", "%end"].join("\n")
-    : "";
+  const postParts = ["%post --interpreter=/bin/bash --erroronfail"];
+  if (installed) postParts.push(fixedShell(installed, "rocky").trimEnd());
+  const userScript = postCommand(profile.postScript, "rocky");
+  if (userScript) {
+    postParts.push(`echo ${userScript} | base64 -d > /root/pxe-post.sh`, "chmod 700 /root/pxe-post.sh", "bash /root/pxe-post.sh");
+  }
+  const post = postParts.length > 1 ? [...postParts, "%end"].join("\n") : "";
   return [
     "#version=RHEL9",
     "text",
@@ -271,10 +359,11 @@ export function renderAnswer(
   image: ImageRecord,
   mac: string,
   serverIp: string,
+  installed?: InstalledNetwork | null,
 ): { contentType: string; filename: string; body: string }[] {
   const hostname = applyHostname(profile.hostnamePattern, mac);
   if (image.family === "ubuntu") {
-    const rendered = renderUbuntuAutoinstall(profile, hostname);
+    const rendered = renderUbuntuAutoinstall(profile, hostname, installed);
     return [
       { contentType: "text/plain; charset=utf-8", filename: "user-data", body: rendered.userData },
       { contentType: "text/plain; charset=utf-8", filename: "meta-data", body: rendered.metaData },
@@ -285,7 +374,7 @@ export function renderAnswer(
       {
         contentType: "text/plain; charset=utf-8",
         filename: "preseed.cfg",
-        body: renderDebianPreseed(profile, hostname, serverIp, image.id),
+        body: renderDebianPreseed(profile, hostname, serverIp, image.id, installed),
       },
     ];
   }
@@ -293,7 +382,7 @@ export function renderAnswer(
     {
       contentType: "text/plain; charset=utf-8",
       filename: "kickstart.cfg",
-      body: renderKickstart(profile, hostname, serverIp, image.id),
+      body: renderKickstart(profile, hostname, serverIp, image.id, installed),
     },
   ];
 }

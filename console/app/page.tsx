@@ -3,7 +3,7 @@ import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { parseLeases } from "@/lib/dnsmasq";
-import { diagReady, getState, ipxeReady, listImages, listProfiles, listReports, readLeasesText } from "@/lib/store";
+import { diagReady, getState, ipxeReady, listImages, listProfiles, listProjects, listReports, readLeasesText } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
@@ -21,9 +21,10 @@ export default function HomePage() {
     <div>
       <PageHeader
         title="装机台总览"
-        description="这台小主机只在装机网口上提供 DHCP。菜单超时后从本地硬盘启动，避免误装机。验机系统在内存里运行，不挂载、不写入本地硬盘。"
+        description="装机时机器从临时地址池拿 IP。归入项目的机器用该项目的地址池，装完后的固定网络写进系统，下次启动才生效。未归类机器使用下面的地址池。验机在内存里运行，不写入本地硬盘。"
       />
       <div className="mb-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <Stat label="项目" value={String(listProjects().length)} />
         <Stat label="可用镜像" value={`${readyImages} / ${images.length}`} />
         <Stat label="安装配置" value={String(profiles.length)} />
         <Stat label="验机报告" value={String(listReports().length)} />
@@ -37,7 +38,7 @@ export default function HomePage() {
       <div className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
         <Card>
           <CardHeader>
-            <CardTitle>装机网络</CardTitle>
+            <CardTitle>小主机和未归类地址池</CardTitle>
           </CardHeader>
           <CardContent>
             <NetworkForm network={state.network} />
