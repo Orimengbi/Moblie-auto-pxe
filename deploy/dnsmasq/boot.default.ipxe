@@ -1,0 +1,4 @@
+#!ipxe
+dhcp
+set server http://192.168.77.1
+chain ${server}/boot/menu.ipxe?mac=${mac:hexhyp} || shell

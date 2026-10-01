@@ -1,0 +1,8 @@
+node_modules
+.next
+*.iso
+.DS_Store
+data/**
+!data/**/
+!data/**/.gitkeep
+console/tsconfig.tsbuildinfo

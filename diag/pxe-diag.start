@@ -1,0 +1,3 @@
+#!/bin/sh
+# Alpine local.d 入口。代理自身会停住，避免验机结束后掉进安装。
+/usr/local/sbin/pxe-diag

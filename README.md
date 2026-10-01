@@ -1,0 +1,87 @@
+# PXE 装机台
+
+跑在一台 x86_64 移动小主机上的 Linux 装机和验机设备。小主机插上自己的装机网口，给目标服务器提供 DHCP、TFTP 和启动菜单。
+
+- 菜单里自选 Ubuntu、Debian、Rocky Linux 或 AlmaLinux，按配置无人值守安装。
+- 也可以按 MAC 绑定某台机器，超时后直接安装或进入验机。
+- 验机系统放在内存里，做只读硬件检查，并运行你上传的脚本。它不挂载、不格式化本地硬盘。
+- 没有绑定的机器，菜单超时后从本地硬盘启动，避免误装机。
+
+管理口不要接到装机交换机上。DHCP 只监听配置里的装机网口。
+
+## 接线
+
+1. 小主机装 Ubuntu 或 Debian，安装 Docker 和 Compose 插件。
+2. 装机网口（默认 `eth1`）接到一台交换机。目标服务器的 PXE 网口也接到这台交换机。
+3. 给装机网口配上控制台里的地址，默认是 `192.168.77.1/24`。不要让办公室的路由器也在这张网上发 DHCP。
+
+```bash
+sudo ip addr add 192.168.77.1/24 dev eth1
+sudo ip link set eth1 up
+```
+
+## 启动
+
+```bash
+./scripts/fetch-ipxe.sh
+sudo ./diag/build-image.sh
+docker compose up -d --build
+```
+
+控制台是 [http://127.0.0.1:43123](http://127.0.0.1:43123)。目标机通过 80 端口取内核、ISO 和应答文件。
+
+改过装机网口或地址池之后，执行：
+
+```bash
+docker compose restart dnsmasq
+```
+
+本机只看界面、不启动 DHCP 时：
+
+```bash
+cd console
+npm install
+npm run dev
+```
+
+开发服务器同样监听 43123，数据写在仓库的 `data/`。
+
+## 导入镜像
+
+把 ISO 放到 `data/incoming/`，在「镜像」页导入。控制台用 `xorriso` 识别家族并抽出内核。大于 256MB 的文件不要走浏览器上传。
+
+支持：
+
+| 家族 | 应答 | 安装源 |
+| --- | --- | --- |
+| Ubuntu | autoinstall | ISO 本身 |
+| Debian | preseed | 展开后的安装树 |
+| Rocky Linux / AlmaLinux | kickstart | 展开后的安装树 |
+
+然后在「安装配置」里写主机名、用户、密码和磁盘策略。主机名可以用 `srv-{{mac_last4}}`。磁盘策略会清空所选磁盘，菜单文案会标明这一点。
+
+## 验机
+
+`diag/build-image.sh` 下载 Alpine 3.20 网络启动内核和 modloop，并把 smartctl、dmidecode、memtester 等只读工具打进 `diag.apkovl.tar.gz`。目标机启动后：
+
+1. 系统留在内存，不挂载本地磁盘。
+2. 按控制台勾选的项目做 CPU、内存、网卡、温度、磁盘 SMART、固件检查。内存测试只抽样 64MB。
+3. 运行已启用的自定义脚本。脚本里如果直接出现 `mkfs`、`wipefs`、`mount` 本地盘或 `dd of=/dev/sd...`，会被拒绝。PATH 上的同名命令也会被拦住。
+4. 结束后再看一次挂载表。只要本地磁盘被挂上，报告记为失败。
+5. 结果回传到控制台的「报告」页。机器停在内存系统里，不会自动转去安装。
+
+自定义脚本由操作员上传，以 root 运行。拦截器挡的是直接写盘命令；不要在脚本里绕过它。
+
+## 现场确认
+
+1. 打开控制台，确认 UEFI / BIOS 固件和验机镜像都是「已就位」。
+2. 目标机从网卡启动，应看到「PXE 装机台」菜单，超时后回到本地硬盘。
+3. 选「内存验机」，确认本地磁盘文件系统没有变化，控制台出现报告。
+4. 需要装机时，再选安装项，或先按 MAC 绑定。
+
+## 目录
+
+- `console/`：控制台和应答、菜单生成
+- `deploy/`：dnsmasq 与 nginx
+- `diag/`：验机代理、写盘拦截和镜像构建
+- `data/`：ISO、租约、报告。不进 Git
