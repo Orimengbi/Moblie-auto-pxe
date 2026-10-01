@@ -1,5 +1,5 @@
 import { jsonError, readJson } from "@/lib/api";
-import { deleteProject, getProject, updateProject, type ProjectInput } from "@/lib/store";
+import { deleteProject, getProject, renameProject, updateProjectNetwork, type ProjectInput, type ProjectNetworkInput } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
@@ -13,8 +13,12 @@ export async function GET(_: Request, context: { params: Promise<{ id: string }>
 export async function PUT(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await context.params;
-    const body = await readJson<ProjectInput>(request);
-    return Response.json(await updateProject(id, body));
+    const body = await readJson<Partial<ProjectInput & ProjectNetworkInput>>(request);
+    if (body.dhcp && body.fixed) {
+      return Response.json(await updateProjectNetwork(id, { dhcp: body.dhcp, fixed: body.fixed }));
+    }
+    if (body.name) return Response.json(await renameProject(id, { name: body.name, note: body.note }));
+    throw new Error("没有要保存的内容");
   } catch (error) {
     return jsonError(error);
   }

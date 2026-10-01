@@ -124,7 +124,7 @@ export function MachineManager({
             ))}
           </select>
         </div>
-        {selectedProject?.fixed.mode === "static" ? (
+        {selectedProject?.fixed?.mode === "static" ? (
           <div className="grid gap-1.5">
             <Label htmlFor="fixed-ip">装完后的固定 IP</Label>
             <Input id="fixed-ip" value={fixedIp} onChange={(event) => setFixedIp(event.target.value)} placeholder={`网关 ${selectedProject.fixed.gateway}`} required />

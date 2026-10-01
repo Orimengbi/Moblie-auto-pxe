@@ -1,18 +1,20 @@
 import { PageHeader } from "@/components/page-header";
-import { diagReady, getImage, getState, listProfiles } from "@/lib/store";
+import { activeProject, diagReady, getImage, getState, profilesForProject } from "@/lib/store";
 import { renderIpxeMenu } from "@/lib/render";
 
 export const dynamic = "force-dynamic";
 
 export default function MenuPage() {
   const state = getState();
-  const entries = listProfiles().flatMap((profile) => {
+  const active = activeProject();
+  const entries = (active ? profilesForProject(active.id) : []).flatMap((profile) => {
     const image = getImage(profile.imageId);
     if (!image || image.status !== "ready" || !image.kernelFile) return [];
     return [{ profile, image }];
   });
   const preview = renderIpxeMenu({
     serverIp: state.network.serverIp,
+    httpPort: state.network.httpPort,
     timeoutSec: state.network.menuTimeoutSec,
     entries,
     diagReady: diagReady(),

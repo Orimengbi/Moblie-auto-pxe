@@ -1,6 +1,6 @@
 import { PageHeader } from "@/components/page-header";
 import { ProjectManager } from "@/components/project-manager";
-import { listMachines, listProjects } from "@/lib/store";
+import { listProjects } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
@@ -9,9 +9,9 @@ export default function ProjectsPage() {
     <div>
       <PageHeader
         title="项目"
-        description="每个项目有自己的装机地址池。归入项目的机器启动后从这池里拿临时 IP，用来拉取镜像和应答。安装过程本身不使用固定地址；固定 IP、网关和 DNS 写进装好的系统，下次从硬盘启动才生效。"
+        description="新建项目只建立目录。进入项目后再填写安装设置、DHCP 和 IPMI。打开一个项目的开关，装机就使用那一套配置，其他项目同时关掉。开关改变后，在小主机上执行 docker compose restart dnsmasq，地址池才会换过来。"
       />
-      <ProjectManager projects={listProjects()} machines={listMachines()} />
+      <ProjectManager projects={listProjects()} />
     </div>
   );
 }

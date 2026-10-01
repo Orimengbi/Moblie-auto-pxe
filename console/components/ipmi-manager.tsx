@@ -19,17 +19,25 @@ const EMPTY = {
   note: "",
 };
 
-export function IpmiManager({ settings, projects }: { settings: IpmiSetting[]; projects: Project[] }) {
+export function IpmiManager({
+  projectId,
+  settings,
+  projects,
+}: {
+  projectId: string;
+  settings: IpmiSetting[];
+  projects: Project[];
+}) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
-  const [form, setForm] = useState(EMPTY);
+  const [form, setForm] = useState({ ...EMPTY, projectId });
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
 
   function startCreate() {
     setEditing(null);
-    setForm(EMPTY);
+    setForm({ ...EMPTY, projectId });
     setError("");
     setOpen(true);
   }
@@ -135,20 +143,7 @@ export function IpmiManager({ settings, projects }: { settings: IpmiSetting[]; p
             <Field label="序列号">
               <Input value={form.sn} onChange={(event) => setForm({ ...form, sn: event.target.value })} required />
             </Field>
-            <Field label="项目">
-              <select
-                className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm"
-                value={form.projectId}
-                onChange={(event) => setForm({ ...form, projectId: event.target.value })}
-              >
-                <option value="">不归入项目</option>
-                {projects.map((project) => (
-                  <option key={project.id} value={project.id}>
-                    {project.name}
-                  </option>
-                ))}
-              </select>
-            </Field>
+            <p className="text-sm text-muted-foreground">这条记录只属于当前项目。只有这个项目的开关打开时，安装结束才会按序列号写入。</p>
             <Field label="地址方式">
               <select
                 className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm"

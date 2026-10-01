@@ -1,38 +1,26 @@
 import { bootOrigin } from "./net.ts";
-import type { Machine, NetworkConfig, Project } from "./types.ts";
+import type { NetworkConfig, Project } from "./types.ts";
 
-export function projectTag(id: string): string {
-  return `p${id.replace(/-/g, "")}`;
-}
-
-export function renderDnsmasq(network: NetworkConfig, projects: Project[] = [], machines: Machine[] = []): string {
+export function renderDnsmasq(network: NetworkConfig, active: Project | null = null): string {
   const httpBoot = `${bootOrigin(network.serverIp, network.httpPort)}/boot/menu.ipxe`;
   const lines = [
     "# 由 PXE 控制台生成。只监听装机网口。",
-    "# 装机阶段使用临时地址。项目里的机器进入对应地址池，其余机器使用未归类地址池。",
+    "# 只有打开开关的项目会分配装机地址。",
     "port=0",
     `interface=${network.pxeInterface}`,
     "bind-interfaces",
     "except-interface=lo",
     "dhcp-authoritative",
-    `dhcp-range=tag:!pxeproject,${network.dhcpStart},${network.dhcpEnd},${network.netmask},12h`,
-    `dhcp-option=tag:!pxeproject,option:router,${network.gateway}`,
-    `dhcp-option=tag:!pxeproject,option:dns-server,${network.dns}`,
   ];
-  for (const project of projects) {
-    const tag = projectTag(project.id);
-    const hours = project.dhcp.leaseHours || 2;
-    lines.push(`# 项目 ${project.name} 的临时地址池`);
+  if (active?.dhcp) {
+    lines.push(`# 当前启用：${active.name}`);
     lines.push(
-      `dhcp-range=tag:${tag},${project.dhcp.start},${project.dhcp.end},${project.dhcp.netmask},${hours}h`,
+      `dhcp-range=${active.dhcp.start},${active.dhcp.end},${active.dhcp.netmask},${active.dhcp.leaseHours}h`,
     );
-    lines.push(`dhcp-option=tag:${tag},option:router,${project.dhcp.gateway}`);
-    lines.push(`dhcp-option=tag:${tag},option:dns-server,${project.dhcp.dns}`);
-  }
-  for (const machine of machines) {
-    if (!machine.projectId) continue;
-    if (!projects.some((project) => project.id === machine.projectId)) continue;
-    lines.push(`dhcp-host=${machine.mac},set:pxeproject,set:${projectTag(machine.projectId)}`);
+    lines.push(`dhcp-option=option:router,${active.dhcp.gateway}`);
+    lines.push(`dhcp-option=option:dns-server,${active.dhcp.dns}`);
+  } else {
+    lines.push("# 没有启用的项目，不分配装机地址");
   }
   lines.push(
     "enable-tftp",

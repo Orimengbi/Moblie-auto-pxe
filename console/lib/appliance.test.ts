@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { parseLeases, projectTag, renderDnsmasq } from "./dnsmasq.ts";
+import { parseLeases, renderDnsmasq } from "./dnsmasq.ts";
 import { detectFromListing, inspectIso } from "./iso.ts";
 import { applyHostname, normalizeMac } from "./net.ts";
 import {
@@ -15,7 +15,7 @@ import {
   renderKickstart,
   renderUbuntuAutoinstall,
 } from "./render.ts";
-import { createIpmi, createProfile, createProject, createReport, getIpmiBySn, getState, listImages, saveMachine, saveNetwork } from "./store.ts";
+import { createIpmi, createProfile, createProject, createReport, getIpmiBySn, getProject, getState, listImages, listProjects, saveMachine, saveNetwork, setProjectEnabled, updateProjectNetwork } from "./store.ts";
 import { DEFAULT_STATE, type ImageRecord, type Profile } from "./types.ts";
 
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pxe-test-"));
@@ -32,6 +32,7 @@ const profile: Profile = {
   diskName: "sda",
   packages: ["curl"],
   postScript: "echo hi",
+  projectId: "33333333-3333-4333-8333-333333333333",
   locale: "zh_CN.UTF-8",
   timezone: "Asia/Shanghai",
   createdAt: "2026-01-01T00:00:00.000Z",
@@ -101,7 +102,8 @@ test("menu defaults to the local disk unless a machine is bound", () => {
 test("dnsmasq stays on the install interface", () => {
   const conf = renderDnsmasq(DEFAULT_STATE.network);
   assert.match(conf, /interface=eth1/);
-  assert.match(conf, /dhcp-range=tag:!pxeproject,192\.168\.77\.50,192\.168\.77\.200,255\.255\.255\.0,12h/);
+  assert.match(conf, /没有启用的项目，不分配装机地址/);
+  assert.doesNotMatch(conf, /dhcp-range=/);
   assert.match(conf, /dhcp-boot=tag:ipxe,http:\/\/192\.168\.77\.1\/boot\/menu\.ipxe/);
   const ported = renderDnsmasq({ ...DEFAULT_STATE.network, httpPort: 8080 });
   assert.match(ported, /http:\/\/192\.168\.77\.1:8080\/boot\/menu\.ipxe/);
@@ -161,9 +163,12 @@ test("stores network settings and a diag report without the password hash", asyn
   assert.match(task, /PXE_SCRIPT_1_NAME_B64=/);
 });
 
-test("project pools stay separate from the fixed address written after install", async () => {
-  const project = await createProject({
-    name: "机房A",
+test("only the enabled project supplies DHCP", async () => {
+  const project = await createProject({ name: "机房A", note: "第一批" });
+  assert.equal(project.enabled, false);
+  assert.equal(project.dhcp, null);
+  await assert.rejects(setProjectEnabled(project.id, true), /先写好这个项目的 DHCP/);
+  const saved = await updateProjectNetwork(project.id, {
     dhcp: {
       start: "192.168.77.10",
       end: "192.168.77.20",
@@ -179,21 +184,23 @@ test("project pools stay separate from the fixed address written after install",
       dns: "10.1.8.1,1.1.1.1",
     },
   });
-  await assert.rejects(
-    createProject({
-      name: "重叠池",
-      dhcp: {
-        start: "192.168.77.15",
-        end: "192.168.77.25",
-        netmask: "255.255.255.0",
-        gateway: "192.168.77.1",
-        dns: "192.168.77.1",
-        leaseHours: 2,
-      },
-      fixed: { mode: "dhcp", netmask: "255.255.255.0", gateway: "192.168.77.1", dns: "192.168.77.1" },
-    }),
-    /重叠/,
-  );
+  const enabled = await setProjectEnabled(saved.id, true);
+  assert.equal(enabled.enabled, true);
+  const other = await createProject({ name: "机房B" });
+  await updateProjectNetwork(other.id, {
+    dhcp: {
+      start: "192.168.77.21",
+      end: "192.168.77.30",
+      netmask: "255.255.255.0",
+      gateway: "192.168.77.1",
+      dns: "192.168.77.1",
+      leaseHours: 2,
+    },
+    fixed: { mode: "dhcp", netmask: "255.255.255.0", gateway: "192.168.77.1", dns: "192.168.77.1" },
+  });
+  await setProjectEnabled(other.id, true);
+  assert.equal(getProject(project.id)?.enabled, false);
+  await setProjectEnabled(project.id, true);
   const machine = await saveMachine({
     mac: "aa:bb:cc:dd:ee:21",
     action: "menu",
@@ -201,9 +208,10 @@ test("project pools stay separate from the fixed address written after install",
     fixedIp: "10.1.8.21",
   });
   assert.equal(machine.fixedIp, "10.1.8.21");
-  const tagged = renderDnsmasq(getState().network, [project], [machine]);
-  assert.match(tagged, new RegExp(`dhcp-range=tag:${projectTag(project.id)},192\\.168\\.77\\.10,192\\.168\\.77\\.20`));
-  assert.match(tagged, new RegExp(`dhcp-host=${machine.mac},set:pxeproject,set:${projectTag(project.id)}`));
+  const conf = renderDnsmasq(getState().network, getProject(project.id));
+  assert.match(conf, /dhcp-range=192\.168\.77\.10,192\.168\.77\.20,255\.255\.255\.0,2h/);
+  assert.match(conf, /当前启用：机房A/);
+  assert.doesNotMatch(conf, /192\.168\.77\.21/);
   const answer = renderUbuntuAutoinstall(profile, "srv-ee21", {
     address: "10.1.8.21",
     netmask: "255.255.255.0",
@@ -229,6 +237,7 @@ test("project pools stay separate from the fixed address written after install",
 test("install looks up IPMI settings by serial number", async () => {
   const setting = await createIpmi({
     sn: "sn-abc 123",
+    projectId: listProjects().find((item) => item.name === "机房A")?.id,
     mode: "static",
     address: "10.8.0.21",
     netmask: "255.255.255.0",
@@ -242,6 +251,7 @@ test("install looks up IPMI settings by serial number", async () => {
   await assert.rejects(
     createIpmi({
       sn: "SN-ABC123",
+      projectId: setting.projectId,
       mode: "dhcp",
       channel: 1,
     }),
@@ -266,6 +276,7 @@ test("profile creation hashes the password", async () => {
   );
   const created = await createProfile({
     name: "机房 Ubuntu",
+    projectId: listProjects().find((item) => item.name === "机房A")?.id || "",
     imageId: ubuntu.id,
     hostnamePattern: "edge-{{mac_last4}}",
     username: "ops",

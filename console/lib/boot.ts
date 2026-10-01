@@ -8,7 +8,8 @@ import {
   getScript,
   getState,
   installedNetworkForMac,
-  listProfiles,
+  activeProject,
+  profilesForProject,
   listScripts,
   readScriptBody,
   touchMachine,
@@ -29,7 +30,8 @@ export async function rememberMac(raw: string | null): Promise<Machine | null> {
 export async function menuFor(macRaw: string | null): Promise<string> {
   const machine = await rememberMac(macRaw);
   const state = getState();
-  const entries = listProfiles().flatMap((profile) => {
+  const active = activeProject();
+  const entries = (active ? profilesForProject(active.id) : []).flatMap((profile) => {
     const image = getImage(profile.imageId);
     if (!image || image.status !== "ready" || !image.kernelFile || !image.initrdFile) return [];
     return [{ profile, image }];

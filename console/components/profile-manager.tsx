@@ -37,7 +37,15 @@ const EMPTY = {
   timezone: "Asia/Shanghai",
 };
 
-export function ProfileManager({ profiles, images }: { profiles: PublicProfile[]; images: ImageRecord[] }) {
+export function ProfileManager({
+  projectId,
+  profiles,
+  images,
+}: {
+  projectId: string;
+  profiles: PublicProfile[];
+  images: ImageRecord[];
+}) {
   const router = useRouter();
   const ready = images.filter((image) => image.status === "ready");
   const [open, setOpen] = useState(false);
@@ -81,6 +89,7 @@ export function ProfileManager({ profiles, images }: { profiles: PublicProfile[]
     setError("");
     const payload = {
       ...form,
+      projectId,
       packages: form.packages.split(/[,\s]+/).filter(Boolean),
       password: form.password || undefined,
     };

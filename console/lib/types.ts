@@ -33,6 +33,7 @@ export interface Profile {
   postScript: string;
   locale: string;
   timezone: string;
+  projectId: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -68,8 +69,9 @@ export interface Project {
   id: string;
   name: string;
   note: string;
-  dhcp: ProjectDhcp;
-  fixed: ProjectFixed;
+  enabled: boolean;
+  dhcp: ProjectDhcp | null;
+  fixed: ProjectFixed | null;
   createdAt: string;
   updatedAt: string;
 }
