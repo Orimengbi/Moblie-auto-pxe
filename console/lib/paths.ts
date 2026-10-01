@@ -16,6 +16,7 @@ export function ensureDataDirs(): void {
     "projects",
     "machines",
     "ipmi",
+    "nics",
     "scripts",
     "reports",
     "tftp",
@@ -44,6 +45,10 @@ export function projectPath(id: string): string {
 
 export function ipmiPath(id: string): string {
   return path.join(dataDir(), "ipmi", `${id}.json`);
+}
+
+export function nicPath(id: string): string {
+  return path.join(dataDir(), "nics", `${id}.json`);
 }
 
 export function machinePath(mac: string): string {

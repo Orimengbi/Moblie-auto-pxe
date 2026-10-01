@@ -1,6 +1,6 @@
-import type { DiskPolicy, Family, ImageRecord, InstalledNetwork, IpmiSetting, Profile } from "./types.ts";
+import type { DiskPolicy, Family, ImageRecord, InstalledNetwork, IpmiSetting, NicPlan, Profile } from "./types.ts";
 import { FAMILY_LABEL } from "./types.ts";
-import { applyHostname, bootOrigin } from "./net.ts";
+import { applyHostname, bootOrigin, netmaskToPrefix } from "./net.ts";
 
 function yamlQuote(value: string): string {
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
@@ -101,6 +101,8 @@ if ! command -v curl >/dev/null 2>&1; then
 fi
 curl -fsS "${origin}/boot/ipmi.sh?sn=$sn" -o /tmp/pxe-ipmi.sh
 sh /tmp/pxe-ipmi.sh
+curl -fsS "${origin}/boot/nic.sh?sn=$sn" -o /tmp/pxe-nic.sh
+sh /tmp/pxe-nic.sh
 `;
 }
 
@@ -135,6 +137,73 @@ export function renderIpmiScript(setting: IpmiSetting | null): string {
   else lines.push('ipmitool lan set "$ch" vlan id off || true');
   lines.push('ipmitool lan set "$ch" access on', 'ipmitool lan print "$ch"');
   return `${lines.join("\n")}\n`;
+}
+
+export function renderNicScript(plan: NicPlan | null): string {
+  if (!plan) {
+    return "#!/bin/sh\necho \"没有和这个序列号匹配的网卡设置，跳过\"\nexit 0\n";
+  }
+  const prefix = netmaskToPrefix(plan.netmask);
+  const dnsYaml = plan.dns.split(",").map((item) => `"${item}"`).join(", ");
+  const hostname = plan.hostname
+    ? `if command -v hostnamectl >/dev/null 2>&1; then hostnamectl set-hostname ${plan.hostname}; else printf '%s\\n' ${plan.hostname} > /etc/hostname; fi\n`
+    : "";
+  return `#!/bin/sh
+set -eu
+${hostname}iface=$(ls /sys/class/net | grep -vx lo | head -n 1)
+test -n "$iface"
+if [ -d /etc/netplan ]; then
+  mkdir -p /etc/netplan
+  cat > /etc/netplan/99-pxe-fixed.yaml << EOF
+network:
+  version: 2
+  ethernets:
+    $iface:
+      dhcp4: false
+      dhcp6: false
+      addresses:
+        - ${plan.address}/${prefix}
+      routes:
+        - to: default
+          via: ${plan.gateway}
+      nameservers:
+        addresses: [${dnsYaml}]
+EOF
+  chmod 600 /etc/netplan/99-pxe-fixed.yaml
+elif [ -d /etc/NetworkManager ]; then
+  mkdir -p /etc/NetworkManager/system-connections
+  cat > /etc/NetworkManager/system-connections/pxe-fixed.nmconnection << EOF
+[connection]
+id=pxe-fixed
+type=ethernet
+interface-name=$iface
+autoconnect=true
+autoconnect-priority=999
+
+[ipv4]
+method=manual
+addresses=${plan.address}/${prefix}
+gateway=${plan.gateway}
+dns=${plan.dns.split(",").join(";")};
+
+[ipv6]
+method=disabled
+EOF
+  chmod 600 /etc/NetworkManager/system-connections/pxe-fixed.nmconnection
+else
+  cat > /etc/network/interfaces << EOF
+auto lo
+iface lo inet loopback
+auto $iface
+iface $iface inet static
+  address ${plan.address}
+  netmask ${plan.netmask}
+  gateway ${plan.gateway}
+  dns-nameservers ${plan.dns.split(",").join(" ")}
+EOF
+fi
+echo "网卡已按规划写成 ${plan.address}"
+`;
 }
 
 function diskMatch(policy: DiskPolicy, diskName: string): string {

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { renderBootIpxe, renderDnsmasq } from "./dnsmasq.ts";
+import type { PlanCells } from "./plan-sheet.ts";
 import {
   applyHostname,
   assertAddressRanges,
@@ -28,6 +29,7 @@ import {
   imageDir,
   incomingDir,
   ipmiPath,
+  nicPath,
   leasePath,
   machinePath,
   profilePath,
@@ -47,6 +49,7 @@ import {
   type ImageRecord,
   type InstalledNetwork,
   type IpmiSetting,
+  type NicPlan,
   type Machine,
   type MachineAction,
   type NetworkConfig,
@@ -505,6 +508,10 @@ export async function deleteProject(id: string): Promise<void> {
       if (setting.projectId !== id) continue;
       fs.rmSync(ipmiPath(setting.id), { force: true });
     }
+    for (const plan of listNicPlans()) {
+      if (plan.projectId !== id) continue;
+      fs.rmSync(nicPath(plan.id), { force: true });
+    }
     fs.rmSync(projectPath(id), { force: true });
     syncBootFiles(getState().network);
   });
@@ -622,6 +629,113 @@ export async function updateIpmi(id: string, input: IpmiInput): Promise<IpmiSett
     };
     writeJson(ipmiPath(setting.id), setting);
     return setting;
+  });
+}
+
+export function listNicPlans(): NicPlan[] {
+  ensureDataDirs();
+  return listJson<NicPlan>(path.join(dataDir(), "nics")).sort((a, b) => a.sn.localeCompare(b.sn));
+}
+
+export function getNicBySn(sn: string): NicPlan | null {
+  const active = activeProject();
+  if (!active) return null;
+  const normalized = normalizeSn(sn);
+  return listNicPlans().find((item) => item.sn === normalized && item.projectId === active.id) || null;
+}
+
+export interface PlanImportResult {
+  rows: number;
+  ipmi: number;
+  nic: number;
+  machines: number;
+  errors: { row: number; message: string }[];
+}
+
+export async function importProjectPlan(
+  projectId: string,
+  records: { row: number; cells: PlanCells }[],
+): Promise<PlanImportResult> {
+  return withLock(() => {
+    const project = getProject(projectId);
+    if (!project) throw new Error("项目不存在");
+    const result: PlanImportResult = { rows: records.length, ipmi: 0, nic: 0, machines: 0, errors: [] };
+    const now = new Date().toISOString();
+    for (const record of records) {
+      const cells = record.cells;
+      if (!cells.sn && !cells.nicAddress && !cells.ipmiAddress && !cells.mac) continue;
+      try {
+        const sn = normalizeSn(cells.sn);
+        if (cells.ipmiAddress) {
+          const existing = listIpmi().find((item) => item.projectId === project.id && item.sn === sn);
+          const setting = {
+            ...(existing || { id: crypto.randomUUID(), createdAt: now }),
+            ...normalizeIpmi(
+              {
+                sn,
+                projectId: project.id,
+                mode: "static",
+                address: cells.ipmiAddress,
+                netmask: cells.ipmiNetmask || project.fixed?.netmask || "255.255.255.0",
+                gateway: cells.ipmiGateway || project.fixed?.gateway || "",
+                channel: cells.channel ? Number(cells.channel) : 1,
+                vlanId: cells.vlan ? Number(cells.vlan) : null,
+                note: cells.note,
+              },
+              existing?.id,
+            ),
+            updatedAt: now,
+          };
+          writeJson(ipmiPath(setting.id), setting);
+          result.ipmi += 1;
+        }
+        if (cells.nicAddress) {
+          const address = assertIpv4(cells.nicAddress, "网卡 IP");
+          const netmask = assertIpv4(cells.nicNetmask || project.fixed?.netmask || "255.255.255.0", "网卡掩码");
+          const gateway = assertIpv4(cells.nicGateway || project.fixed?.gateway || "", "网卡网关");
+          netmaskToPrefix(netmask);
+          if (!sameSubnet(address, gateway, netmask)) throw new Error("网卡 IP 和网关不在同一个子网");
+          const hostname = cells.hostname ? cells.hostname.trim().toLowerCase() : "";
+          if (hostname) applyHostname(hostname, "00:11:22:33:44:55");
+          const mac = cells.mac ? normalizeMac(cells.mac) : undefined;
+          const duplicate = listNicPlans().find((item) => item.projectId === project.id && item.address === address && item.sn !== sn);
+          if (duplicate) throw new Error(`网卡 IP ${address} 已经分给序列号 ${duplicate.sn}`);
+          const existing = listNicPlans().find((item) => item.projectId === project.id && item.sn === sn);
+          const plan: NicPlan = {
+            id: existing?.id || crypto.randomUUID(),
+            projectId: project.id,
+            sn,
+            mac,
+            hostname: hostname || undefined,
+            address,
+            netmask,
+            gateway,
+            dns: cells.nicDns || project.fixed?.dns || gateway,
+            note: cells.note.slice(0, 200),
+            createdAt: existing?.createdAt || now,
+            updatedAt: now,
+          };
+          writeJson(nicPath(plan.id), plan);
+          result.nic += 1;
+          if (mac) {
+            const machine = getMachine(mac) || {
+              mac,
+              action: "menu" as const,
+              scriptIds: [],
+              note: "",
+            };
+            machine.projectId = project.id;
+            machine.fixedIp = address;
+            if (cells.note) machine.note = cells.note.slice(0, 200);
+            writeJson(machinePath(machine.mac), machine);
+            result.machines += 1;
+          }
+        }
+      } catch (error) {
+        result.errors.push({ row: record.row, message: error instanceof Error ? error.message : "这一行无法导入" });
+      }
+    }
+    return result;
   });
 }
 

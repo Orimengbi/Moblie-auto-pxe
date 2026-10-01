@@ -84,6 +84,21 @@ export interface InstalledNetwork {
   dns: string[];
 }
 
+export interface NicPlan {
+  id: string;
+  projectId: string;
+  sn: string;
+  mac?: string;
+  hostname?: string;
+  address: string;
+  netmask: string;
+  gateway: string;
+  dns: string;
+  note: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface IpmiSetting {
   id: string;
   sn: string;

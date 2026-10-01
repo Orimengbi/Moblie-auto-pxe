@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { parseLeases, renderDnsmasq } from "./dnsmasq.ts";
 import { detectFromListing, inspectIso } from "./iso.ts";
+import { parsePlanTable } from "./plan-sheet.ts";
 import { applyHostname, normalizeMac } from "./net.ts";
 import {
   renderDebianPreseed,
@@ -15,7 +16,7 @@ import {
   renderKickstart,
   renderUbuntuAutoinstall,
 } from "./render.ts";
-import { createIpmi, createProfile, createProject, createReport, getIpmiBySn, getProject, getState, listImages, listProjects, saveMachine, saveNetwork, setProjectEnabled, updateProjectNetwork } from "./store.ts";
+import { createIpmi, createProfile, createProject, createReport, getIpmiBySn, getNicBySn, getProject, getState, importProjectPlan, listImages, listProjects, saveMachine, saveNetwork, setProjectEnabled, updateProjectNetwork } from "./store.ts";
 import { DEFAULT_STATE, type ImageRecord, type Profile } from "./types.ts";
 
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pxe-test-"));
@@ -266,6 +267,23 @@ test("install looks up IPMI settings by serial number", async () => {
     Buffer.from(match[1], "base64").toString("utf8"),
   );
   assert.ok(decoded.some((item) => item.includes("/boot/ipmi.sh?sn=")));
+});
+
+test("excel rows import nic and ipmi plans for one project", async () => {
+  const parsed = parsePlanTable([
+    ["序列号", "MAC", "主机名", "网卡IP", "网卡网关", "IPMI地址", "IPMI网关"],
+    ["sn-plan 1", "aa:bb:cc:dd:ee:41", "srv-plan", "10.1.8.41", "10.1.8.1", "10.8.0.41", "10.8.0.1"],
+  ]);
+  assert.equal(parsed.error, undefined);
+  const projectId = listProjects().find((item) => item.name === "机房A")?.id || "";
+  const result = await importProjectPlan(projectId, parsed.records);
+  assert.equal(result.nic, 1);
+  assert.equal(result.ipmi, 1);
+  assert.equal(result.machines, 1);
+  assert.equal(result.errors.length, 0);
+  await setProjectEnabled(projectId, true);
+  assert.equal(getNicBySn("SN-PLAN1")?.address, "10.1.8.41");
+  assert.equal(getIpmiBySn("sn-plan1")?.address, "10.8.0.41");
 });
 
 test("profile creation hashes the password", async () => {

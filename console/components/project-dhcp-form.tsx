@@ -60,8 +60,7 @@ export function ProjectDhcpForm({ project }: { project: Project }) {
   }
 
   return (
-    <form onSubmit={save} className="grid gap-3 rounded-xl bg-card p-4 ring-1 ring-foreground/10">
-      <h2 className="font-medium">DHCP</h2>
+    <form onSubmit={save} className="grid gap-3">
       <p className="text-sm text-muted-foreground">装机时用这个临时地址池。地址池要和本机装机地址在同一个子网。</p>
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="起点" value={form.dhcpStart} onChange={(value) => setForm({ ...form, dhcpStart: value })} />
