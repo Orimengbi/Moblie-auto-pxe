@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { DISK_LABEL, FAMILY_LABEL, type DiskPolicy, type ImageRecord } from "@/lib/types";
+import { DISK_LABEL, FAMILY_LABEL, type DiskPartition, type DiskPick, type DiskPolicy, type ImageRecord, type PartitionFs } from "@/lib/types";
 
 interface PublicProfile {
   id: string;
@@ -17,6 +17,8 @@ interface PublicProfile {
   username: string;
   diskPolicy: DiskPolicy;
   diskName: string;
+  diskPick?: DiskPick;
+  partitions?: DiskPartition[];
   packages: string[];
   postScript: string;
   locale: string;
@@ -31,6 +33,8 @@ const EMPTY = {
   password: "",
   diskPolicy: "largest" as DiskPolicy,
   diskName: "sda",
+  diskPick: "largest" as DiskPick,
+  partitions: [] as DiskPartition[],
   packages: "openssh-server,curl",
   postScript: "",
   locale: "zh_CN.UTF-8",
@@ -55,6 +59,13 @@ export function ProfileManager({
   const [preview, setPreview] = useState("");
   const [pending, setPending] = useState(false);
 
+  function updatePartition(index: number, patch: Partial<DiskPartition>) {
+    setForm({
+      ...form,
+      partitions: form.partitions.map((part, item) => (item === index ? { ...part, ...patch } : part)),
+    });
+  }
+
   function startCreate() {
     setEditing(null);
     setForm({ ...EMPTY, imageId: ready[0]?.id || "" });
@@ -73,6 +84,8 @@ export function ProfileManager({
       password: "",
       diskPolicy: profile.diskPolicy,
       diskName: profile.diskName,
+      diskPick: profile.diskPick || "largest",
+      partitions: profile.partitions || [],
       packages: profile.packages.join(","),
       postScript: profile.postScript,
       locale: profile.locale,
@@ -153,6 +166,7 @@ export function ProfileManager({
                     <p className="mt-1 text-sm text-muted-foreground">
                       {image ? `${FAMILY_LABEL[image.family]} · ${image.name}` : "镜像已删除"} · 主机名 {profile.hostnamePattern} · {DISK_LABEL[profile.diskPolicy]}
                       {profile.diskPolicy === "named" ? ` ${profile.diskName}` : ""}
+                      {profile.diskPolicy === "custom" ? ` · ${(profile.partitions || []).map((part) => `${part.mount} ${part.size === "rest" ? "剩余" : `${part.size}MB`}`).join("，")}` : ""}
                     </p>
                   </div>
                   <Badge variant="outline">将清空所选磁盘</Badge>
@@ -221,17 +235,74 @@ export function ProfileManager({
                   <select
                     className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm"
                     value={form.diskPolicy}
-                    onChange={(event) => setForm({ ...form, diskPolicy: event.target.value as DiskPolicy })}
+                    onChange={(event) => {
+                      const diskPolicy = event.target.value as DiskPolicy;
+                      const partitions = diskPolicy === "custom" && form.partitions.length === 0
+                        ? [
+                            { mount: "/boot/efi", size: "512", fs: "fat32" as const },
+                            { mount: "/boot", size: "1024", fs: "ext4" as const },
+                            { mount: "/", size: "rest", fs: "ext4" as const },
+                          ]
+                        : form.partitions;
+                      setForm({ ...form, diskPolicy, partitions });
+                    }}
                   >
                     <option value="largest">最大的磁盘</option>
                     <option value="smallest">最小的磁盘</option>
                     <option value="named">指定盘符</option>
+                    <option value="custom">自定义分区</option>
                   </select>
                 </Field>
                 <Field label="盘符">
-                  <Input value={form.diskName} disabled={form.diskPolicy !== "named"} onChange={(event) => setForm({ ...form, diskName: event.target.value })} />
+                  <Input value={form.diskName} disabled={form.diskPolicy !== "named" && !(form.diskPolicy === "custom" && form.diskPick === "named")} onChange={(event) => setForm({ ...form, diskName: event.target.value })} />
                 </Field>
               </div>
+              {form.diskPolicy === "custom" ? (
+                <div className="grid gap-3">
+                  <Field label="用哪块盘">
+                    <select
+                      className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm"
+                      value={form.diskPick}
+                      onChange={(event) => setForm({ ...form, diskPick: event.target.value as DiskPick })}
+                    >
+                      <option value="largest">最大的磁盘</option>
+                      <option value="smallest">最小的磁盘</option>
+                      <option value="named">指定盘符</option>
+                    </select>
+                  </Field>
+                  <div className="grid gap-2">
+                    <span className="text-sm font-medium">分区</span>
+                    <p className="text-sm text-muted-foreground">大小填 MB。其中一个填 rest，表示用完这块盘的剩余空间。需要 EFI 时加上 /boot/efi。</p>
+                    {form.partitions.map((part, index) => (
+                      <div key={index} className="grid grid-cols-[1.2fr_0.8fr_0.8fr_auto] gap-2">
+                        <Input value={part.mount} placeholder="/" onChange={(event) => updatePartition(index, { mount: event.target.value })} />
+                        <Input value={part.size} placeholder="rest" onChange={(event) => updatePartition(index, { size: event.target.value })} />
+                        <select
+                          className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm"
+                          value={part.fs}
+                          onChange={(event) => updatePartition(index, { fs: event.target.value as PartitionFs })}
+                        >
+                          <option value="ext4">ext4</option>
+                          <option value="xfs">xfs</option>
+                          <option value="fat32">fat32</option>
+                          <option value="swap">swap</option>
+                        </select>
+                        <Button type="button" variant="ghost" size="sm" onClick={() => setForm({ ...form, partitions: form.partitions.filter((_, item) => item !== index) })}>
+                          删除
+                        </Button>
+                      </div>
+                    ))}
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      className="w-fit"
+                      onClick={() => setForm({ ...form, partitions: [...form.partitions, { mount: "/", size: "rest", fs: "ext4" }] })}
+                    >
+                      添加分区
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
               <Field label="软件包，用逗号分隔">
                 <Input value={form.packages} onChange={(event) => setForm({ ...form, packages: event.target.value })} />
               </Field>

@@ -1,4 +1,4 @@
-import type { DiskPolicy, Family, ImageRecord, InstalledNetwork, IpmiSetting, NicPlan, Profile } from "./types.ts";
+import type { DiskPartition, DiskPick, DiskPolicy, Family, ImageRecord, InstalledNetwork, IpmiSetting, NicPlan, Profile } from "./types.ts";
 import { FAMILY_LABEL } from "./types.ts";
 import { applyHostname, bootOrigin, netmaskToPrefix } from "./net.ts";
 
@@ -262,11 +262,83 @@ fi
 `;
 }
 
-function diskMatch(policy: DiskPolicy, diskName: string): string {
-  if (policy === "named") {
-    return `        path: /dev/${diskName}`;
+function diskTarget(profile: Profile): Exclude<DiskPolicy, "custom"> {
+  if (profile.diskPolicy !== "custom") return profile.diskPolicy;
+  const pick: DiskPick = profile.diskPick || "largest";
+  return pick;
+}
+
+function diskMatch(policy: DiskPolicy, diskName: string, pick?: DiskPick): string {
+  const target = policy === "custom" ? pick || "largest" : policy;
+  if (target === "named") return `        path: /dev/${diskName}`;
+  return `        size: ${target}`;
+}
+
+function partitionSizeMb(size: string): number | "rest" {
+  return size === "rest" ? "rest" : Number(size);
+}
+
+function ubuntuStorage(profile: Profile): string {
+  const partitions = profile.partitions || [];
+  if (profile.diskPolicy !== "custom" || !partitions.length) {
+    return `  storage:
+    layout:
+      name: direct
+      match:
+${diskMatch(profile.diskPolicy, profile.diskName, profile.diskPick)}`;
   }
-  return `        size: ${policy}`;
+  const lines = [
+    "  storage:",
+    "    config:",
+    "      - type: disk",
+    "        id: disk0",
+    "        ptable: gpt",
+    "        wipe: superblock",
+    "        grub_device: true",
+    "        match:",
+    `          ${diskMatch(profile.diskPolicy, profile.diskName, profile.diskPick).trim()}`,
+  ];
+  partitions.forEach((part, index) => {
+    const n = index + 1;
+    const size = partitionSizeMb(part.size);
+    lines.push(
+      "      - type: partition",
+      `        id: part${n}`,
+      "        device: disk0",
+      `        size: ${size === "rest" ? -1 : `${size}M`}`,
+    );
+    if (part.mount === "/boot/efi") lines.push("        flag: boot");
+    lines.push("      - type: format", `        id: fmt${n}`, `        volume: part${n}`, `        fstype: ${part.fs === "fat32" ? "fat32" : part.fs}`);
+    if (part.fs !== "swap") {
+      lines.push("      - type: mount", `        id: mnt${n}`, `        device: fmt${n}`, `        path: ${part.mount}`);
+    }
+  });
+  return lines.join("\n");
+}
+
+function debianRecipe(partitions: DiskPartition[]): string {
+  const pieces = partitions.map((part) => {
+    const size = partitionSizeMb(part.size);
+    const mb = size === "rest" ? "100 10000 -1" : `${size} ${size} ${size}`;
+    if (part.fs === "swap") return `${mb} linux-swap method{ swap } format{ } .`;
+    if (part.mount === "/boot/efi") {
+      return `${mb} fat32 $primary{ } $bootable{ } method{ efi } format{ } use_filesystem{ } filesystem{ fat32 } mountpoint{ /boot/efi } .`;
+    }
+    const fs = part.fs === "xfs" ? "xfs" : "ext4";
+    return `${mb} ${fs} method{ format } format{ } use_filesystem{ } filesystem{ ${fs} } mountpoint{ ${part.mount} } .`;
+  });
+  return `d-i partman-auto/expert_recipe string pxe :: ${pieces.join(" ")}`;
+}
+
+function kickstartParts(partitions: DiskPartition[]): string[] {
+  return partitions.map((part) => {
+    const size = partitionSizeMb(part.size);
+    if (part.fs === "swap") {
+      return size === "rest" ? "part swap --fstype=swap --size=1 --grow" : `part swap --fstype=swap --size=${size}`;
+    }
+    const fstype = part.mount === "/boot/efi" ? "efi" : part.fs;
+    return size === "rest" ? `part ${part.mount} --fstype=${fstype} --size=1 --grow` : `part ${part.mount} --fstype=${fstype} --size=${size}`;
+  });
 }
 
 export function renderUbuntuAutoinstall(
@@ -299,11 +371,7 @@ autoinstall:
   ssh:
     install-server: true
     allow-pw: true
-  storage:
-    layout:
-      name: direct
-      match:
-${diskMatch(profile.diskPolicy, profile.diskName)}
+${ubuntuStorage(profile)}
   packages:
 ${packages || "    - openssh-server"}
 ${lateBlock}`.replace(/\n{3,}/g, "\n\n");
@@ -342,7 +410,8 @@ export function renderDebianPreseed(
     "d-i mirror/http/proxy string",
     "d-i partman-auto/method string regular",
     `d-i partman-auto/disk string ${disk}`,
-    "d-i partman-auto/choose_recipe select atomic",
+    profile.diskPolicy === "custom" && profile.partitions?.length ? debianRecipe(profile.partitions) : "d-i partman-auto/choose_recipe select atomic",
+    profile.diskPolicy === "custom" && profile.partitions?.length ? "d-i partman-auto/choose_recipe select pxe" : "",
     "d-i partman/choose_partition select finish",
     "d-i partman/confirm boolean true",
     "d-i partman/confirm_nooverwrite boolean true",
@@ -353,9 +422,9 @@ export function renderDebianPreseed(
     "popularity-contest popularity-contest/participate boolean false",
     "d-i finish-install/reboot_in_progress note",
   ];
-  if (profile.diskPolicy !== "named") {
+  if (diskTarget(profile) !== "named") {
     const picker =
-      profile.diskPolicy === "largest"
+      diskTarget(profile) === "largest"
         ? "sort -n | tail -1"
         : "sort -n | head -1";
     lines.splice(
@@ -365,23 +434,25 @@ export function renderDebianPreseed(
     );
   }
   if (late) lines.push(`d-i preseed/late_command string ${late}`);
-  return `${lines.join("\n")}\n`;
+  return `${lines.filter(Boolean).join("\n")}\n`;
 }
 
 function kickstartDiskPre(profile: Profile): string {
-  if (profile.diskPolicy === "named") {
+  const target = diskTarget(profile);
+  const custom = profile.diskPolicy === "custom" && profile.partitions?.length ? kickstartParts(profile.partitions) : ["autopart --type=lvm"];
+  if (target === "named") {
     return [
       "%pre --erroronfail",
       "cat > /tmp/pxe-disk.cfg << EOF",
       `ignoredisk --only-use=${profile.diskName}`,
       `clearpart --all --initlabel --drives=${profile.diskName}`,
-      "autopart --type=lvm",
-      `bootloader --location=mbr --boot-drive=${profile.diskName}`,
+      ...custom,
+      `bootloader --boot-drive=${profile.diskName}`,
       "EOF",
       "%end",
     ].join("\n");
   }
-  const picker = profile.diskPolicy === "largest" ? "tail -1" : "head -1";
+  const picker = target === "largest" ? "tail -1" : "head -1";
   return [
     "%pre --erroronfail",
     "set -e",
@@ -390,8 +461,8 @@ function kickstartDiskPre(profile: Profile): string {
     "cat > /tmp/pxe-disk.cfg << EOF",
     "ignoredisk --only-use=$DISK",
     "clearpart --all --initlabel --drives=$DISK",
-    "autopart --type=lvm",
-    "bootloader --location=mbr --boot-drive=$DISK",
+    ...custom,
+    "bootloader --boot-drive=$DISK",
     "EOF",
     "%end",
   ].join("\n");

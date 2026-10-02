@@ -1,6 +1,14 @@
 export type Family = "ubuntu" | "debian" | "rocky" | "alma";
 
-export type DiskPolicy = "largest" | "smallest" | "named";
+export type DiskPolicy = "largest" | "smallest" | "named" | "custom";
+export type DiskPick = "largest" | "smallest" | "named";
+export type PartitionFs = "ext4" | "xfs" | "fat32" | "swap";
+
+export interface DiskPartition {
+  mount: string;
+  size: string;
+  fs: PartitionFs;
+}
 
 export type ImageStatus = "extracting" | "ready" | "error";
 
@@ -29,6 +37,8 @@ export interface Profile {
   passwordHash: string;
   diskPolicy: DiskPolicy;
   diskName: string;
+  diskPick?: DiskPick;
+  partitions?: DiskPartition[];
   packages: string[];
   postScript: string;
   locale: string;
@@ -252,6 +262,7 @@ export const DISK_LABEL: Record<DiskPolicy, string> = {
   largest: "最大的磁盘",
   smallest: "最小的磁盘",
   named: "指定盘符",
+  custom: "自定义分区",
 };
 
 export const DEFAULT_STATE: ApplianceState = {

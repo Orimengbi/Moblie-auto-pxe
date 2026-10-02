@@ -52,6 +52,8 @@ import {
   type ApplianceState,
   type BuiltinDiag,
   type DiagScript,
+  type DiskPartition,
+  type DiskPick,
   type DiskPolicy,
   type ImageRecord,
   type IpmiSetting,
@@ -272,11 +274,38 @@ export interface ProfileInput {
   password?: string;
   diskPolicy: DiskPolicy;
   diskName?: string;
+  diskPick?: DiskPick;
+  partitions?: DiskPartition[];
   packages: string[];
   postScript?: string;
   locale?: string;
   timezone?: string;
   projectId: string;
+}
+
+function normalizePartitions(input: DiskPartition[]): DiskPartition[] {
+  if (!input.length || input.length > 16) throw new Error("自定义分区需要 1 到 16 个分区");
+  const mounts = new Set<string>();
+  let rest = 0;
+  const partitions = input.map((item) => {
+    const mount = item.mount.trim();
+    if (mount !== "swap" && !/^\/[A-Za-z0-9._/-]*$/.test(mount)) throw new Error(`挂载点不合法：${mount || "空"}`);
+    if (mounts.has(mount)) throw new Error(`挂载点重复：${mount}`);
+    mounts.add(mount);
+    const raw = item.size.trim().toLowerCase();
+    const size = raw === "rest" || raw === "剩余" || raw === "-1" ? "rest" : raw;
+    if (size === "rest") rest += 1;
+    else if (!/^[1-9]\d{0,6}$/.test(size)) throw new Error(`分区大小用 MB 整数，或填 rest 表示用完剩余空间：${item.mount}`);
+    const fs = item.fs;
+    if (!["ext4", "xfs", "fat32", "swap"].includes(fs)) throw new Error("文件系统只支持 ext4、xfs、fat32、swap");
+    if (mount === "swap" && fs !== "swap") throw new Error("swap 分区的文件系统要选 swap");
+    if (mount !== "swap" && fs === "swap") throw new Error("只有挂载点 swap 能使用 swap 文件系统");
+    if (mount === "/boot/efi" && fs !== "fat32") throw new Error("/boot/efi 要使用 fat32");
+    return { mount, size, fs };
+  });
+  if (!mounts.has("/")) throw new Error("自定义分区必须包含挂载点 /");
+  if (rest !== 1) throw new Error("有且只能有一个分区大小填 rest，用来占用剩余空间");
+  return partitions;
 }
 
 function normalizeProfileInput(input: ProfileInput, existing?: Profile): Omit<Profile, "id" | "createdAt" | "updatedAt" | "passwordHash"> & { passwordHash: string } {
@@ -287,8 +316,10 @@ function normalizeProfileInput(input: ProfileInput, existing?: Profile): Omit<Pr
   const hostnamePattern = input.hostnamePattern.trim();
   applyHostname(hostnamePattern, "00:11:22:33:44:55");
   const diskPolicy = input.diskPolicy;
-  if (!["largest", "smallest", "named"].includes(diskPolicy)) throw new Error("磁盘策略不合法");
-  const diskName = diskPolicy === "named" ? assertDiskName(input.diskName || "") : input.diskName?.trim() || "sda";
+  if (!["largest", "smallest", "named", "custom"].includes(diskPolicy)) throw new Error("磁盘策略不合法");
+  const diskPick: DiskPick = input.diskPick === "smallest" || input.diskPick === "named" ? input.diskPick : "largest";
+  const diskName = diskPolicy === "named" || (diskPolicy === "custom" && diskPick === "named") ? assertDiskName(input.diskName || "") : input.diskName?.trim() || "sda";
+  const partitions = diskPolicy === "custom" ? normalizePartitions(input.partitions || []) : [];
   const password = input.password?.trim();
   const passwordHash = password ? hashPassword(password) : existing?.passwordHash;
   if (!passwordHash) throw new Error("请设置安装密码");
@@ -303,6 +334,8 @@ function normalizeProfileInput(input: ProfileInput, existing?: Profile): Omit<Pr
     passwordHash,
     diskPolicy,
     diskName,
+    diskPick: diskPolicy === "custom" ? diskPick : undefined,
+    partitions,
     packages: assertPackages(input.packages),
     postScript: (input.postScript || "").slice(0, 20000),
     locale: (input.locale || "zh_CN.UTF-8").trim(),

@@ -482,3 +482,27 @@ test("iso upload resumes from the received offset", async () => {
 function uploadGone(id: string): boolean {
   return !fs.existsSync(path.join(temp, "uploads", id));
 }
+
+test("custom disk partitions are written into each answer file", () => {
+  const custom = {
+    ...profile,
+    diskPolicy: "custom" as const,
+    diskPick: "largest" as const,
+    partitions: [
+      { mount: "/boot/efi", size: "512", fs: "fat32" as const },
+      { mount: "/", size: "rest", fs: "ext4" as const },
+      { mount: "swap", size: "8192", fs: "swap" as const },
+    ],
+  };
+  const ubuntuAnswer = renderUbuntuAutoinstall(custom, "srv");
+  assert.match(ubuntuAnswer.userData, /size: -1/);
+  assert.match(ubuntuAnswer.userData, /path: \/boot\/efi/);
+  const preseed = renderDebianPreseed(custom, "srv", "192.168.77.1", custom.imageId);
+  assert.match(preseed, /choose_recipe select pxe/);
+  assert.match(preseed, /mountpoint\{ \/ \}/);
+  const kickstart = renderKickstart(custom, "srv", "192.168.77.1", custom.imageId);
+  assert.match(kickstart, /part \/boot\/efi --fstype=efi --size=512/);
+  assert.match(kickstart, /part \/ --fstype=ext4 --size=1 --grow/);
+  assert.match(kickstart, /part swap --fstype=swap --size=8192/);
+  assert.doesNotMatch(kickstart, /autopart/);
+});
