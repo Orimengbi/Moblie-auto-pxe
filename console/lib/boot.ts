@@ -8,6 +8,7 @@ import {
   activeProject,
   bindServerBoot,
   customizationForMac,
+  installServerIp,
   profilesForProject,
   touchMachine,
 } from "./store.ts";
@@ -34,6 +35,7 @@ export async function menuFor(macRaw: string | null, snRaw: string | null = null
   const machine = await rememberMac(macRaw);
   const state = getState();
   const active = activeProject();
+  const serverIp = installServerIp(state.network);
   const entries = (active ? profilesForProject(active.id) : []).flatMap((profile) => {
     const image = getImage(profile.imageId);
     if (!image || image.status !== "ready" || !image.kernelFile || !image.initrdFile) return [];
@@ -41,7 +43,7 @@ export async function menuFor(macRaw: string | null, snRaw: string | null = null
   });
   const boundProfile = machine?.profileId ? getProfile(machine.profileId) : null;
   return renderIpxeMenu({
-    serverIp: state.network.serverIp,
+    serverIp,
     httpPort: state.network.httpPort,
     timeoutSec: state.network.menuTimeoutSec,
     entries,
@@ -72,7 +74,7 @@ export function answerFile(profileId: string, macRaw: string, filename: string):
   const renderedProfile = customization.trim()
     ? { ...profile, postScript: [profile.postScript, customization].filter((item) => item.trim()).join("\n") }
     : profile;
-  const files = renderAnswer(renderedProfile, image, mac, state.network.serverIp, null, state.network.httpPort);
+  const files = renderAnswer(renderedProfile, image, mac, installServerIp(state.network), null, state.network.httpPort);
   const file = files.find((item) => item.filename === filename);
   if (!file) return new Response("这个镜像不使用该应答文件\n", { status: 404 });
   return new Response(file.body, { headers: { "content-type": file.contentType } });

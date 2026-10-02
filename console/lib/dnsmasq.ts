@@ -2,7 +2,8 @@ import { bootOrigin } from "./net.ts";
 import type { NetworkConfig, Project } from "./types.ts";
 
 export function renderDnsmasq(network: NetworkConfig, active: Project | null = null): string {
-  const httpBoot = `${bootOrigin(network.serverIp, network.httpPort)}/boot/menu.ipxe`;
+  const serverIp = active?.dhcp?.serverIp || network.serverIp;
+  const httpBoot = `${bootOrigin(serverIp, network.httpPort)}/boot/menu.ipxe`;
   const lines = [
     "# 由 PXE 控制台生成。只监听装机网口。",
     "# 只有打开开关的项目会分配装机地址。",
@@ -14,11 +15,13 @@ export function renderDnsmasq(network: NetworkConfig, active: Project | null = n
   ];
   if (active?.dhcp) {
     lines.push(`# 当前启用：${active.name}`);
+    if (active.dhcp.vlan) lines.push(`# VLAN ${active.dhcp.vlan}`);
+    const vlanTag = active.dhcp.vlan ? `set:vlan${active.dhcp.vlan},` : "";
     lines.push(
-      `dhcp-range=${active.dhcp.start},${active.dhcp.end},${active.dhcp.netmask},${active.dhcp.leaseHours}h`,
+      `dhcp-range=${vlanTag}${active.dhcp.start},${active.dhcp.end},${active.dhcp.netmask},${active.dhcp.leaseHours}h`,
     );
     lines.push(`dhcp-option=option:router,${active.dhcp.gateway}`);
-    lines.push(`dhcp-option=option:dns-server,${active.dhcp.dns}`);
+    if (active.dhcp.dns) lines.push(`dhcp-option=option:dns-server,${active.dhcp.dns}`);
   } else {
     lines.push("# 没有启用的项目，不分配装机地址");
   }

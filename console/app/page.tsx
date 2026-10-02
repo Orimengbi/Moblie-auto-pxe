@@ -45,7 +45,9 @@ export default function HomePage() {
               <>
                 <p>项目 {active.name}</p>
                 <p>
-                  临时地址 {active.dhcp.start} – {active.dhcp.end}，租约 {active.dhcp.leaseHours} 小时
+                  临时地址 {active.dhcp.start} – {active.dhcp.end}
+                  {active.dhcp.serverIp ? `，本网口 ${active.dhcp.serverIp}` : ""}
+                  {active.dhcp.vlan ? `，VLAN ${active.dhcp.vlan}` : ""}，租约 {active.dhcp.leaseHours} 小时
                 </p>
                 <p>服务器表 {serverCount} 台。找到 BMC 后改 IPMI 账号，再按表里的系统无人值守安装。</p>
                 <Link href={`/projects/${active.id}`} className="w-fit underline underline-offset-4">

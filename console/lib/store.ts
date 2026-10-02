@@ -7,6 +7,8 @@ import type { ServerCells } from "./server-sheet.ts";
 import {
   applyHostname,
   assertAddressRanges,
+  chooseInstallAddress,
+  listLocalIpv4,
   assertDiskName,
   assertHttpPort,
   assertInterface,
@@ -114,10 +116,15 @@ export function getState(): ApplianceState {
   };
 }
 
+export function installServerIp(network: NetworkConfig): string {
+  return activeProject()?.dhcp?.serverIp || network.serverIp;
+}
+
 export function syncBootFiles(network: NetworkConfig): void {
   ensureDataDirs();
-  fs.writeFileSync(dnsmasqConfPath(), renderDnsmasq(network, activeProject()));
-  fs.writeFileSync(path.join(tftpDir(), "boot.ipxe"), renderBootIpxe(network.serverIp, network.httpPort));
+  const active = activeProject();
+  fs.writeFileSync(dnsmasqConfPath(), renderDnsmasq(network, active));
+  fs.writeFileSync(path.join(tftpDir(), "boot.ipxe"), renderBootIpxe(active?.dhcp?.serverIp || network.serverIp, network.httpPort));
 }
 
 export async function saveNetwork(input: NetworkConfig): Promise<ApplianceState> {
@@ -349,13 +356,18 @@ function assertDnsList(value: string, label: string): string {
 }
 
 function normalizeDhcp(input: ProjectDhcp, label: string): ProjectDhcp {
+  const dns = (input.dns || "").trim();
+  const vlanRaw = input.vlan;
+  const vlan = vlanRaw === undefined || vlanRaw === null || Number(vlanRaw) === 0 ? undefined : assertVlanId(Number(vlanRaw));
   return {
     start: assertIpv4(input.start, `${label}起点`),
     end: assertIpv4(input.end, `${label}终点`),
     netmask: assertIpv4(input.netmask, `${label}掩码`),
     gateway: assertIpv4(input.gateway, `${label}网关`),
-    dns: assertDnsList(input.dns, `${label}DNS`).split(",")[0],
+    dns: dns ? assertDnsList(dns, `${label}DNS`).split(",")[0] : "",
     leaseHours: assertLeaseHours(Number(input.leaseHours)),
+    serverIp: input.serverIp?.trim() ? assertIpv4(input.serverIp, "本网口地址") : "",
+    vlan,
   };
 }
 
@@ -458,7 +470,15 @@ export async function updateProjectNetwork(id: string, input: ProjectNetworkInpu
     const fixed = input.fixed ? normalizeFixed(input.fixed) : existing.fixed;
     if (input.fixed && fixed?.mode === "static") netmaskToPrefix(fixed.netmask);
     const network = getState().network;
-    assertAddressRanges(network.serverIp, [
+    const serverIp = chooseInstallAddress({
+      start: dhcp.start,
+      netmask: dhcp.netmask,
+      explicit: dhcp.serverIp,
+      configured: network.serverIp,
+      locals: listLocalIpv4(),
+    });
+    dhcp.serverIp = serverIp;
+    assertAddressRanges(serverIp, [
       {
         label: `项目「${existing.name}」`,
         start: dhcp.start,

@@ -1,3 +1,5 @@
+import os from "node:os";
+
 const MAC_RE = /^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/;
 const IPV4_RE = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
 const IFACE_RE = /^[a-zA-Z][a-zA-Z0-9_.:-]{0,14}$/;
@@ -79,6 +81,35 @@ export function assertAddressRanges(serverIp: string, ranges: AddressRange[]): v
       }
     }
   }
+}
+
+export function listLocalIpv4(): string[] {
+  const found: string[] = [];
+  for (const entries of Object.values(os.networkInterfaces())) {
+    for (const entry of entries || []) {
+      const family = entry.family as string | number;
+      if (entry.internal || (family !== "IPv4" && family !== 4)) continue;
+      found.push(entry.address);
+    }
+  }
+  return found;
+}
+
+export function chooseInstallAddress(input: {
+  start: string;
+  netmask: string;
+  explicit?: string;
+  configured: string;
+  locals: string[];
+}): string {
+  if (input.explicit?.trim()) return assertIpv4(input.explicit, "本网口地址");
+  const candidates = [...input.locals, input.configured].filter(Boolean);
+  const match = candidates.find((ip) => sameSubnet(ip, input.start, input.netmask));
+  if (!match) {
+    const shown = [...new Set(candidates)].join("、") || "没有";
+    throw new Error(`这个地址池的网段上没有本机地址。小主机现在的地址是 ${shown}。多块网口时，池子只要和其中一块在同一网段。把那块网口配上地址，或填写「本网口地址」。`);
+  }
+  return match;
 }
 
 export function normalizeSn(input: string): string {

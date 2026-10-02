@@ -432,3 +432,27 @@ test("server sheet changes the ipmi account and installs by serial", async () =>
   assert.equal(listed.servers, 1);
   assert.equal(listed.errors.length, 1);
 });
+
+test("dhcp pool can follow another nic without dns", async () => {
+  const project = await createProject({ name: "别的网口" });
+  const saved = await updateProjectNetwork(project.id, {
+    dhcp: {
+      start: "192.168.100.2",
+      end: "192.168.100.254",
+      netmask: "255.255.255.0",
+      gateway: "192.168.100.1",
+      dns: "",
+      serverIp: "192.168.100.1",
+      vlan: 100,
+      leaseHours: 2,
+    },
+  });
+  assert.equal(saved.dhcp?.serverIp, "192.168.100.1");
+  assert.equal(saved.dhcp?.dns, "");
+  assert.equal(saved.dhcp?.vlan, 100);
+  const conf = renderDnsmasq(getState().network, saved);
+  assert.match(conf, /dhcp-range=set:vlan100,192\.168\.100\.2,192\.168\.100\.254,255\.255\.255\.0,2h/);
+  assert.match(conf, /http:\/\/192\.168\.100\.1\/boot\/menu\.ipxe/);
+  assert.doesNotMatch(conf, /dns-server/);
+  assert.match(conf, /# VLAN 100/);
+});

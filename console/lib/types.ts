@@ -56,6 +56,9 @@ export interface ProjectDhcp {
   gateway: string;
   dns: string;
   leaseHours: number;
+  /** 客户端回来下载系统时访问的本机地址。对上多网口里的一块即可。 */
+  serverIp?: string;
+  vlan?: number;
 }
 
 export interface ProjectFixed {
