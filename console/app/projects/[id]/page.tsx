@@ -6,7 +6,7 @@ import { ProjectDhcpForm } from "@/components/project-dhcp-form";
 import { ProjectServerImport } from "@/components/project-server-import";
 import { ProjectServerList } from "@/components/project-server-list";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { getProject, listImages, listProfiles, listServers, publicProfile, publicServer } from "@/lib/store";
+import { getProject, getServerImportReport, listImages, listProfiles, listServers, publicProfile, publicServer } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
@@ -51,11 +51,11 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
       </div>
       <Card>
         <CardHeader>
-          <CardTitle>服务器表</CardTitle>
+          <CardTitle>服务器列表</CardTitle>
         </CardHeader>
         <CardContent className="grid gap-4">
           <ProjectServerImport projectId={project.id} enabled={project.enabled} />
-          <ProjectServerList rows={servers} />
+          <ProjectServerList rows={servers} report={getServerImportReport(project.id)} />
         </CardContent>
       </Card>
     </div>

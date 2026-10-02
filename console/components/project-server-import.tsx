@@ -46,9 +46,7 @@ export function ProjectServerImport({ projectId, enabled }: { projectId: string;
       return;
     }
     const problems = (body.errors as { row: number; message: string }[]) || [];
-    setSummary(
-      `处理 ${body.rows} 行，写入 ${body.servers} 台服务器。${problems.length ? `失败 ${problems.length} 行：${problems.map((item) => `第 ${item.row} 行 ${item.message}`).join("；")}` : "项目开关打开后，会按 IPMI MAC 找 BMC，改账号，再从网卡启动安装。"}`,
-    );
+    setSummary(`已列入 ${body.servers} 台。${problems.length ? `其中 ${problems.length} 行有问题，列表里能看到原因。` : "列表已更新。"}`);
     event.currentTarget.reset();
     router.refresh();
   }

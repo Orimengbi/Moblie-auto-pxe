@@ -418,4 +418,17 @@ test("server sheet changes the ipmi account and installs by serial", async () =>
   assert.equal(customizationForMac("aa:bb:cc:dd:ee:92", projectId), "echo custom");
   assert.equal("originalPassword" in publicServer(bound!), false);
   assert.match(serialProbe("192.168.77.1", 8080), /sn=\$\{serial:uristring\}/);
+  const titled = parseServerTable([
+    ["项目服务器"],
+    ["序列号", "IPMI MAC", "原用户/密码", "目标用户/密码", "需要安装的系统"],
+    ["sn-srv 8", "aa:bb:cc:dd:ee:81", "ADMIN/old-pass", "ops/new-pass", "机房 Ubuntu"],
+  ]);
+  assert.equal(titled.error, undefined);
+  assert.equal(titled.records[0]?.cells.originalUser, "ADMIN");
+  assert.equal(titled.records[0]?.cells.targetPassword, "new-pass");
+  const listed = await importServerSheet(projectId, [
+    { row: 9, cells: { sn: "sn-bad", ipmiMac: "aa:bb:cc:dd:ee:82", originalUser: "ADMIN", originalPassword: "", targetUser: "ops", targetPassword: "new-pass", osName: "机房 Ubuntu", customization: "" } },
+  ]);
+  assert.equal(listed.servers, 1);
+  assert.equal(listed.errors.length, 1);
 });

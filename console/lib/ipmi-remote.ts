@@ -11,6 +11,49 @@ export interface IpmiExecResult {
 
 export type IpmiExec = (host: string, username: string, password: string, args: string[]) => Promise<IpmiExecResult>;
 
+export function parseLanPrint(text: string): { ip?: string; source?: "dhcp" | "static" } {
+  let ip: string | undefined;
+  let source: "dhcp" | "static" | undefined;
+  for (const line of text.split("\n")) {
+    const splitAt = line.indexOf(":");
+    if (splitAt < 0) continue;
+    const key = line.slice(0, splitAt).trim().toLowerCase();
+    const value = line.slice(splitAt + 1).trim();
+    if (key === "ip address source") {
+      if (/dhcp/i.test(value)) source = "dhcp";
+      else if (/static/i.test(value)) source = "static";
+    }
+    if (key === "ip address" && /^\d+\.\d+\.\d+\.\d+$/.test(value) && value !== "0.0.0.0") ip = value;
+  }
+  return { ip, source };
+}
+
+export function parsePowerStatus(text: string): "on" | "off" | "unknown" {
+  if (/power is on/i.test(text)) return "on";
+  if (/power is off/i.test(text)) return "off";
+  return "unknown";
+}
+
+export async function probeIpmi(
+  host: string,
+  username: string,
+  password: string,
+  exec: IpmiExec,
+): Promise<{ link: "up" | "down"; ip: string; source: "unknown" | "dhcp" | "static"; power: "on" | "off" | "unknown" }> {
+  const lan = await exec(host, username, password, ["lan", "print", "1"]);
+  if (lan.code !== 0 && !lan.stdout.trim()) {
+    return { link: "down", ip: "", source: "unknown", power: "unknown" };
+  }
+  const parsed = parseLanPrint(lan.stdout);
+  const power = await exec(host, username, password, ["chassis", "power", "status"]);
+  return {
+    link: "up",
+    ip: parsed.ip || "",
+    source: parsed.source || "unknown",
+    power: parsePowerStatus(power.stdout),
+  };
+}
+
 export function parseIpmiUserList(text: string): { id: number; name: string }[] {
   const users: { id: number; name: string }[] = [];
   for (const line of text.split("\n")) {

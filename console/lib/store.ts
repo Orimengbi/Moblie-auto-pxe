@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { parseLeases, renderBootIpxe, renderDnsmasq } from "./dnsmasq.ts";
-import { bootFromPxe, changeIpmiAccount, defaultIpmiExec, type IpmiExec } from "./ipmi-remote.ts";
+import { bootFromPxe, changeIpmiAccount, defaultIpmiExec, probeIpmi, type IpmiExec } from "./ipmi-remote.ts";
 import type { PlanCells } from "./plan-sheet.ts";
 import type { ServerCells } from "./server-sheet.ts";
 import {
@@ -34,6 +34,7 @@ import {
   factPath,
   nicPath,
   serverPath,
+  serverImportPath,
   leasePath,
   machinePath,
   profilePath,
@@ -63,6 +64,7 @@ import {
   type ProjectDhcp,
   type ProjectFixed,
   type Report,
+  type ServerImportReport,
   type ServerRow,
 } from "./types.ts";
 
@@ -1088,9 +1090,28 @@ function assertIpmiPassword(value: string, label: string): string {
   return trimmed;
 }
 
+function hydrateServer(row: ServerRow): ServerRow {
+  return {
+    ...row,
+    canApply: row.canApply !== false,
+    ipmiLink: row.ipmiLink || "unknown",
+    ipSource: row.ipSource || "unknown",
+    power: row.power || "unknown",
+    installed: row.installed || (row.stage === "installing" ? "installing" : "no"),
+    passwordChanged: Boolean(row.passwordChanged),
+  };
+}
+
 export function listServers(): ServerRow[] {
   ensureDataDirs();
-  return listJson<ServerRow>(path.join(dataDir(), "servers")).sort((a, b) => a.sn.localeCompare(b.sn));
+  return listJson<ServerRow>(path.join(dataDir(), "servers"))
+    .filter((item) => Boolean(item.sn && item.projectId))
+    .map(hydrateServer)
+    .sort((a, b) => a.sn.localeCompare(b.sn));
+}
+
+export function getServerImportReport(projectId: string): ServerImportReport | null {
+  return readJson<ServerImportReport>(serverImportPath(projectId));
 }
 
 export function publicServer(row: ServerRow): Omit<ServerRow, "originalPassword" | "targetPassword"> {
@@ -1114,44 +1135,91 @@ export async function importServerSheet(projectId: string, records: { row: numbe
     const now = new Date().toISOString();
     for (const record of records) {
       const cells = record.cells;
-      if (!cells.sn && !cells.ipmiMac && !cells.osName) continue;
+      if (!cells.sn && !cells.ipmiMac && !cells.osName && !cells.originalUser) continue;
+      const problems: string[] = [];
+      let sn = "";
       try {
-        const sn = normalizeSn(cells.sn);
-        const ipmiMac = normalizeMac(cells.ipmiMac);
-        const originalUser = assertIpmiUser(cells.originalUser, "原用户");
-        const originalPassword = assertIpmiPassword(cells.originalPassword, "原密码");
-        const targetUser = assertIpmiUser(cells.targetUser, "目标用户");
-        const targetPassword = assertIpmiPassword(cells.targetPassword, "目标密码");
-        const osName = cells.osName.trim();
-        if (osName.length < 1 || osName.length > 80) throw new Error("安装系统需要 1 到 80 个字符，并且要和安装设置的名称一致");
-        const duplicateMac = listServers().find((item) => item.projectId === project.id && item.ipmiMac === ipmiMac && item.sn !== sn);
-        if (duplicateMac) throw new Error(`IPMI MAC ${ipmiMac} 已经属于序列号 ${duplicateMac.sn}`);
-        const existing = listServers().find((item) => item.projectId === project.id && item.sn === sn);
-        const row: ServerRow = {
-          id: existing?.id || crypto.randomUUID(),
-          projectId: project.id,
-          sn,
-          ipmiMac,
-          originalUser,
-          originalPassword,
-          targetUser,
-          targetPassword,
-          osName,
-          customization: cells.customization.slice(0, 4000),
-          bmcIp: existing?.bmcIp,
-          bootMac: existing?.bootMac,
-          passwordChanged: false,
-          stage: "waiting",
-          detail: "等待这台 BMC 从 DHCP 出现",
-          createdAt: existing?.createdAt || now,
-          updatedAt: now,
-        };
-        writeJson(serverPath(row.id), row);
-        result.servers += 1;
+        sn = normalizeSn(cells.sn);
       } catch (error) {
-        result.errors.push({ row: record.row, message: error instanceof Error ? error.message : "这一行无法导入" });
+        problems.push(error instanceof Error ? error.message : "序列号不合法");
+        sn = `第${record.row}行`;
       }
+      let ipmiMac = "";
+      try {
+        ipmiMac = cells.ipmiMac ? normalizeMac(cells.ipmiMac) : "";
+        if (!ipmiMac) problems.push("没有 IPMI MAC");
+      } catch (error) {
+        problems.push(error instanceof Error ? error.message : "IPMI MAC 不合法");
+      }
+      let originalUser = cells.originalUser.trim();
+      let originalPassword = cells.originalPassword.trim();
+      let targetUser = cells.targetUser.trim();
+      let targetPassword = cells.targetPassword.trim();
+      try {
+        originalUser = assertIpmiUser(cells.originalUser, "原用户");
+      } catch (error) {
+        problems.push(error instanceof Error ? error.message : "原用户不合法");
+      }
+      try {
+        originalPassword = assertIpmiPassword(cells.originalPassword, "原密码");
+      } catch (error) {
+        problems.push(error instanceof Error ? error.message : "原密码不合法");
+      }
+      try {
+        targetUser = assertIpmiUser(cells.targetUser, "目标用户");
+      } catch (error) {
+        problems.push(error instanceof Error ? error.message : "目标用户不合法");
+      }
+      try {
+        targetPassword = assertIpmiPassword(cells.targetPassword, "目标密码");
+      } catch (error) {
+        problems.push(error instanceof Error ? error.message : "目标密码不合法");
+      }
+      const osName = cells.osName.trim().slice(0, 80);
+      if (!osName) problems.push("没有填写安装系统");
+      if (ipmiMac) {
+        const duplicateMac = listServers().find((item) => item.projectId === project.id && item.ipmiMac === ipmiMac && item.sn !== sn);
+        if (duplicateMac) problems.push(`IPMI MAC ${ipmiMac} 已经属于序列号 ${duplicateMac.sn}`);
+      }
+      const existing = listServers().find((item) => item.projectId === project.id && item.sn === sn);
+      const sameMac = existing?.ipmiMac === ipmiMac;
+      const canApply = problems.length === 0;
+      const row: ServerRow = {
+        id: existing?.id || crypto.randomUUID(),
+        projectId: project.id,
+        sn,
+        ipmiMac,
+        originalUser,
+        originalPassword,
+        targetUser,
+        targetPassword,
+        osName,
+        customization: cells.customization.slice(0, 4000),
+        bmcIp: sameMac ? existing?.bmcIp : undefined,
+        bootMac: sameMac ? existing?.bootMac : undefined,
+        passwordChanged: sameMac ? Boolean(existing?.passwordChanged) : false,
+        canApply,
+        ipmiLink: sameMac ? existing?.ipmiLink || "unknown" : "unknown",
+        ipSource: sameMac ? existing?.ipSource || "unknown" : "unknown",
+        power: sameMac ? existing?.power || "unknown" : "unknown",
+        installed: sameMac ? existing?.installed || "no" : "no",
+        stage: canApply ? (sameMac ? existing?.stage || "waiting" : "waiting") : "error",
+        detail: canApply ? (sameMac ? existing?.detail || "已列入，等待查看 IPMI" : "已列入，等待查看 IPMI") : problems.join("；"),
+        createdAt: existing?.createdAt || now,
+        updatedAt: now,
+      };
+      writeJson(serverPath(row.id), row);
+      result.servers += 1;
+      if (problems.length) result.errors.push({ row: record.row, message: problems.join("；") });
     }
+    const report: ServerImportReport = {
+      projectId: project.id,
+      at: now,
+      rows: result.rows,
+      servers: result.servers,
+      errors: result.errors,
+    };
+    writeJson(serverImportPath(project.id), report);
     return result;
   });
 }
@@ -1172,14 +1240,32 @@ export async function reconcileServers(projectId: string, options?: { exec?: Ipm
       const before = snapshot();
       const lease = leases.find((item) => item.active && item.mac === row.ipmiMac);
       if (lease) row.bmcIp = lease.ip;
-      if (!project.enabled) {
-        if (row.stage !== "installing") {
-          row.stage = row.stage === "error" ? "error" : "waiting";
-          row.detail = "打开这个项目的开关后，才会按 IPMI MAC 找 BMC";
+      if (row.canApply && row.bmcIp && row.originalUser && row.originalPassword) {
+        const username = row.passwordChanged ? row.targetUser : row.originalUser;
+        const password = row.passwordChanged ? row.targetPassword : row.originalPassword;
+        try {
+          const probed = await probeIpmi(row.bmcIp, username, password, exec);
+          row.ipmiLink = probed.link;
+          if (probed.ip) row.bmcIp = probed.ip;
+          row.ipSource = probed.source;
+          row.power = probed.power;
+        } catch {
+          row.ipmiLink = "down";
         }
+      }
+      if (!row.canApply) {
+        row.stage = "error";
+      } else if (row.installed === "yes") {
+        row.detail = `系统已安装。IPMI ${row.ipmiLink === "up" ? "通" : row.ipmiLink === "down" ? "不通" : "还没探测"}`;
       } else if (!row.bmcIp) {
-        row.stage = "waiting";
-        row.detail = "等待这台 BMC 从 DHCP 出现";
+        row.stage = row.stage === "installing" ? "installing" : "waiting";
+        row.detail = "已列入。DHCP 里还没有这个 IPMI MAC";
+      } else if (row.ipmiLink === "down") {
+        row.stage = "error";
+        row.detail = `IPMI 不通，当前地址 ${row.bmcIp}`;
+      } else if (!project.enabled) {
+        if (row.stage !== "installing") row.stage = "waiting";
+        row.detail = `已列入，IPMI 地址 ${row.bmcIp}。打开项目开关后才会改账号并安装`;
       } else if (row.stage !== "installing") {
         const profile = profilesForProject(project.id).find((item) => item.name === row.osName);
         try {
@@ -1198,11 +1284,11 @@ export async function reconcileServers(projectId: string, options?: { exec?: Ipm
           }
           if (!profile) {
             row.stage = "error";
-            row.detail = `IPMI 账号已处理。项目里没有名为「${row.osName}」的安装设置，还不能从网卡启动`;
+            row.detail = `IPMI 已连通。项目里没有名为「${row.osName}」的安装设置，还不能开始安装`;
           } else if (row.stage !== "ready") {
             await bootFromPxe(row.bmcIp, row.targetUser, row.targetPassword, exec);
             row.stage = "ready";
-            row.detail = `已把 IPMI 账号改成 ${row.targetUser}，并让 ${row.bmcIp} 从网卡启动安装「${row.osName}」`;
+            row.detail = `已把 IPMI 账号改成 ${row.targetUser}，并让 ${row.bmcIp} 从网卡启动`;
           }
         } catch (error) {
           row.stage = "error";
@@ -1255,9 +1341,30 @@ export async function bindServerBoot(snRaw: string, macRaw: string): Promise<Ser
     };
     writeJson(machinePath(mac), machine);
     row.stage = "installing";
+    row.installed = row.installed === "yes" ? "yes" : "installing";
     row.detail = `正在安装「${row.osName}」`;
     writeJson(serverPath(row.id), row);
     return row;
+  });
+}
+
+export async function markServerInstalled(snRaw: string): Promise<void> {
+  return withLock(() => {
+    let sn = "";
+    try {
+      sn = normalizeSn(snRaw);
+    } catch {
+      return;
+    }
+    const active = activeProject();
+    const rows = listServers().filter((item) => item.sn === sn && (!active || item.projectId === active.id));
+    for (const row of rows) {
+      row.installed = "yes";
+      row.stage = "installing";
+      row.detail = `「${row.osName || "系统"}」已安装`;
+      row.updatedAt = new Date().toISOString();
+      writeJson(serverPath(row.id), row);
+    }
   });
 }
 

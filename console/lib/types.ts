@@ -100,6 +100,9 @@ export interface MachineFact {
 }
 
 export type ServerStage = "waiting" | "ready" | "installing" | "error";
+export type IpmiLink = "unknown" | "up" | "down";
+export type IpSource = "unknown" | "dhcp" | "static";
+export type InstallState = "no" | "installing" | "yes";
 
 export interface ServerRow {
   id: string;
@@ -115,10 +118,23 @@ export interface ServerRow {
   bmcIp?: string;
   bootMac?: string;
   passwordChanged: boolean;
+  canApply: boolean;
+  ipmiLink: IpmiLink;
+  ipSource: IpSource;
+  power: PowerState;
+  installed: InstallState;
   stage: ServerStage;
   detail: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ServerImportReport {
+  projectId: string;
+  at: string;
+  rows: number;
+  servers: number;
+  errors: { row: number; message: string }[];
 }
 
 export interface NicPlan {

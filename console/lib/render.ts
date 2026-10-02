@@ -103,6 +103,7 @@ curl -fsS "${origin}/boot/ipmi.sh?sn=$sn" -o /tmp/pxe-ipmi.sh
 sh /tmp/pxe-ipmi.sh
 curl -fsS "${origin}/boot/nic.sh?sn=$sn" -o /tmp/pxe-nic.sh
 sh /tmp/pxe-nic.sh
+curl -fsS "${origin}/boot/installed?sn=$sn" || true
 `;
 }
 
