@@ -11,6 +11,7 @@ import { parsePlanTable } from "./plan-sheet.ts";
 import { parseIpmiUserList } from "./ipmi-remote.ts";
 import { parseServerTable } from "./server-sheet.ts";
 import { serialProbe } from "./boot.ts";
+import { UploadConflict, appendUpload, openUpload } from "./uploads.ts";
 import { applyHostname, normalizeMac } from "./net.ts";
 import {
   renderDebianPreseed,
@@ -456,3 +457,20 @@ test("dhcp pool can follow another nic without dns", async () => {
   assert.doesNotMatch(conf, /dns-server/);
   assert.match(conf, /# VLAN 100/);
 });
+
+test("iso upload resumes from the received offset", async () => {
+  const first = openUpload({ filename: "ubuntu-mini.iso", size: 5, name: "迷你", fingerprint: "ubuntu-mini.iso:5:1" });
+  await appendUpload(first.id, 0, Buffer.from("abc"));
+  const resumed = openUpload({ filename: "ubuntu-mini.iso", size: 5, name: "迷你", fingerprint: "ubuntu-mini.iso:5:1" });
+  assert.equal(resumed.id, first.id);
+  assert.equal(resumed.offset, 3);
+  await assert.rejects(appendUpload(first.id, 0, Buffer.from("z")), (error: unknown) => error instanceof UploadConflict && error.offset === 3);
+  const done = await appendUpload(first.id, 3, Buffer.from("de"));
+  assert.equal(done.image?.status, "extracting");
+  assert.equal(done.image?.filename.endsWith(".iso"), true);
+  assert.equal(uploadGone(first.id), true);
+});
+
+function uploadGone(id: string): boolean {
+  return !fs.existsSync(path.join(temp, "uploads", id));
+}

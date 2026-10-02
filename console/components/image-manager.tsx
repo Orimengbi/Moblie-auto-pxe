@@ -13,6 +13,9 @@ export function ImageManager({ images, incoming }: { images: ImageRecord[]; inco
   const router = useRouter();
   const [name, setName] = useState("");
   const [filename, setFilename] = useState(incoming[0] || "");
+  const [uploadName, setUploadName] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [progress, setProgress] = useState<{ offset: number; size: number } | null>(null);
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
   const extracting = images.some((image) => image.status === "extracting");
@@ -45,25 +48,53 @@ export function ImageManager({ images, incoming }: { images: ImageRecord[]; inco
     router.refresh();
   }
 
-  async function upload(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const file = form.get("file");
-    if (file instanceof File && file.size > 256 * 1024 * 1024) {
-      setError("大于 256MB 的 ISO 请复制到 data/incoming，再从左侧列表导入。");
-      return;
-    }
+  async function uploadSelected() {
+    if (!file) return;
+    const fingerprint = `${file.name}:${file.size}:${file.lastModified}`;
     setPending(true);
     setError("");
-    const response = await fetch("/api/images", { method: "POST", body: form });
-    const body = await response.json();
-    setPending(false);
-    if (!response.ok) {
-      setError(body.error || "上传失败");
-      return;
+    setProgress({ offset: 0, size: file.size });
+    try {
+      const opened = await fetch("/api/images/uploads", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ filename: file.name, size: file.size, name: uploadName, fingerprint }),
+      });
+      const session = await opened.json();
+      if (!opened.ok) throw new Error(session.error || "无法开始上传");
+      localStorage.setItem(`pxe-iso:${fingerprint}`, session.id);
+      let offset = Number(session.offset) || 0;
+      const chunkSize = 4 * 1024 * 1024;
+      while (offset < file.size) {
+        const end = Math.min(offset + chunkSize, file.size);
+        const response = await fetch(`/api/images/uploads/${session.id}`, {
+          method: "PATCH",
+          headers: { "upload-offset": String(offset), "content-type": "application/octet-stream" },
+          body: file.slice(offset, end),
+        });
+        const body = await response.json();
+        if (response.status === 409 && Number.isInteger(body.offset)) {
+          offset = body.offset;
+          setProgress({ offset, size: file.size });
+          continue;
+        }
+        if (!response.ok) throw new Error(body.error || "上传中断");
+        offset = body.offset;
+        setProgress({ offset, size: file.size });
+        if (body.image) {
+          localStorage.removeItem(`pxe-iso:${fingerprint}`);
+          setFile(null);
+          setUploadName("");
+          setProgress(null);
+          router.refresh();
+          return;
+        }
+      }
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? `${uploadError.message}。重新选择同一个 ISO 会从上次的位置继续。` : "上传中断。重新选择同一个 ISO 会从上次的位置继续。");
+    } finally {
+      setPending(false);
     }
-    event.currentTarget.reset();
-    router.refresh();
   }
 
   async function remove(id: string) {
@@ -113,18 +144,30 @@ export function ImageManager({ images, incoming }: { images: ImageRecord[]; inco
           )}
         </section>
         <section className="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
-          <h2 className="font-medium">上传较小的 ISO</h2>
-          <p className="mt-1 text-sm text-muted-foreground">浏览器上传限制 256MB。服务器安装镜像通常更大，请放到 incoming。</p>
-          <form className="mt-4 grid gap-3" onSubmit={upload}>
+          <h2 className="font-medium">上传 ISO</h2>
+          <p className="mt-1 text-sm text-muted-foreground">按 4MB 一段上传。中断后重新选择同一个文件，会从上次传到的位置继续，然后自动识别抽取。</p>
+          <div className="mt-4 grid gap-3">
             <div className="grid gap-1.5">
               <Label htmlFor="upload-name">显示名称</Label>
-              <Input id="upload-name" name="name" placeholder="可留空" />
+              <Input id="upload-name" value={uploadName} placeholder="可留空" onChange={(event) => setUploadName(event.target.value)} />
             </div>
-            <Input name="file" type="file" accept=".iso" required />
-            <Button type="submit" disabled={pending} variant="secondary">
-              上传并抽取
+            <Input
+              type="file"
+              accept=".iso"
+              onChange={(event) => {
+                setFile(event.target.files?.[0] || null);
+                setProgress(null);
+              }}
+            />
+            {progress ? (
+              <p className="text-sm text-muted-foreground">
+                已上传 {formatBytes(progress.offset)} / {formatBytes(progress.size)}（{progress.size ? Math.floor((progress.offset / progress.size) * 100) : 0}%）
+              </p>
+            ) : null}
+            <Button type="button" variant="secondary" disabled={pending || !file} onClick={uploadSelected}>
+              {pending ? "上传中" : progress && progress.offset > 0 ? "继续上传" : "上传并抽取"}
             </Button>
-          </form>
+          </div>
         </section>
       </div>
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
@@ -168,4 +211,9 @@ export function ImageManager({ images, incoming }: { images: ImageRecord[]; inco
       )}
     </div>
   );
+}
+
+function formatBytes(value: number): string {
+  if (value < 1024 * 1024) return `${Math.max(1, Math.round(value / 1024))} KB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
 }

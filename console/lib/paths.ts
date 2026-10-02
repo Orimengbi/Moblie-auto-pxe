@@ -11,6 +11,7 @@ export function ensureDataDirs(): void {
   for (const rel of [
     "",
     "incoming",
+    "uploads",
     "images",
     "profiles",
     "projects",
@@ -84,6 +85,10 @@ export function reportPath(id: string): string {
 
 export function incomingDir(): string {
   return path.join(dataDir(), "incoming");
+}
+
+export function uploadDir(id: string): string {
+  return path.join(dataDir(), "uploads", id);
 }
 
 export function tftpDir(): string {

@@ -9,7 +9,7 @@ export default function ImagesPage() {
     <div>
       <PageHeader
         title="安装镜像"
-        description="控制台识别 ISO 家族，抽出内核和 initrd。Ubuntu 用 ISO 本身安装；Debian、Rocky 和 Alma 会展开安装树，供无人值守安装在断网机房里取包。"
+        description="可以上传 ISO，中断后选择同一个文件会接着传。也可以把文件放到 data/incoming 再导入。控制台识别家族并抽出内核。"
       />
       <ImageManager images={listImages()} incoming={listIncoming()} />
     </div>
