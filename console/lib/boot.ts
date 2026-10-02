@@ -1,4 +1,4 @@
-import { normalizeMac } from "./net.ts";
+import { bootOrigin, normalizeMac } from "./net.ts";
 import { renderAnswer, renderIpxeMenu } from "./render.ts";
 import {
   getImage,
@@ -6,6 +6,8 @@ import {
   getProfile,
   getState,
   activeProject,
+  bindServerBoot,
+  customizationForMac,
   profilesForProject,
   touchMachine,
 } from "./store.ts";
@@ -22,7 +24,13 @@ export async function rememberMac(raw: string | null): Promise<Machine | null> {
   }
 }
 
-export async function menuFor(macRaw: string | null): Promise<string> {
+export function serialProbe(serverIp: string, httpPort: number): string {
+  const server = bootOrigin(serverIp, httpPort);
+  return `#!ipxe\nchain ${server}/boot/menu.ipxe?mac=\${mac:hexhyp}&sn=\${serial:uristring} || shell\n`;
+}
+
+export async function menuFor(macRaw: string | null, snRaw: string | null = null): Promise<string> {
+  if (snRaw && macRaw) await bindServerBoot(snRaw, macRaw);
   const machine = await rememberMac(macRaw);
   const state = getState();
   const active = activeProject();
@@ -60,7 +68,11 @@ export function answerFile(profileId: string, macRaw: string, filename: string):
     return new Response(`${message}\n`, { status: 400 });
   }
   const state = getState();
-  const files = renderAnswer(profile, image, mac, state.network.serverIp, null, state.network.httpPort);
+  const customization = customizationForMac(mac, profile.projectId);
+  const renderedProfile = customization.trim()
+    ? { ...profile, postScript: [profile.postScript, customization].filter((item) => item.trim()).join("\n") }
+    : profile;
+  const files = renderAnswer(renderedProfile, image, mac, state.network.serverIp, null, state.network.httpPort);
   const file = files.find((item) => item.filename === filename);
   if (!file) return new Response("这个镜像不使用该应答文件\n", { status: 404 });
   return new Response(file.body, { headers: { "content-type": file.contentType } });

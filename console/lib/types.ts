@@ -99,6 +99,28 @@ export interface MachineFact {
   updatedAt: string;
 }
 
+export type ServerStage = "waiting" | "ready" | "installing" | "error";
+
+export interface ServerRow {
+  id: string;
+  projectId: string;
+  sn: string;
+  ipmiMac: string;
+  originalUser: string;
+  originalPassword: string;
+  targetUser: string;
+  targetPassword: string;
+  osName: string;
+  customization: string;
+  bmcIp?: string;
+  bootMac?: string;
+  passwordChanged: boolean;
+  stage: ServerStage;
+  detail: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface NicPlan {
   id: string;
   projectId: string;

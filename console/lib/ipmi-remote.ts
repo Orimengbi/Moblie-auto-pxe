@@ -1,0 +1,110 @@
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+export interface IpmiExecResult {
+  code: number;
+  stdout: string;
+  stderr: string;
+}
+
+export type IpmiExec = (host: string, username: string, password: string, args: string[]) => Promise<IpmiExecResult>;
+
+export function parseIpmiUserList(text: string): { id: number; name: string }[] {
+  const users: { id: number; name: string }[] = [];
+  for (const line of text.split("\n")) {
+    const match = line.trim().match(/^(\d+)\s+(\S+)/);
+    if (!match) continue;
+    const name = match[2];
+    if (name === "true" || name === "false") continue;
+    users.push({ id: Number(match[1]), name });
+  }
+  return users;
+}
+
+function fail(result: IpmiExecResult, label: string): never {
+  const message = (result.stderr || result.stdout).trim().slice(0, 180);
+  throw new Error(message ? `${label}：${message}` : label);
+}
+
+export async function changeIpmiAccount(
+  input: { host: string; originalUser: string; originalPassword: string; targetUser: string; targetPassword: string },
+  exec: IpmiExec,
+): Promise<void> {
+  const listed = await exec(input.host, input.originalUser, input.originalPassword, ["user", "list", "1"]);
+  if (listed.code !== 0) fail(listed, "读不到 BMC 用户列表");
+  const user = parseIpmiUserList(listed.stdout).find((item) => item.name.toLowerCase() === input.originalUser.toLowerCase());
+  if (!user) throw new Error(`BMC 上没有用户 ${input.originalUser}`);
+  const id = String(user.id);
+  if (input.targetUser !== input.originalUser) {
+    const renamed = await exec(input.host, input.originalUser, input.originalPassword, ["user", "set", "name", id, input.targetUser]);
+    if (renamed.code !== 0) fail(renamed, "修改 IPMI 用户名失败");
+  }
+  const loginUser = input.targetUser;
+  const password = await exec(input.host, loginUser, input.originalPassword, ["user", "set", "password", id, input.targetPassword]);
+  if (password.code !== 0) fail(password, "修改 IPMI 密码失败");
+  const access = await exec(input.host, input.targetUser, input.targetPassword, [
+    "channel",
+    "setaccess",
+    "1",
+    id,
+    "link=on",
+    "ipmi=on",
+    "callin=on",
+    "privilege=4",
+  ]);
+  if (access.code !== 0) fail(access, "打开 IPMI 用户权限失败");
+  const enabled = await exec(input.host, input.targetUser, input.targetPassword, ["user", "enable", id]);
+  if (enabled.code !== 0) fail(enabled, "启用 IPMI 用户失败");
+}
+
+export async function bootFromPxe(host: string, username: string, password: string, exec: IpmiExec): Promise<void> {
+  const boot = await exec(host, username, password, ["chassis", "bootdev", "pxe", "options=efiboot"]);
+  if (boot.code !== 0) fail(boot, "设置从网卡启动失败");
+  const cycle = await exec(host, username, password, ["chassis", "power", "cycle"]);
+  if (cycle.code === 0) return;
+  const on = await exec(host, username, password, ["chassis", "power", "on"]);
+  if (on.code !== 0) fail(on, "无法开机");
+}
+
+export async function defaultIpmiExec(host: string, username: string, password: string, args: string[]): Promise<IpmiExecResult> {
+  const file = path.join(os.tmpdir(), `pxe-ipmi-${process.pid}-${Date.now()}.pw`);
+  fs.writeFileSync(file, password, { mode: 0o600 });
+  try {
+    return await runIpmitool(["-I", "lanplus", "-H", host, "-U", username, "-f", file, ...args]);
+  } finally {
+    fs.rmSync(file, { force: true });
+  }
+}
+
+function runIpmitool(args: string[]): Promise<IpmiExecResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("ipmitool", args, { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+    }, 20000);
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", (error: NodeJS.ErrnoException) => {
+      clearTimeout(timer);
+      if (error.code === "ENOENT") {
+        reject(new Error("小主机没有 ipmitool，无法修改 BMC 账号"));
+        return;
+      }
+      reject(error);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      resolve({ code: code ?? 1, stdout, stderr });
+    });
+  });
+}

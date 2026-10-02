@@ -10,7 +10,7 @@ export default function MachinesPage() {
     <div>
       <PageHeader
         title="机器绑定"
-        description="按 MAC 决定一台服务器启动后做什么，以及它属于哪个项目。装机时它从项目的临时地址池拿 IP。装完后用哪块网卡、什么地址，写在项目的「装完后的网络」里。"
+        description="按启动网卡的 MAC 决定一台服务器开机后做什么。服务器表里的机器被 BMC 拉起后，会自动绑到表里的安装系统。"
       />
       <MachineManager machines={listMachines()} profiles={profiles} projects={listProjects()} />
     </div>

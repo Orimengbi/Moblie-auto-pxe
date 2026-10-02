@@ -3,7 +3,7 @@ import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { parseLeases } from "@/lib/dnsmasq";
-import { activeProject, getState, ipxeReady, listImages, listIpmi, listNicPlans, profilesForProject, readLeasesText } from "@/lib/store";
+import { activeProject, getState, ipxeReady, listImages, listServers, profilesForProject, readLeasesText } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
@@ -14,19 +14,18 @@ export default function HomePage() {
   const firmware = ipxeReady();
   const readyImages = listImages().filter((image) => image.status === "ready").length;
   const profileCount = active ? profilesForProject(active.id).length : 0;
-  const ipmiCount = active ? listIpmi().filter((item) => item.projectId === active.id).length : 0;
-  const nicCount = active ? listNicPlans().filter((item) => item.projectId === active.id).length : 0;
+  const serverCount = active ? listServers().filter((item) => item.projectId === active.id).length : 0;
 
   return (
     <div>
       <PageHeader
         title="装机台总览"
-        description="这里只查看当前状态。要改安装设置、DHCP 或 IPMI，进入对应项目。打开哪个项目的开关，装机就用哪一套配置。"
+        description="这里只查看当前状态。安装设置、DHCP 和服务器表写在项目里面。打开哪个项目的开关，装机就用哪一套配置。"
       />
       <div className="mb-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Stat label="当前项目" value={active?.name || "未启用"} />
         <Stat label="该项目安装设置" value={String(profileCount)} />
-        <Stat label="该项目 IPMI" value={String(ipmiCount)} />
+        <Stat label="该项目服务器" value={String(serverCount)} />
         <Stat label="可用镜像" value={String(readyImages)} />
       </div>
       <div className="mb-6 flex flex-wrap gap-2">
@@ -48,7 +47,7 @@ export default function HomePage() {
                 <p>
                   临时地址 {active.dhcp.start} – {active.dhcp.end}，租约 {active.dhcp.leaseHours} 小时
                 </p>
-                <p>装完后按指定的网卡写入，这个项目有 {nicCount} 块</p>
+                <p>服务器表 {serverCount} 台。找到 BMC 后改 IPMI 账号，再按表里的系统无人值守安装。</p>
                 <Link href={`/projects/${active.id}`} className="w-fit underline underline-offset-4">
                   查看这个项目
                 </Link>

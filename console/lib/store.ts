@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { renderBootIpxe, renderDnsmasq } from "./dnsmasq.ts";
+import { parseLeases, renderBootIpxe, renderDnsmasq } from "./dnsmasq.ts";
+import { bootFromPxe, changeIpmiAccount, defaultIpmiExec, type IpmiExec } from "./ipmi-remote.ts";
 import type { PlanCells } from "./plan-sheet.ts";
+import type { ServerCells } from "./server-sheet.ts";
 import {
   applyHostname,
   assertAddressRanges,
@@ -31,6 +33,7 @@ import {
   ipmiPath,
   factPath,
   nicPath,
+  serverPath,
   leasePath,
   machinePath,
   profilePath,
@@ -60,6 +63,7 @@ import {
   type ProjectDhcp,
   type ProjectFixed,
   type Report,
+  type ServerRow,
 } from "./types.ts";
 
 let chain: Promise<unknown> = Promise.resolve();
@@ -513,6 +517,10 @@ export async function deleteProject(id: string): Promise<void> {
     for (const plan of listNicPlans()) {
       if (plan.projectId !== id) continue;
       fs.rmSync(nicPath(plan.id), { force: true });
+    }
+    for (const server of listServers()) {
+      if (server.projectId !== id) continue;
+      fs.rmSync(serverPath(server.id), { force: true });
     }
     for (const fact of listMachineFacts()) {
       if (fact.projectId !== id) continue;
@@ -1062,6 +1070,204 @@ export function ipxeReady(): { efi: boolean; bios: boolean } {
     efi: fs.existsSync(path.join(tftpDir(), "ipxe.efi")),
     bios: fs.existsSync(path.join(tftpDir(), "undionly.kpxe")),
   };
+}
+
+function assertIpmiUser(value: string, label: string): string {
+  const trimmed = value.trim();
+  if (!/^[A-Za-z0-9._-]{1,16}$/.test(trimmed)) {
+    throw new Error(`${label}需要 1 到 16 位字母、数字、点、下划线或连字符`);
+  }
+  return trimmed;
+}
+
+function assertIpmiPassword(value: string, label: string): string {
+  const trimmed = value.trim();
+  if (trimmed.length < 1 || trimmed.length > 20 || /[\r\n\0]/.test(trimmed)) {
+    throw new Error(`${label}需要 1 到 20 位，不能换行`);
+  }
+  return trimmed;
+}
+
+export function listServers(): ServerRow[] {
+  ensureDataDirs();
+  return listJson<ServerRow>(path.join(dataDir(), "servers")).sort((a, b) => a.sn.localeCompare(b.sn));
+}
+
+export function publicServer(row: ServerRow): Omit<ServerRow, "originalPassword" | "targetPassword"> {
+  const { originalPassword, targetPassword, ...rest } = row;
+  void originalPassword;
+  void targetPassword;
+  return rest;
+}
+
+export interface ServerImportResult {
+  rows: number;
+  servers: number;
+  errors: { row: number; message: string }[];
+}
+
+export async function importServerSheet(projectId: string, records: { row: number; cells: ServerCells }[]): Promise<ServerImportResult> {
+  return withLock(() => {
+    const project = getProject(projectId);
+    if (!project) throw new Error("项目不存在");
+    const result: ServerImportResult = { rows: records.length, servers: 0, errors: [] };
+    const now = new Date().toISOString();
+    for (const record of records) {
+      const cells = record.cells;
+      if (!cells.sn && !cells.ipmiMac && !cells.osName) continue;
+      try {
+        const sn = normalizeSn(cells.sn);
+        const ipmiMac = normalizeMac(cells.ipmiMac);
+        const originalUser = assertIpmiUser(cells.originalUser, "原用户");
+        const originalPassword = assertIpmiPassword(cells.originalPassword, "原密码");
+        const targetUser = assertIpmiUser(cells.targetUser, "目标用户");
+        const targetPassword = assertIpmiPassword(cells.targetPassword, "目标密码");
+        const osName = cells.osName.trim();
+        if (osName.length < 1 || osName.length > 80) throw new Error("安装系统需要 1 到 80 个字符，并且要和安装设置的名称一致");
+        const duplicateMac = listServers().find((item) => item.projectId === project.id && item.ipmiMac === ipmiMac && item.sn !== sn);
+        if (duplicateMac) throw new Error(`IPMI MAC ${ipmiMac} 已经属于序列号 ${duplicateMac.sn}`);
+        const existing = listServers().find((item) => item.projectId === project.id && item.sn === sn);
+        const row: ServerRow = {
+          id: existing?.id || crypto.randomUUID(),
+          projectId: project.id,
+          sn,
+          ipmiMac,
+          originalUser,
+          originalPassword,
+          targetUser,
+          targetPassword,
+          osName,
+          customization: cells.customization.slice(0, 4000),
+          bmcIp: existing?.bmcIp,
+          bootMac: existing?.bootMac,
+          passwordChanged: false,
+          stage: "waiting",
+          detail: "等待这台 BMC 从 DHCP 出现",
+          createdAt: existing?.createdAt || now,
+          updatedAt: now,
+        };
+        writeJson(serverPath(row.id), row);
+        result.servers += 1;
+      } catch (error) {
+        result.errors.push({ row: record.row, message: error instanceof Error ? error.message : "这一行无法导入" });
+      }
+    }
+    return result;
+  });
+}
+
+export async function reconcileServers(projectId: string, options?: { exec?: IpmiExec; leasesText?: string }): Promise<{ changed: boolean }> {
+  const exec = options?.exec || defaultIpmiExec;
+  const leases = parseLeases(options?.leasesText ?? readLeasesText());
+  return withLock(async () => {
+    const project = getProject(projectId);
+    if (!project) throw new Error("项目不存在");
+    let changed = false;
+    for (const row of listServers()) {
+      if (row.projectId !== project.id) continue;
+      const snapshot = () => {
+        const { updatedAt, originalPassword, targetPassword, ...rest } = row;
+        return JSON.stringify(rest);
+      };
+      const before = snapshot();
+      const lease = leases.find((item) => item.active && item.mac === row.ipmiMac);
+      if (lease) row.bmcIp = lease.ip;
+      if (!project.enabled) {
+        if (row.stage !== "installing") {
+          row.stage = row.stage === "error" ? "error" : "waiting";
+          row.detail = "打开这个项目的开关后，才会按 IPMI MAC 找 BMC";
+        }
+      } else if (!row.bmcIp) {
+        row.stage = "waiting";
+        row.detail = "等待这台 BMC 从 DHCP 出现";
+      } else if (row.stage !== "installing") {
+        const profile = profilesForProject(project.id).find((item) => item.name === row.osName);
+        try {
+          if (!row.passwordChanged) {
+            await changeIpmiAccount(
+              {
+                host: row.bmcIp,
+                originalUser: row.originalUser,
+                originalPassword: row.originalPassword,
+                targetUser: row.targetUser,
+                targetPassword: row.targetPassword,
+              },
+              exec,
+            );
+            row.passwordChanged = true;
+          }
+          if (!profile) {
+            row.stage = "error";
+            row.detail = `IPMI 账号已处理。项目里没有名为「${row.osName}」的安装设置，还不能从网卡启动`;
+          } else if (row.stage !== "ready") {
+            await bootFromPxe(row.bmcIp, row.targetUser, row.targetPassword, exec);
+            row.stage = "ready";
+            row.detail = `已把 IPMI 账号改成 ${row.targetUser}，并让 ${row.bmcIp} 从网卡启动安装「${row.osName}」`;
+          }
+        } catch (error) {
+          row.stage = "error";
+          row.detail = error instanceof Error ? error.message : "处理这台 BMC 失败";
+        }
+      }
+      if (snapshot() !== before) {
+        row.updatedAt = new Date().toISOString();
+        changed = true;
+        writeJson(serverPath(row.id), row);
+      }
+    }
+    return { changed };
+  });
+}
+
+export async function bindServerBoot(snRaw: string, macRaw: string): Promise<ServerRow | null> {
+  return withLock(() => {
+    const active = activeProject();
+    if (!active) return null;
+    let sn = "";
+    let mac = "";
+    try {
+      sn = normalizeSn(snRaw);
+      mac = normalizeMac(macRaw);
+    } catch {
+      return null;
+    }
+    const row = listServers().find((item) => item.projectId === active.id && item.sn === sn);
+    if (!row) return null;
+    const profile = profilesForProject(active.id).find((item) => item.name === row.osName);
+    row.bootMac = mac;
+    row.updatedAt = new Date().toISOString();
+    if (!profile) {
+      row.stage = "error";
+      row.detail = `机器已从网卡启动，但项目里没有名为「${row.osName}」的安装设置`;
+      writeJson(serverPath(row.id), row);
+      return row;
+    }
+    const existing = getMachine(mac);
+    const machine: Machine = {
+      mac,
+      action: "install",
+      profileId: profile.id,
+      projectId: active.id,
+      scriptIds: existing?.scriptIds || [],
+      note: existing?.note || "",
+      lastSeen: new Date().toISOString(),
+      fixedIp: existing?.fixedIp,
+    };
+    writeJson(machinePath(mac), machine);
+    row.stage = "installing";
+    row.detail = `正在安装「${row.osName}」`;
+    writeJson(serverPath(row.id), row);
+    return row;
+  });
+}
+
+export function customizationForMac(mac: string, projectId: string): string {
+  try {
+    const normalized = normalizeMac(mac);
+    return listServers().find((item) => item.projectId === projectId && item.bootMac === normalized)?.customization || "";
+  } catch {
+    return "";
+  }
 }
 
 export function readLeasesText(): string {

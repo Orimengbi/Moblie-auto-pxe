@@ -8,6 +8,9 @@ import { parseLeases, renderDnsmasq } from "./dnsmasq.ts";
 import { detectFromListing, inspectIso } from "./iso.ts";
 import { mergeMachineRows } from "./machine-rows.ts";
 import { parsePlanTable } from "./plan-sheet.ts";
+import { parseIpmiUserList } from "./ipmi-remote.ts";
+import { parseServerTable } from "./server-sheet.ts";
+import { serialProbe } from "./boot.ts";
 import { applyHostname, normalizeMac } from "./net.ts";
 import {
   renderDebianPreseed,
@@ -18,7 +21,7 @@ import {
   renderNicScript,
   renderUbuntuAutoinstall,
 } from "./render.ts";
-import { createIpmi, createNic, createProfile, createProject, createReport, getIpmiBySn, getProject, getState, importProjectPlan, listImages, listNicsBySn, listProjects, saveMachine, saveMachineFact, saveNetwork, setProjectEnabled, updateProjectNetwork } from "./store.ts";
+import { bindServerBoot, createIpmi, createNic, createProfile, createProject, createReport, customizationForMac, getIpmiBySn, getMachine, getProject, getState, importProjectPlan, importServerSheet, listImages, listNicsBySn, listProjects, publicServer, reconcileServers, saveMachine, saveMachineFact, saveNetwork, setProjectEnabled, updateProjectNetwork } from "./store.ts";
 import { DEFAULT_STATE, type ImageRecord, type Profile } from "./types.ts";
 
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pxe-test-"));
@@ -379,4 +382,40 @@ test("profile creation hashes the password", async () => {
   });
   assert.match(created.passwordHash, /^\$6\$/);
   assert.equal(created.diskPolicy, "smallest");
+});
+
+test("server sheet changes the ipmi account and installs by serial", async () => {
+  const projectId = listProjects().find((item) => item.name === "机房A")?.id || "";
+  await setProjectEnabled(projectId, true);
+  const parsed = parseServerTable([
+    ["序列号", "IPMI MAC", "原用户", "原密码", "目标用户", "目标密码", "安装系统", "定制需求"],
+    ["sn-srv 9", "aa:bb:cc:dd:ee:91", "ADMIN", "old-pass", "ops", "new-pass", "机房 Ubuntu", "echo custom"],
+  ]);
+  assert.equal(parsed.error, undefined);
+  const imported = await importServerSheet(projectId, parsed.records);
+  assert.equal(imported.servers, 1);
+  assert.equal(imported.errors.length, 0);
+  assert.deepEqual(parseIpmiUserList("ID  Name\n2   ADMIN            true\n3   true\n"), [{ id: 2, name: "ADMIN" }]);
+  const calls: { user: string; args: string[] }[] = [];
+  const exec = async (_host: string, user: string, _password: string, args: string[]) => {
+    calls.push({ user, args });
+    if (args[0] === "user" && args[1] === "list") {
+      return { code: 0, stdout: "ID  Name             Callin\n2   ADMIN            true\n", stderr: "" };
+    }
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  const leases = "9999999999 aa:bb:cc:dd:ee:91 192.168.77.91 * *\n";
+  const first = await reconcileServers(projectId, { exec, leasesText: leases });
+  assert.equal(first.changed, true);
+  assert.equal(calls.some((call) => call.user === "ops" && call.args.includes("new-pass")), true);
+  assert.equal(calls.filter((call) => call.args[0] === "chassis" && call.args[1] === "bootdev").length, 1);
+  const again = await reconcileServers(projectId, { exec, leasesText: leases });
+  assert.equal(again.changed, false);
+  assert.equal(calls.filter((call) => call.args[0] === "chassis" && call.args[1] === "bootdev").length, 1);
+  const bound = await bindServerBoot("SN-SRV9", "aa:bb:cc:dd:ee:92");
+  assert.equal(bound?.stage, "installing");
+  assert.equal(getMachine("aa:bb:cc:dd:ee:92")?.action, "install");
+  assert.equal(customizationForMac("aa:bb:cc:dd:ee:92", projectId), "echo custom");
+  assert.equal("originalPassword" in publicServer(bound!), false);
+  assert.match(serialProbe("192.168.77.1", 8080), /sn=\$\{serial:uristring\}/);
 });
