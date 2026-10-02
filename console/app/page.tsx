@@ -3,7 +3,7 @@ import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { parseLeases } from "@/lib/dnsmasq";
-import { activeProject, getState, ipxeReady, listImages, listIpmi, profilesForProject, readLeasesText } from "@/lib/store";
+import { activeProject, getState, ipxeReady, listImages, listIpmi, listNicPlans, profilesForProject, readLeasesText } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +15,7 @@ export default function HomePage() {
   const readyImages = listImages().filter((image) => image.status === "ready").length;
   const profileCount = active ? profilesForProject(active.id).length : 0;
   const ipmiCount = active ? listIpmi().filter((item) => item.projectId === active.id).length : 0;
+  const nicCount = active ? listNicPlans().filter((item) => item.projectId === active.id).length : 0;
 
   return (
     <div>
@@ -47,9 +48,7 @@ export default function HomePage() {
                 <p>
                   临时地址 {active.dhcp.start} – {active.dhcp.end}，租约 {active.dhcp.leaseHours} 小时
                 </p>
-                <p>
-                  装完后{active.fixed?.mode === "static" ? `使用固定地址，网关 ${active.fixed.gateway}` : "继续 DHCP"}
-                </p>
+                <p>装完后按指定的网卡写入，这个项目有 {nicCount} 块</p>
                 <Link href={`/projects/${active.id}`} className="w-fit underline underline-offset-4">
                   查看这个项目
                 </Link>

@@ -139,70 +139,125 @@ export function renderIpmiScript(setting: IpmiSetting | null): string {
   return `${lines.join("\n")}\n`;
 }
 
-export function renderNicScript(plan: NicPlan | null): string {
-  if (!plan) {
+function shq(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+export function renderNicScript(plans: NicPlan[] | null): string {
+  const list = plans ?? [];
+  if (!list.length) {
     return "#!/bin/sh\necho \"没有和这个序列号匹配的网卡设置，跳过\"\nexit 0\n";
   }
-  const prefix = netmaskToPrefix(plan.netmask);
-  const dnsYaml = plan.dns.split(",").map((item) => `"${item}"`).join(", ");
-  const hostname = plan.hostname
-    ? `if command -v hostnamectl >/dev/null 2>&1; then hostnamectl set-hostname ${plan.hostname}; else printf '%s\\n' ${plan.hostname} > /etc/hostname; fi\n`
+  const hostname = list.find((plan) => plan.hostname)?.hostname || "";
+  const hostLine = hostname
+    ? `if command -v hostnamectl >/dev/null 2>&1; then hostnamectl set-hostname ${hostname}; else printf '%s\\n' ${hostname} > /etc/hostname; fi\n`
     : "";
+  const calls = list
+    .map((plan) => {
+      const prefix = netmaskToPrefix(plan.netmask);
+      const dnsYaml = plan.dns
+        .split(",")
+        .filter(Boolean)
+        .map((item) => `"${item}"`)
+        .join(", ");
+      const dnsSpace = plan.dns.split(",").filter(Boolean).join(" ");
+      const dnsSemi = plan.dns.split(",").filter(Boolean).join(";");
+      const tag = plan.label || plan.mac || plan.iface || "nic";
+      return `apply_one ${shq(plan.mac || "")} ${shq(plan.iface || "")} ${shq(plan.address)} ${prefix} ${shq(plan.netmask)} ${shq(plan.gateway || "")} ${shq(dnsYaml)} ${shq(dnsSpace)} ${shq(dnsSemi)} ${shq(tag)}`;
+    })
+    .join("\n");
   return `#!/bin/sh
 set -eu
-${hostname}iface=$(ls /sys/class/net | grep -vx lo | head -n 1)
-test -n "$iface"
+${hostLine}rm -f /tmp/pxe-netplan.yaml /tmp/pxe-ifaces
+rm -rf /tmp/pxe-nm
+mkdir -p /tmp/pxe-nm
+printf '%s\\n' 'network:' '  version: 2' '  ethernets:' > /tmp/pxe-netplan.yaml
+printf '%s\\n' 'auto lo' 'iface lo inet loopback' > /tmp/pxe-ifaces
+apply_one() {
+  mac="$1"
+  want="$2"
+  addr="$3"
+  prefix="$4"
+  mask="$5"
+  gw="$6"
+  dns_yaml="$7"
+  dns_if="$8"
+  dns_nm="$9"
+  tag="$10"
+  iface=""
+  if [ -n "$mac" ]; then
+    for n in /sys/class/net/*; do
+      base=$(basename "$n")
+      [ "$base" = lo ] && continue
+      cur=$(cat "$n/address" 2>/dev/null | tr 'A-Z' 'a-z' | tr -d '[:space:]' || true)
+      if [ "$cur" = "$mac" ]; then
+        iface=$base
+        break
+      fi
+    done
+    if [ -z "$iface" ]; then
+      echo "找不到 MAC 为 $mac 的网卡（$tag）" >&2
+      exit 1
+    fi
+  else
+    iface=$want
+    if [ ! -e "/sys/class/net/$iface" ]; then
+      echo "找不到接口 $iface（$tag）" >&2
+      exit 1
+    fi
+  fi
+  {
+    printf '    %s:\\n' "$iface"
+    printf '      dhcp4: false\\n'
+    printf '      dhcp6: false\\n'
+    printf '      addresses:\\n'
+    printf '        - %s/%s\\n' "$addr" "$prefix"
+    if [ -n "$gw" ]; then
+      printf '      routes:\\n'
+      printf '        - to: default\\n'
+      printf '          via: %s\\n' "$gw"
+    fi
+    if [ -n "$dns_yaml" ]; then
+      printf '      nameservers:\\n'
+      printf '        addresses: [%s]\\n' "$dns_yaml"
+    fi
+  } >> /tmp/pxe-netplan.yaml
+  {
+    printf '%s\\n' '[connection]'
+    printf 'id=pxe-%s\\n' "$iface"
+    printf '%s\\n' 'type=ethernet'
+    printf 'interface-name=%s\\n' "$iface"
+    printf '%s\\n' 'autoconnect=true'
+    printf '%s\\n' '[ipv4]'
+    printf '%s\\n' 'method=manual'
+    printf 'addresses=%s/%s\\n' "$addr" "$prefix"
+    if [ -n "$gw" ]; then printf 'gateway=%s\\n' "$gw"; fi
+    if [ -n "$dns_nm" ]; then printf 'dns=%s;\\n' "$dns_nm"; fi
+    printf '%s\\n' '[ipv6]'
+    printf '%s\\n' 'method=disabled'
+  } > "/tmp/pxe-nm/pxe-$iface.nmconnection"
+  {
+    printf 'auto %s\\n' "$iface"
+    printf 'iface %s inet static\\n' "$iface"
+    printf '  address %s\\n' "$addr"
+    printf '  netmask %s\\n' "$mask"
+    if [ -n "$gw" ]; then printf '  gateway %s\\n' "$gw"; fi
+    if [ -n "$dns_if" ]; then printf '  dns-nameservers %s\\n' "$dns_if"; fi
+  } >> /tmp/pxe-ifaces
+  echo "已按规划写入 $tag：$iface $addr"
+}
+${calls}
 if [ -d /etc/netplan ]; then
   mkdir -p /etc/netplan
-  cat > /etc/netplan/99-pxe-fixed.yaml << EOF
-network:
-  version: 2
-  ethernets:
-    $iface:
-      dhcp4: false
-      dhcp6: false
-      addresses:
-        - ${plan.address}/${prefix}
-      routes:
-        - to: default
-          via: ${plan.gateway}
-      nameservers:
-        addresses: [${dnsYaml}]
-EOF
-  chmod 600 /etc/netplan/99-pxe-fixed.yaml
+  cp /tmp/pxe-netplan.yaml /etc/netplan/99-pxe-nics.yaml
+  chmod 600 /etc/netplan/99-pxe-nics.yaml
 elif [ -d /etc/NetworkManager ]; then
   mkdir -p /etc/NetworkManager/system-connections
-  cat > /etc/NetworkManager/system-connections/pxe-fixed.nmconnection << EOF
-[connection]
-id=pxe-fixed
-type=ethernet
-interface-name=$iface
-autoconnect=true
-autoconnect-priority=999
-
-[ipv4]
-method=manual
-addresses=${plan.address}/${prefix}
-gateway=${plan.gateway}
-dns=${plan.dns.split(",").join(";")};
-
-[ipv6]
-method=disabled
-EOF
-  chmod 600 /etc/NetworkManager/system-connections/pxe-fixed.nmconnection
+  cp /tmp/pxe-nm/*.nmconnection /etc/NetworkManager/system-connections/
+  chmod 600 /etc/NetworkManager/system-connections/pxe-*.nmconnection
 else
-  cat > /etc/network/interfaces << EOF
-auto lo
-iface lo inet loopback
-auto $iface
-iface $iface inet static
-  address ${plan.address}
-  netmask ${plan.netmask}
-  gateway ${plan.gateway}
-  dns-nameservers ${plan.dns.split(",").join(" ")}
-EOF
+  cp /tmp/pxe-ifaces /etc/network/interfaces
 fi
-echo "网卡已按规划写成 ${plan.address}"
 `;
 }
 

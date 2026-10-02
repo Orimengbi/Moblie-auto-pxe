@@ -14,7 +14,7 @@ export async function PUT(request: Request, context: { params: Promise<{ id: str
   try {
     const { id } = await context.params;
     const body = await readJson<Partial<ProjectInput & ProjectNetworkInput>>(request);
-    if (body.dhcp && body.fixed) {
+    if (body.dhcp) {
       return Response.json(await updateProjectNetwork(id, { dhcp: body.dhcp, fixed: body.fixed }));
     }
     if (body.name) return Response.json(await renameProject(id, { name: body.name, note: body.note }));

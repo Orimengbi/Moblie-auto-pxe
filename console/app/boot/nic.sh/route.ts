@@ -1,17 +1,17 @@
 import { renderNicScript } from "@/lib/render";
-import { getNicBySn } from "@/lib/store";
+import { listNicsBySn } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
 export function GET(request: Request) {
   const raw = new URL(request.url).searchParams.get("sn") || "";
-  let plan = null;
+  let plans: ReturnType<typeof listNicsBySn> = [];
   try {
-    plan = raw ? getNicBySn(raw) : null;
+    plans = raw ? listNicsBySn(raw) : [];
   } catch {
-    plan = null;
+    plans = [];
   }
-  return new Response(renderNicScript(plan), {
+  return new Response(renderNicScript(plans), {
     headers: { "content-type": "text/plain; charset=utf-8" },
   });
 }

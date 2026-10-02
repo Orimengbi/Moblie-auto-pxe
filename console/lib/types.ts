@@ -103,7 +103,12 @@ export interface NicPlan {
   id: string;
   projectId: string;
   sn: string;
+  /** 这块网卡自己的 MAC。装完后按它找到接口。 */
   mac?: string;
+  /** 系统里的接口名，例如 ens1f0。没有 MAC 时按这个名字匹配。 */
+  iface?: string;
+  /** 只用于辨认，例如业务口、存储口。 */
+  label?: string;
   hostname?: string;
   address: string;
   netmask: string;

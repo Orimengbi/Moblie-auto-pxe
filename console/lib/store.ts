@@ -48,7 +48,6 @@ import {
   type DiagScript,
   type DiskPolicy,
   type ImageRecord,
-  type InstalledNetwork,
   type IpmiSetting,
   type MachineFact,
   type NicPlan,
@@ -401,7 +400,7 @@ export interface ProjectInput {
 
 export interface ProjectNetworkInput {
   dhcp: ProjectDhcp;
-  fixed: ProjectFixed;
+  fixed?: ProjectFixed;
 }
 
 function projectName(name: string): string {
@@ -450,8 +449,8 @@ export async function updateProjectNetwork(id: string, input: ProjectNetworkInpu
     if (!found) throw new Error("项目不存在");
     const existing = hydrateProject(found);
     const dhcp = normalizeDhcp(input.dhcp, "临时地址池");
-    const fixed = normalizeFixed(input.fixed);
-    if (fixed.mode === "static") netmaskToPrefix(fixed.netmask);
+    const fixed = input.fixed ? normalizeFixed(input.fixed) : existing.fixed;
+    if (input.fixed && fixed?.mode === "static") netmaskToPrefix(fixed.netmask);
     const network = getState().network;
     assertAddressRanges(network.serverIp, [
       {
@@ -462,7 +461,7 @@ export async function updateProjectNetwork(id: string, input: ProjectNetworkInpu
         gateway: dhcp.gateway,
       },
     ]);
-    if (fixed.mode === "static") {
+    if (input.fixed && fixed?.mode === "static") {
       for (const machine of listMachines()) {
         if (machine.projectId !== existing.id || !machine.fixedIp) continue;
         if (!sameSubnet(machine.fixedIp, fixed.gateway, fixed.netmask)) {
@@ -470,7 +469,7 @@ export async function updateProjectNetwork(id: string, input: ProjectNetworkInpu
         }
       }
     }
-    const project: Project = { ...existing, dhcp, fixed, updatedAt: new Date().toISOString() };
+    const project: Project = { ...existing, dhcp, fixed: fixed ?? null, updatedAt: new Date().toISOString() };
     writeJson(projectPath(project.id), project);
     syncBootFiles(network);
     return project;
@@ -524,27 +523,11 @@ export async function deleteProject(id: string): Promise<void> {
   });
 }
 
-export function installedNetworkForMac(mac: string): InstalledNetwork | null {
-  let machine: Machine | null = null;
-  try {
-    machine = getMachine(mac);
-  } catch {
-    return null;
-  }
+export function listNicsBySn(sn: string): NicPlan[] {
   const active = activeProject();
-  if (!machine?.projectId || !active || machine.projectId !== active.id) return null;
-  const project = active;
-  if (!project.fixed || project.fixed.mode !== "static") return null;
-  if (!machine.fixedIp) {
-    throw new Error(`机器 ${machine.mac} 属于项目「${project.name}」，装完要使用固定地址，但还没有填写固定 IP`);
-  }
-  return {
-    address: machine.fixedIp,
-    netmask: project.fixed.netmask,
-    prefix: netmaskToPrefix(project.fixed.netmask),
-    gateway: project.fixed.gateway,
-    dns: project.fixed.dns.split(",").filter(Boolean),
-  };
+  if (!active) return [];
+  const normalized = normalizeSn(sn);
+  return listNicPlans().filter((item) => item.sn === normalized && item.projectId === active.id);
 }
 
 export interface IpmiInput {
@@ -680,14 +663,100 @@ export async function saveMachineFact(projectId: string, input: MachineFactInput
 
 export function listNicPlans(): NicPlan[] {
   ensureDataDirs();
-  return listJson<NicPlan>(path.join(dataDir(), "nics")).sort((a, b) => a.sn.localeCompare(b.sn));
+  return listJson<NicPlan>(path.join(dataDir(), "nics")).sort(
+    (a, b) => a.sn.localeCompare(b.sn) || (a.mac || "").localeCompare(b.mac || "") || (a.iface || "").localeCompare(b.iface || ""),
+  );
 }
 
-export function getNicBySn(sn: string): NicPlan | null {
-  const active = activeProject();
-  if (!active) return null;
-  const normalized = normalizeSn(sn);
-  return listNicPlans().find((item) => item.sn === normalized && item.projectId === active.id) || null;
+export interface NicInput {
+  sn: string;
+  projectId: string;
+  mac?: string;
+  iface?: string;
+  label?: string;
+  hostname?: string;
+  address: string;
+  netmask: string;
+  gateway?: string;
+  dns?: string;
+  note?: string;
+}
+
+function normalizeNic(input: NicInput, existingId?: string): Omit<NicPlan, "id" | "createdAt" | "updatedAt"> {
+  const project = getProject(input.projectId || "");
+  if (!project) throw new Error("网卡设置必须放在一个项目里");
+  const sn = normalizeSn(input.sn);
+  const mac = input.mac?.trim() ? normalizeMac(input.mac) : undefined;
+  const iface = input.iface?.trim() ? assertInterface(input.iface) : undefined;
+  if (!mac && !iface) throw new Error("要写明这块网卡的 MAC 或接口名，才能知道装完后改哪一块");
+  const address = assertIpv4(input.address, "网卡 IP");
+  const netmask = assertIpv4(input.netmask || "255.255.255.0", "网卡掩码");
+  netmaskToPrefix(netmask);
+  const gateway = input.gateway?.trim() ? assertIpv4(input.gateway, "网卡网关") : "";
+  if (gateway && !sameSubnet(address, gateway, netmask)) throw new Error("网卡 IP 和网关不在同一个子网");
+  const dns = input.dns?.trim() ? assertDnsList(input.dns, "网卡 DNS") : gateway;
+  const hostname = input.hostname?.trim() ? applyHostname(input.hostname, "00:11:22:33:44:55") : undefined;
+  const label = (input.label || "").replace(/[\r\n]/g, " ").trim().slice(0, 40);
+  const others = listNicPlans().filter((item) => item.projectId === project.id && item.id !== existingId);
+  const duplicateAddress = others.find((item) => item.address === address);
+  if (duplicateAddress) throw new Error(`网卡 IP ${address} 已经分给序列号 ${duplicateAddress.sn}`);
+  if (mac && others.some((item) => item.sn === sn && item.mac === mac)) {
+    throw new Error(`序列号 ${sn} 上 MAC ${mac} 已经有一条网卡设置`);
+  }
+  if (iface && others.some((item) => item.sn === sn && item.iface === iface)) {
+    throw new Error(`序列号 ${sn} 上接口 ${iface} 已经有一条网卡设置`);
+  }
+  return {
+    projectId: project.id,
+    sn,
+    mac,
+    iface,
+    label: label || undefined,
+    hostname,
+    address,
+    netmask,
+    gateway,
+    dns,
+    note: (input.note || "").slice(0, 200),
+  };
+}
+
+export async function createNic(input: NicInput): Promise<NicPlan> {
+  return withLock(() => {
+    const now = new Date().toISOString();
+    const plan: NicPlan = {
+      id: crypto.randomUUID(),
+      ...normalizeNic(input),
+      createdAt: now,
+      updatedAt: now,
+    };
+    writeJson(nicPath(plan.id), plan);
+    return plan;
+  });
+}
+
+export async function updateNic(id: string, input: NicInput): Promise<NicPlan> {
+  return withLock(() => {
+    if (!/^[a-zA-Z0-9_-]{8,80}$/.test(id)) throw new Error("网卡设置不存在");
+    const existing = listNicPlans().find((item) => item.id === id);
+    if (!existing) throw new Error("网卡设置不存在");
+    const plan: NicPlan = {
+      ...existing,
+      ...normalizeNic(input, existing.id),
+      id: existing.id,
+      createdAt: existing.createdAt,
+      updatedAt: new Date().toISOString(),
+    };
+    writeJson(nicPath(plan.id), plan);
+    return plan;
+  });
+}
+
+export async function deleteNic(id: string): Promise<void> {
+  return withLock(() => {
+    if (!/^[a-zA-Z0-9_-]{8,80}$/.test(id) || !listNicPlans().some((item) => item.id === id)) throw new Error("网卡设置不存在");
+    fs.rmSync(nicPath(id), { force: true });
+  });
 }
 
 export interface PlanImportResult {
@@ -707,6 +776,7 @@ export async function importProjectPlan(
     if (!project) throw new Error("项目不存在");
     const result: PlanImportResult = { rows: records.length, ipmi: 0, nic: 0, machines: 0, errors: [] };
     const now = new Date().toISOString();
+    const countedMachines = new Set<string>();
     for (const record of records) {
       const cells = record.cells;
       if (!cells.sn && !cells.nicAddress && !cells.ipmiAddress && !cells.mac) continue;
@@ -736,45 +806,52 @@ export async function importProjectPlan(
           result.ipmi += 1;
         }
         if (cells.nicAddress) {
-          const address = assertIpv4(cells.nicAddress, "网卡 IP");
-          const netmask = assertIpv4(cells.nicNetmask || project.fixed?.netmask || "255.255.255.0", "网卡掩码");
-          const gateway = assertIpv4(cells.nicGateway || project.fixed?.gateway || "", "网卡网关");
-          netmaskToPrefix(netmask);
-          if (!sameSubnet(address, gateway, netmask)) throw new Error("网卡 IP 和网关不在同一个子网");
-          const hostname = cells.hostname ? cells.hostname.trim().toLowerCase() : "";
-          if (hostname) applyHostname(hostname, "00:11:22:33:44:55");
-          const mac = cells.mac ? normalizeMac(cells.mac) : undefined;
-          const duplicate = listNicPlans().find((item) => item.projectId === project.id && item.address === address && item.sn !== sn);
-          if (duplicate) throw new Error(`网卡 IP ${address} 已经分给序列号 ${duplicate.sn}`);
-          const existing = listNicPlans().find((item) => item.projectId === project.id && item.sn === sn);
+          const mac = (cells.nicMac || cells.mac).trim() ? normalizeMac(cells.nicMac || cells.mac) : undefined;
+          const iface = cells.nicName.trim() ? assertInterface(cells.nicName) : undefined;
+          const existing = listNicPlans().find((item) => {
+            if (item.projectId !== project.id || item.sn !== sn) return false;
+            if (mac && item.mac === mac) return true;
+            if (!mac && iface && item.iface === iface) return true;
+            return false;
+          });
+          const fields = normalizeNic(
+            {
+              sn,
+              projectId: project.id,
+              mac,
+              iface,
+              hostname: cells.hostname,
+              address: cells.nicAddress,
+              netmask: cells.nicNetmask || "255.255.255.0",
+              gateway: cells.nicGateway,
+              dns: cells.nicDns,
+              note: cells.note,
+            },
+            existing?.id,
+          );
           const plan: NicPlan = {
             id: existing?.id || crypto.randomUUID(),
-            projectId: project.id,
-            sn,
-            mac,
-            hostname: hostname || undefined,
-            address,
-            netmask,
-            gateway,
-            dns: cells.nicDns || project.fixed?.dns || gateway,
-            note: cells.note.slice(0, 200),
+            ...fields,
             createdAt: existing?.createdAt || now,
             updatedAt: now,
           };
           writeJson(nicPath(plan.id), plan);
           result.nic += 1;
-          if (mac) {
-            const machine = getMachine(mac) || {
-              mac,
+          if (cells.mac.trim()) {
+            const machineMac = normalizeMac(cells.mac);
+            const machine = getMachine(machineMac) || {
+              mac: machineMac,
               action: "menu" as const,
               scriptIds: [],
               note: "",
             };
             machine.projectId = project.id;
-            machine.fixedIp = address;
             if (cells.note) machine.note = cells.note.slice(0, 200);
             writeJson(machinePath(machine.mac), machine);
-            result.machines += 1;
+            if (!countedMachines.has(machineMac)) {
+              countedMachines.add(machineMac);
+              result.machines += 1;
+            }
           }
         }
       } catch (error) {
@@ -835,10 +912,12 @@ export async function saveMachine(input: MachineInput): Promise<Machine> {
       const project = getProject(projectId);
       if (!project) throw new Error("项目不存在");
       projectId = project.id;
-      if (project.fixed?.mode === "static") {
-        fixedIp = assertIpv4(input.fixedIp || "", "固定 IP");
-        if (!sameSubnet(fixedIp, project.fixed.gateway, project.fixed.netmask)) {
-          throw new Error(`固定 IP 必须和项目网关 ${project.fixed.gateway} 在同一个子网`);
+      if (input.fixedIp?.trim()) {
+        fixedIp = assertIpv4(input.fixedIp, "固定 IP");
+        if (project.fixed?.mode === "static" && project.fixed.gateway) {
+          if (!sameSubnet(fixedIp, project.fixed.gateway, project.fixed.netmask)) {
+            throw new Error(`固定 IP 必须和项目网关 ${project.fixed.gateway} 在同一个子网`);
+          }
         }
         const duplicate = listMachines().find((item) => item.mac !== mac && item.fixedIp === fixedIp);
         if (duplicate) throw new Error(`固定 IP ${fixedIp} 已经分给 ${duplicate.mac}`);

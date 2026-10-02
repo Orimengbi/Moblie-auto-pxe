@@ -32,7 +32,7 @@ export function ProjectPlanImport({ projectId }: { projectId: string }) {
 
   return (
     <form onSubmit={upload} className="grid gap-3">
-      <p className="text-sm text-muted-foreground">一行一台机器。表头用「序列号、网卡IP、IPMI地址」，掩码和网关可以留空，这时用项目里装完后的网络。</p>
+      <p className="text-sm text-muted-foreground">一行一块网卡。同一序列号可以有多行。每行要有网卡 MAC 或网卡名，用来指明改哪一块。MAC 列是这台机器的启动网卡。</p>
       <a className="w-fit text-sm underline underline-offset-4" href={`/api/projects/${projectId}/template`}>
         下载 Excel 模板
       </a>

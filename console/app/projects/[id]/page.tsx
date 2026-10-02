@@ -5,6 +5,7 @@ import { PageHeader } from "@/components/page-header";
 import { ProfileManager } from "@/components/profile-manager";
 import { ProjectDhcpForm } from "@/components/project-dhcp-form";
 import { ProjectMachineList } from "@/components/project-machine-list";
+import { ProjectNicManager } from "@/components/project-nic-manager";
 import { ProjectPlanImport } from "@/components/project-plan-import";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { getProject, listImages, listIpmi, listMachineFacts, listMachines, listNicPlans, listProfiles, publicProfile } from "@/lib/store";
@@ -48,6 +49,14 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
           </CardHeader>
           <CardContent>
             <ProjectDhcpForm project={project} />
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>装完后的网络</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ProjectNicManager projectId={project.id} plans={nics} />
           </CardContent>
         </Card>
         <Card>

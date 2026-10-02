@@ -2,6 +2,8 @@ export interface PlanCells {
   sn: string;
   mac: string;
   hostname: string;
+  nicMac: string;
+  nicName: string;
   nicAddress: string;
   nicNetmask: string;
   nicGateway: string;
@@ -22,6 +24,14 @@ const HEADER_MAP: Record<string, keyof PlanCells> = {
   mac地址: "mac",
   主机名: "hostname",
   hostname: "hostname",
+  网卡mac: "nicMac",
+  网口mac: "nicMac",
+  nicmac: "nicMac",
+  网卡名: "nicName",
+  网卡名称: "nicName",
+  接口名: "nicName",
+  网口名: "nicName",
+  ifname: "nicName",
   网卡ip: "nicAddress",
   网卡地址: "nicAddress",
   业务ip: "nicAddress",
@@ -70,6 +80,8 @@ function emptyCells(): PlanCells {
     sn: "",
     mac: "",
     hostname: "",
+    nicMac: "",
+    nicName: "",
     nicAddress: "",
     nicNetmask: "",
     nicGateway: "",
@@ -83,4 +95,4 @@ function emptyCells(): PlanCells {
   };
 }
 
-export const PLAN_TEMPLATE_HEADERS = ["序列号", "MAC", "主机名", "网卡IP", "网卡掩码", "网卡网关", "网卡DNS", "IPMI地址", "IPMI掩码", "IPMI网关", "IPMI通道", "VLAN", "备注"];
+export const PLAN_TEMPLATE_HEADERS = ["序列号", "MAC", "主机名", "网卡MAC", "网卡名", "网卡IP", "网卡掩码", "网卡网关", "网卡DNS", "IPMI地址", "IPMI掩码", "IPMI网关", "IPMI通道", "VLAN", "备注"];

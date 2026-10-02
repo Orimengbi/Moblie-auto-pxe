@@ -44,9 +44,10 @@ export function mergeMachineRows(input: {
   for (const plan of input.nics) {
     const item = row(plan.sn);
     item.sn = plan.sn;
-    item.mac = plan.mac || item.mac;
-    item.hostname = plan.hostname || "";
-    item.nic = plan.address;
+    if (!item.mac && plan.mac) item.mac = plan.mac;
+    item.hostname = plan.hostname || item.hostname;
+    const piece = [plan.label, plan.address].filter(Boolean).join(" ");
+    item.nic = item.nic ? `${item.nic}、${piece}` : piece;
     const seen = plan.mac ? byMac.get(plan.mac) : undefined;
     if (seen?.lastSeen) item.seen = seen.lastSeen;
   }

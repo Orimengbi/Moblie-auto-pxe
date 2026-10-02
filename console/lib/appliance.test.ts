@@ -15,9 +15,10 @@ import {
   renderIpxeMenu,
   renderIpmiScript,
   renderKickstart,
+  renderNicScript,
   renderUbuntuAutoinstall,
 } from "./render.ts";
-import { createIpmi, createProfile, createProject, createReport, getIpmiBySn, getNicBySn, getProject, getState, importProjectPlan, listImages, listProjects, saveMachine, saveMachineFact, saveNetwork, setProjectEnabled, updateProjectNetwork } from "./store.ts";
+import { createIpmi, createNic, createProfile, createProject, createReport, getIpmiBySn, getProject, getState, importProjectPlan, listImages, listNicsBySn, listProjects, saveMachine, saveMachineFact, saveNetwork, setProjectEnabled, updateProjectNetwork } from "./store.ts";
 import { DEFAULT_STATE, type ImageRecord, type Profile } from "./types.ts";
 
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pxe-test-"));
@@ -271,19 +272,67 @@ test("install looks up IPMI settings by serial number", async () => {
 
 test("excel rows import nic and ipmi plans for one project", async () => {
   const parsed = parsePlanTable([
-    ["序列号", "MAC", "主机名", "网卡IP", "网卡网关", "IPMI地址", "IPMI网关"],
-    ["sn-plan 1", "aa:bb:cc:dd:ee:41", "srv-plan", "10.1.8.41", "10.1.8.1", "10.8.0.41", "10.8.0.1"],
+    ["序列号", "MAC", "主机名", "网卡MAC", "网卡名", "网卡IP", "网卡网关", "IPMI地址", "IPMI网关"],
+    ["sn-plan 1", "aa:bb:cc:dd:ee:41", "srv-plan", "", "", "10.1.8.41", "10.1.8.1", "10.8.0.41", "10.8.0.1"],
+    ["sn-plan 1", "aa:bb:cc:dd:ee:41", "srv-plan", "aa:bb:cc:dd:ee:42", "ens1f1", "10.1.9.41", ""],
   ]);
   assert.equal(parsed.error, undefined);
   const projectId = listProjects().find((item) => item.name === "机房A")?.id || "";
   const result = await importProjectPlan(projectId, parsed.records);
-  assert.equal(result.nic, 1);
+  assert.equal(result.nic, 2);
   assert.equal(result.ipmi, 1);
   assert.equal(result.machines, 1);
   assert.equal(result.errors.length, 0);
   await setProjectEnabled(projectId, true);
-  assert.equal(getNicBySn("SN-PLAN1")?.address, "10.1.8.41");
+  const nics = listNicsBySn("SN-PLAN1");
+  assert.deepEqual(
+    nics.map((item) => item.address).sort(),
+    ["10.1.8.41", "10.1.9.41"],
+  );
+  assert.equal(nics.find((item) => item.address === "10.1.9.41")?.iface, "ens1f1");
+  assert.equal(nics.find((item) => item.address === "10.1.9.41")?.gateway, "");
   assert.equal(getIpmiBySn("sn-plan1")?.address, "10.8.0.41");
+});
+
+test("one machine can plan several nics by mac or name", async () => {
+  const projectId = listProjects().find((item) => item.name === "机房A")?.id || "";
+  await setProjectEnabled(projectId, true);
+  await createNic({
+    sn: "SN-MULTI",
+    projectId,
+    mac: "aa:bb:cc:dd:ee:61",
+    label: "业务口",
+    address: "10.1.8.61",
+    netmask: "255.255.255.0",
+    gateway: "10.1.8.1",
+    dns: "10.1.8.1",
+  });
+  await createNic({
+    sn: "SN-MULTI",
+    projectId,
+    iface: "ens1f1",
+    label: "存储口",
+    address: "10.2.8.61",
+    netmask: "255.255.255.0",
+  });
+  const plans = listNicsBySn("sn-multi");
+  assert.equal(plans.length, 2);
+  const script = renderNicScript(plans);
+  assert.match(script, /aa:bb:cc:dd:ee:61/);
+  assert.match(script, /ens1f1/);
+  assert.match(script, /apply_one 'aa:bb:cc:dd:ee:61' '' '10\.1\.8\.61' 24 '255\.255\.255\.0' '10\.1\.8\.1'/);
+  assert.match(script, /apply_one '' 'ens1f1' '10\.2\.8\.61' 24 '255\.255\.255\.0' ''/);
+  assert.doesNotMatch(script, /head -n 1/);
+  assert.match(renderNicScript([]), /跳过/);
+  await assert.rejects(
+    createNic({
+      sn: "SN-MULTI",
+      projectId,
+      address: "10.1.8.62",
+      netmask: "255.255.255.0",
+    }),
+    /MAC 或接口名/,
+  );
 });
 
 test("machine list shows serial, firmware, os, and power", async () => {

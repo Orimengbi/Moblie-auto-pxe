@@ -15,10 +15,6 @@ export function ProjectDhcpForm({ project }: { project: Project }) {
     dhcpGateway: project.dhcp?.gateway || "",
     dhcpDns: project.dhcp?.dns || "",
     leaseHours: String(project.dhcp?.leaseHours || 2),
-    fixedMode: project.fixed?.mode || "static",
-    fixedNetmask: project.fixed?.netmask || "255.255.255.0",
-    fixedGateway: project.fixed?.gateway || "",
-    fixedDns: project.fixed?.dns || "",
   });
   const [error, setError] = useState("");
   const [saved, setSaved] = useState("");
@@ -40,12 +36,6 @@ export function ProjectDhcpForm({ project }: { project: Project }) {
           gateway: form.dhcpGateway,
           dns: form.dhcpDns,
           leaseHours: Number(form.leaseHours),
-        },
-        fixed: {
-          mode: form.fixedMode,
-          netmask: form.fixedNetmask,
-          gateway: form.fixedGateway,
-          dns: form.fixedDns,
         },
       }),
     });
@@ -70,25 +60,6 @@ export function ProjectDhcpForm({ project }: { project: Project }) {
         <Field label="DNS" value={form.dhcpDns} onChange={(value) => setForm({ ...form, dhcpDns: value })} />
         <Field label="租约（小时）" value={form.leaseHours} onChange={(value) => setForm({ ...form, leaseHours: value })} />
       </div>
-      <h3 className="pt-2 text-sm font-medium">装完后的网络</h3>
-      <label className="grid gap-1.5 text-sm">
-        <span className="font-medium">方式</span>
-        <select
-          className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm"
-          value={form.fixedMode}
-          onChange={(event) => setForm({ ...form, fixedMode: event.target.value as "static" | "dhcp" })}
-        >
-          <option value="static">每台机器一个固定 IP</option>
-          <option value="dhcp">装完后仍用 DHCP</option>
-        </select>
-      </label>
-      {form.fixedMode === "static" ? (
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="掩码" value={form.fixedNetmask} onChange={(value) => setForm({ ...form, fixedNetmask: value })} />
-          <Field label="网关" value={form.fixedGateway} onChange={(value) => setForm({ ...form, fixedGateway: value })} />
-          <Field label="DNS" value={form.fixedDns} onChange={(value) => setForm({ ...form, fixedDns: value })} />
-        </div>
-      ) : null}
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
       {saved ? <p className="text-sm text-muted-foreground">{saved}</p> : null}
       <Button className="w-fit" type="submit" disabled={pending}>
