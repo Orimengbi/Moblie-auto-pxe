@@ -54,7 +54,7 @@ export function ProjectServerImport({ projectId, enabled }: { projectId: string;
   return (
     <form onSubmit={upload} className="grid gap-3">
       <p className="text-sm text-muted-foreground">
-        一行一台服务器。表头用「序列号、IPMI MAC、原用户、原密码、目标用户、目标密码、安装系统、定制需求」。安装系统要和这个项目里某条安装设置的名称一致。密码只留在小主机上，页面不显示。
+        一行一台服务器。表里有序列号、IPMI MAC、原账号、目标账号、IPMI 地址、掩码、路由，VLAN 可以空着。安装系统要和这个项目里某条安装设置的名称一致。密码只留在小主机上，页面不显示。
       </p>
       <a className="w-fit text-sm underline underline-offset-4" href={`/api/projects/${projectId}/template`}>
         下载 Excel 模板

@@ -118,6 +118,11 @@ export interface ServerRow {
   targetPassword: string;
   osName: string;
   customization: string;
+  ipmiAddress: string;
+  ipmiNetmask: string;
+  ipmiGateway: string;
+  ipmiVlan?: number;
+  networkApplied: boolean;
   bmcIp?: string;
   bootMac?: string;
   passwordChanged: boolean;

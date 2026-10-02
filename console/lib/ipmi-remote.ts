@@ -102,6 +102,21 @@ export async function changeIpmiAccount(
   if (enabled.code !== 0) fail(enabled, "启用 IPMI 用户失败");
 }
 
+export async function setIpmiLan(
+  input: { host: string; username: string; password: string; address: string; netmask: string; gateway: string; vlan?: number },
+  exec: IpmiExec,
+): Promise<void> {
+  const run = async (args: string[], label: string) => {
+    const result = await exec(input.host, input.username, input.password, args);
+    if (result.code !== 0) fail(result, label);
+  };
+  await run(["lan", "set", "1", "ipsrc", "static"], "设置 IPMI 为静态地址失败");
+  await run(["lan", "set", "1", "ipaddr", input.address], "设置 IPMI 地址失败");
+  await run(["lan", "set", "1", "netmask", input.netmask], "设置 IPMI 掩码失败");
+  await run(["lan", "set", "1", "defgw", "ipaddr", input.gateway], "设置 IPMI 路由失败");
+  if (input.vlan) await run(["lan", "set", "1", "vlan", "id", String(input.vlan)], "设置 IPMI VLAN 失败");
+}
+
 export async function bootFromPxe(host: string, username: string, password: string, exec: IpmiExec): Promise<void> {
   const boot = await exec(host, username, password, ["chassis", "bootdev", "pxe", "options=efiboot"]);
   if (boot.code !== 0) fail(boot, "设置从网卡启动失败");

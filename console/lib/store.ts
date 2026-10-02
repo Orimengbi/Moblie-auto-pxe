@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { parseLeases, renderBootIpxe, renderDnsmasq } from "./dnsmasq.ts";
-import { bootFromPxe, changeIpmiAccount, defaultIpmiExec, probeIpmi, type IpmiExec } from "./ipmi-remote.ts";
+import { bootFromPxe, changeIpmiAccount, defaultIpmiExec, probeIpmi, setIpmiLan, type IpmiExec } from "./ipmi-remote.ts";
 import type { PlanCells } from "./plan-sheet.ts";
 import type { ServerCells } from "./server-sheet.ts";
 import {
@@ -1114,6 +1114,10 @@ function hydrateServer(row: ServerRow): ServerRow {
   return {
     ...row,
     canApply: row.canApply !== false,
+    ipmiAddress: row.ipmiAddress || "",
+    ipmiNetmask: row.ipmiNetmask || "",
+    ipmiGateway: row.ipmiGateway || "",
+    networkApplied: Boolean(row.networkApplied),
     ipmiLink: row.ipmiLink || "unknown",
     ipSource: row.ipSource || "unknown",
     power: row.power || "unknown",
@@ -1197,12 +1201,39 @@ export async function importServerSheet(projectId: string, records: { row: numbe
       }
       const osName = cells.osName.trim().slice(0, 80);
       if (!osName) problems.push("没有填写安装系统");
+      let ipmiAddress = "";
+      let ipmiNetmask = "";
+      let ipmiGateway = "";
+      let ipmiVlan: number | undefined;
+      const hasNetwork = Boolean(cells.ipmiAddress || cells.ipmiNetmask || cells.ipmiGateway);
+      if (hasNetwork) {
+        try {
+          ipmiAddress = assertIpv4(cells.ipmiAddress, "IPMI 地址");
+          ipmiNetmask = assertIpv4(cells.ipmiNetmask, "IPMI 掩码");
+          ipmiGateway = assertIpv4(cells.ipmiGateway, "IPMI 路由");
+          netmaskToPrefix(ipmiNetmask);
+          if (!sameSubnet(ipmiAddress, ipmiGateway, ipmiNetmask)) problems.push("IPMI 地址和路由不在同一个子网");
+        } catch (error) {
+          problems.push(error instanceof Error ? error.message : "IPMI 网络不合法");
+        }
+      }
+      if (cells.ipmiVlan.trim()) {
+        try {
+          ipmiVlan = assertVlanId(Number(cells.ipmiVlan));
+          if (!ipmiVlan) problems.push("IPMI VLAN 需要是 1 到 4094 的整数");
+        } catch (error) {
+          problems.push(error instanceof Error ? error.message : "IPMI VLAN 不合法");
+        }
+      }
       if (ipmiMac) {
         const duplicateMac = listServers().find((item) => item.projectId === project.id && item.ipmiMac === ipmiMac && item.sn !== sn);
         if (duplicateMac) problems.push(`IPMI MAC ${ipmiMac} 已经属于序列号 ${duplicateMac.sn}`);
       }
       const existing = listServers().find((item) => item.projectId === project.id && item.sn === sn);
       const sameMac = existing?.ipmiMac === ipmiMac;
+      const sameNetwork = Boolean(
+        existing && existing.ipmiAddress === ipmiAddress && existing.ipmiNetmask === ipmiNetmask && existing.ipmiGateway === ipmiGateway && existing.ipmiVlan === ipmiVlan,
+      );
       const canApply = problems.length === 0;
       const row: ServerRow = {
         id: existing?.id || crypto.randomUUID(),
@@ -1215,6 +1246,11 @@ export async function importServerSheet(projectId: string, records: { row: numbe
         targetPassword,
         osName,
         customization: cells.customization.slice(0, 4000),
+        ipmiAddress,
+        ipmiNetmask,
+        ipmiGateway,
+        ipmiVlan,
+        networkApplied: sameNetwork ? Boolean(existing?.networkApplied) : false,
         bmcIp: sameMac ? existing?.bmcIp : undefined,
         bootMac: sameMac ? existing?.bootMac : undefined,
         passwordChanged: sameMac ? Boolean(existing?.passwordChanged) : false,
@@ -1289,6 +1325,25 @@ export async function reconcileServers(projectId: string, options?: { exec?: Ipm
       } else if (row.stage !== "installing") {
         const profile = profilesForProject(project.id).find((item) => item.name === row.osName);
         try {
+          if (row.ipmiAddress && !row.networkApplied) {
+            const username = row.passwordChanged ? row.targetUser : row.originalUser;
+            const password = row.passwordChanged ? row.targetPassword : row.originalPassword;
+            await setIpmiLan(
+              {
+                host: row.bmcIp,
+                username,
+                password,
+                address: row.ipmiAddress,
+                netmask: row.ipmiNetmask,
+                gateway: row.ipmiGateway,
+                vlan: row.ipmiVlan,
+              },
+              exec,
+            );
+            row.networkApplied = true;
+            row.bmcIp = row.ipmiAddress;
+            row.ipSource = "static";
+          }
           if (!row.passwordChanged) {
             await changeIpmiAccount(
               {

@@ -7,6 +7,10 @@ export interface ServerCells {
   targetPassword: string;
   osName: string;
   customization: string;
+  ipmiAddress: string;
+  ipmiNetmask: string;
+  ipmiGateway: string;
+  ipmiVlan: string;
 }
 
 const HEADER_MAP: Record<string, HeaderField> = {
@@ -38,6 +42,19 @@ const HEADER_MAP: Record<string, HeaderField> = {
   "目标用户/密码": "targetAccount",
   "目标用户／密码": "targetAccount",
   目标用户密码: "targetAccount",
+  ipmi地址: "ipmiAddress",
+  ipmiip: "ipmiAddress",
+  ip: "ipmiAddress",
+  ipmi掩码: "ipmiNetmask",
+  mask: "ipmiNetmask",
+  掩码: "ipmiNetmask",
+  ipmi路由: "ipmiGateway",
+  ipmi网关: "ipmiGateway",
+  route: "ipmiGateway",
+  路由: "ipmiGateway",
+  ipmivlan: "ipmiVlan",
+  "ipmi vlan": "ipmiVlan",
+  vlan: "ipmiVlan",
   安装系统: "osName",
   需要安装的系统: "osName",
   系统: "osName",
@@ -114,7 +131,11 @@ function emptyCells(): ServerCells {
     targetPassword: "",
     osName: "",
     customization: "",
+    ipmiAddress: "",
+    ipmiNetmask: "",
+    ipmiGateway: "",
+    ipmiVlan: "",
   };
 }
 
-export const SERVER_TEMPLATE_HEADERS = ["序列号", "IPMI MAC", "原用户", "原密码", "目标用户", "目标密码", "安装系统", "定制需求"];
+export const SERVER_TEMPLATE_HEADERS = ["序列号", "IPMI MAC", "原用户", "原密码", "目标用户", "目标密码", "IPMI地址", "IPMI掩码", "IPMI路由", "IPMI VLAN", "安装系统", "定制需求"];

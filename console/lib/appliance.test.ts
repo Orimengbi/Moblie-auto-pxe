@@ -427,8 +427,16 @@ test("server sheet changes the ipmi account and installs by serial", async () =>
   assert.equal(titled.error, undefined);
   assert.equal(titled.records[0]?.cells.originalUser, "ADMIN");
   assert.equal(titled.records[0]?.cells.targetPassword, "new-pass");
+  const net = parseServerTable([
+    ["序列号", "IPMI MAC", "原用户", "原密码", "目标用户", "目标密码", "IPMI地址", "IPMI掩码", "IPMI路由", "IPMI VLAN", "安装系统"],
+    ["sn-net", "aa:bb:cc:dd:ee:83", "ADMIN", "old-pass", "ops", "new-pass", "192.168.100.21", "255.255.255.0", "192.168.100.1", "", "机房 Ubuntu"],
+  ]);
+  assert.equal(net.error, undefined);
+  assert.equal(net.records[0]?.cells.ipmiAddress, "192.168.100.21");
+  assert.equal(net.records[0]?.cells.ipmiGateway, "192.168.100.1");
+  assert.equal(net.records[0]?.cells.ipmiVlan, "");
   const listed = await importServerSheet(projectId, [
-    { row: 9, cells: { sn: "sn-bad", ipmiMac: "aa:bb:cc:dd:ee:82", originalUser: "ADMIN", originalPassword: "", targetUser: "ops", targetPassword: "new-pass", osName: "机房 Ubuntu", customization: "" } },
+    { row: 9, cells: { sn: "sn-bad", ipmiMac: "aa:bb:cc:dd:ee:82", originalUser: "ADMIN", originalPassword: "", targetUser: "ops", targetPassword: "new-pass", osName: "机房 Ubuntu", customization: "", ipmiAddress: "192.168.100.21", ipmiNetmask: "255.255.255.0", ipmiGateway: "192.168.100.1", ipmiVlan: "" } },
   ]);
   assert.equal(listed.servers, 1);
   assert.equal(listed.errors.length, 1);

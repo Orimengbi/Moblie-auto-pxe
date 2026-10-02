@@ -79,7 +79,11 @@ export function ProjectServerList({
                     {row.osName ? <span className="mt-1 block text-xs text-muted-foreground">安装系统 {row.osName}</span> : null}
                   </TableCell>
                   <TableCell>{LINK[row.ipmiLink]}</TableCell>
-                  <TableCell>{row.bmcIp || "—"}</TableCell>
+                  <TableCell>
+                    {row.bmcIp || "—"}
+                    {row.ipmiAddress ? <span className="mt-1 block text-xs text-muted-foreground">规划 {row.ipmiAddress} / {row.ipmiNetmask}</span> : null}
+                    {row.ipmiGateway ? <span className="block text-xs text-muted-foreground">路由 {row.ipmiGateway}{row.ipmiVlan ? ` · VLAN ${row.ipmiVlan}` : ""}</span> : null}
+                  </TableCell>
                   <TableCell>{SOURCE[row.ipSource]}</TableCell>
                   <TableCell>{POWER[row.power]}</TableCell>
                   <TableCell>{INSTALLED[row.installed]}</TableCell>
