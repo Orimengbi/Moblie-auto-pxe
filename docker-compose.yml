@@ -10,23 +10,21 @@ services:
 
   boot:
     build: ./deploy/nginx
-    ports:
-      - "80:80"
+    network_mode: host
     volumes:
       - ./data:/data:ro
+      - ./deploy/nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
       - console
     restart: unless-stopped
 
   console:
     build: ./console
-    ports:
-      - "43123:3000"
+    network_mode: host
     environment:
       PXE_DATA_DIR: /data
       PORT: "3000"
-      # 控制台在 43123，远程控制台经 nginx 的 80 端口转发。
-      PXE_BMC_PORT: "80"
+      HOSTNAME: 127.0.0.1
     volumes:
       - ./data:/data
     restart: unless-stopped
