@@ -1,0 +1,326 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import type { InstallState, RemoteFile, RemoteTask, TaskHostSource, TaskTargetStatus } from "@/lib/types";
+
+export interface TaskServer {
+  id: string;
+  sn: string;
+  osName: string;
+  installed: InstallState;
+}
+
+const TARGET: Record<TaskTargetStatus, string> = {
+  pending: "排队",
+  running: "执行中",
+  ok: "成功",
+  failed: "失败",
+  timeout: "超时",
+  unreachable: "连不上",
+};
+
+const SOURCE: Record<TaskHostSource, string> = {
+  nic: "网卡规划",
+  fixed: "固定 IP",
+  lease: "DHCP 租约",
+  "": "",
+};
+
+const TEMPLATES: { label: string; body: string }[] = [
+  {
+    label: "查看系统信息",
+    body: 'hostname\ncat /etc/os-release | head -n 2\nuname -r\nip -br addr\nlsblk -d -o NAME,SIZE,MODEL\n',
+  },
+  {
+    label: "安装上传的 deb / rpm 包",
+    body: [
+      "set -e",
+      'ls "$PXE_FILES"',
+      "if command -v apt-get >/dev/null 2>&1; then",
+      "  apt-get install -y ./*.deb",
+      "elif command -v dnf >/dev/null 2>&1; then",
+      "  dnf install -y ./*.rpm",
+      "else",
+      "  yum install -y ./*.rpm",
+      "fi",
+      "",
+    ].join("\n"),
+  },
+  {
+    label: "执行上传的 .run 驱动",
+    body: [
+      "set -e",
+      "for f in ./*.run; do",
+      '  echo "安装 $f"',
+      '  sh "$f" --silent',
+      "done",
+      "",
+    ].join("\n"),
+  },
+];
+
+function counts(task: RemoteTask): string {
+  const by = (status: TaskTargetStatus) => task.targets.filter((target) => target.status === status).length;
+  const parts = [`成功 ${by("ok")}`];
+  for (const status of ["failed", "timeout", "unreachable", "running", "pending"] as const) {
+    if (by(status)) parts.push(`${TARGET[status]} ${by(status)}`);
+  }
+  return `${parts.join(" · ")} / 共 ${task.targets.length} 台`;
+}
+
+function formatSize(bytes: number): string {
+  if (bytes >= 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+export function ProjectTaskRunner({
+  projectId,
+  servers,
+  files,
+  tasks,
+}: {
+  projectId: string;
+  servers: TaskServer[];
+  files: RemoteFile[];
+  tasks: RemoteTask[];
+}) {
+  const router = useRouter();
+  const installed = useMemo(() => servers.filter((row) => row.installed === "yes").map((row) => row.id), [servers]);
+  const [picked, setPicked] = useState<string[]>([]);
+  const [fileIds, setFileIds] = useState<string[]>([]);
+  const [name, setName] = useState("");
+  const [script, setScript] = useState("");
+  const [concurrency, setConcurrency] = useState("10");
+  const [timeoutSec, setTimeoutSec] = useState("600");
+  const [error, setError] = useState("");
+  const [pending, setPending] = useState(false);
+  const [uploading, setUploading] = useState("");
+  const running = tasks.some((task) => task.status === "running");
+
+  useEffect(() => {
+    if (!running) return;
+    const timer = setInterval(() => router.refresh(), 3000);
+    return () => clearInterval(timer);
+  }, [running, router]);
+
+  function toggle(list: string[], id: string): string[] {
+    return list.includes(id) ? list.filter((item) => item !== id) : [...list, id];
+  }
+
+  async function submit(body: Record<string, unknown>) {
+    setPending(true);
+    setError("");
+    const response = await fetch(`/api/projects/${projectId}/tasks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const result = await response.json();
+    setPending(false);
+    if (!response.ok) {
+      setError(result.error || "任务没有创建成功");
+      return false;
+    }
+    router.refresh();
+    return true;
+  }
+
+  async function run(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await submit({ kind: "script", name, script, serverIds: picked, fileIds, concurrency, timeoutSec });
+  }
+
+  async function revoke() {
+    const ids = picked.length ? picked : installed;
+    if (!ids.length) {
+      setError("没有已安装的机器");
+      return;
+    }
+    if (!window.confirm(`从 ${ids.length} 台机器上撤掉控制台公钥？撤完以后控制台不能再登录这些机器执行脚本。`)) return;
+    await submit({ kind: "revoke", serverIds: ids, concurrency, timeoutSec: 60 });
+  }
+
+  async function upload(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setUploading(file.name);
+    setError("");
+    const response = await fetch(`/api/files?name=${encodeURIComponent(file.name)}`, { method: "PUT", body: file });
+    const result = await response.json().catch(() => ({}));
+    setUploading("");
+    if (!response.ok) {
+      setError(result.error || "上传失败");
+      return;
+    }
+    setFileIds((list) => [...list, result.id]);
+    router.refresh();
+  }
+
+  async function remove(id: string) {
+    const response = await fetch(`/api/files/${id}`, { method: "DELETE" });
+    if (!response.ok) {
+      const result = await response.json().catch(() => ({}));
+      setError(result.error || "删除失败");
+      return;
+    }
+    setFileIds((list) => list.filter((item) => item !== id));
+    router.refresh();
+  }
+
+  return (
+    <div className="grid gap-6">
+      <form onSubmit={run} className="grid gap-4">
+        <p className="text-sm text-muted-foreground">
+          装机时会把小主机的公钥写给 root。装完以后，可以在这里选几台机器，用 SSH 执行同一段脚本。地址按网卡规划、固定 IP、DHCP 租约的顺序找。上传的文件先推到目标机，脚本里用 <code>$PXE_FILES</code> 访问，执行完就删掉。
+        </p>
+
+        <div className="grid gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Label>机器</Label>
+            <Button type="button" size="xs" variant="outline" onClick={() => setPicked(installed)}>
+              选中已安装的 {installed.length} 台
+            </Button>
+            <Button type="button" size="xs" variant="ghost" onClick={() => setPicked([])}>
+              清空
+            </Button>
+            <span className="text-xs text-muted-foreground">已选 {picked.length} 台</span>
+          </div>
+          {servers.length === 0 ? (
+            <p className="text-sm text-muted-foreground">先在上面上传服务器表。</p>
+          ) : (
+            <div className="grid max-h-56 gap-1 overflow-y-auto rounded-lg border p-2 sm:grid-cols-2 lg:grid-cols-3">
+              {servers.map((row) => (
+                <label key={row.id} className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={picked.includes(row.id)} onChange={() => setPicked((list) => toggle(list, row.id))} />
+                  <span className="font-mono text-xs">{row.sn}</span>
+                  <span className="text-xs text-muted-foreground">{row.installed === "yes" ? row.osName || "已安装" : "未装完"}</span>
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="grid gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Label>文件</Label>
+            <span className="text-xs text-muted-foreground">驱动包、rpm、deb、压缩包都可以，勾上的会推到每台机器。</span>
+          </div>
+          {files.length ? (
+            <div className="grid gap-1">
+              {files.map((file) => (
+                <div key={file.id} className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={fileIds.includes(file.id)} onChange={() => setFileIds((list) => toggle(list, file.id))} />
+                  <span className="font-mono text-xs">{file.name}</span>
+                  <span className="text-xs text-muted-foreground">{formatSize(file.size)}</span>
+                  <Button type="button" size="xs" variant="ghost" onClick={() => remove(file.id)}>
+                    删除
+                  </Button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          <Input type="file" onChange={upload} disabled={Boolean(uploading)} className="w-fit" />
+          {uploading ? <p className="text-xs text-muted-foreground">正在上传 {uploading}，大文件要等一会</p> : null}
+        </div>
+
+        <div className="grid gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Label htmlFor="task-script">脚本</Label>
+            {TEMPLATES.map((item) => (
+              <Button key={item.label} type="button" size="xs" variant="outline" onClick={() => setScript(item.body)}>
+                {item.label}
+              </Button>
+            ))}
+          </div>
+          <Textarea id="task-script" className="min-h-40 font-mono text-xs" value={script} onChange={(event) => setScript(event.target.value)} placeholder="以 root 身份用 bash 执行，当前目录就是 $PXE_FILES" required />
+        </div>
+
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="grid gap-1">
+            <Label htmlFor="task-name">任务名称</Label>
+            <Input id="task-name" value={name} onChange={(event) => setName(event.target.value)} placeholder="不填就用脚本第一行" className="w-56" />
+          </div>
+          <div className="grid gap-1">
+            <Label htmlFor="task-concurrency">同时执行</Label>
+            <Input id="task-concurrency" type="number" min={1} max={50} value={concurrency} onChange={(event) => setConcurrency(event.target.value)} className="w-24" />
+          </div>
+          <div className="grid gap-1">
+            <Label htmlFor="task-timeout">单台超时（秒）</Label>
+            <Input id="task-timeout" type="number" min={10} max={7200} value={timeoutSec} onChange={(event) => setTimeoutSec(event.target.value)} className="w-28" />
+          </div>
+          <Button type="submit" disabled={pending || !picked.length}>
+            {pending ? "正在创建" : `对 ${picked.length} 台执行`}
+          </Button>
+        </div>
+        {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      </form>
+
+      <div className="grid gap-2 rounded-lg border p-3">
+        <p className="text-sm font-medium">交付清理</p>
+        <p className="text-sm text-muted-foreground">交付前从机器上撤掉小主机的公钥。上面选了机器就只撤选中的，没选就撤全部已安装的机器。撤完后这些机器不能再从这里管理。</p>
+        <Button type="button" variant="destructive" className="w-fit" disabled={pending} onClick={revoke}>
+          撤掉控制台公钥
+        </Button>
+      </div>
+
+      <div className="grid gap-3">
+        <p className="text-sm font-medium">最近的任务</p>
+        {tasks.length === 0 ? <p className="text-sm text-muted-foreground">还没有执行过任务。</p> : null}
+        {tasks.map((task) => (
+          <details key={task.id} className="rounded-lg border p-3" open={task.status === "running"}>
+            <summary className="flex cursor-pointer flex-wrap items-center gap-2 text-sm">
+              <Badge variant={task.status === "running" ? "outline" : task.targets.every((target) => target.status === "ok") ? "default" : "destructive"}>
+                {task.status === "running" ? "执行中" : "已结束"}
+              </Badge>
+              <span className="font-medium">{task.name}</span>
+              <span className="text-xs text-muted-foreground">{counts(task)}</span>
+              <span className="text-xs text-muted-foreground">{new Date(task.createdAt).toLocaleString("zh-CN")}</span>
+              {task.status === "done" ? (
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="ghost"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    if (task.kind === "script") {
+                      setScript(task.script);
+                      setName(task.name);
+                      setFileIds(task.fileIds.filter((id) => files.some((file) => file.id === id)));
+                    }
+                    setPicked(task.targets.filter((target) => target.status !== "ok").map((target) => target.serverId));
+                  }}
+                >
+                  选中没成功的机器
+                </Button>
+              ) : null}
+            </summary>
+            <div className="mt-3 grid gap-2">
+              {task.targets.map((target) => (
+                <details key={target.serverId} className="rounded-md border px-2 py-1">
+                  <summary className="flex cursor-pointer flex-wrap items-center gap-2 text-sm">
+                    <Badge variant={target.status === "ok" ? "default" : target.status === "running" || target.status === "pending" ? "outline" : "destructive"}>{TARGET[target.status]}</Badge>
+                    <span className="font-mono text-xs">{target.sn}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {target.host || "无地址"}
+                      {target.hostSource ? `（${SOURCE[target.hostSource]}）` : ""}
+                      {target.exitCode !== null ? ` · 退出码 ${target.exitCode}` : ""}
+                    </span>
+                  </summary>
+                  <pre className="mt-2 max-h-80 overflow-auto rounded bg-muted p-2 text-xs whitespace-pre-wrap">{target.output || "（没有输出）"}</pre>
+                </details>
+              ))}
+            </div>
+          </details>
+        ))}
+      </div>
+    </div>
+  );
+}

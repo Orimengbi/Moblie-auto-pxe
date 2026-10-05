@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
 import test from "node:test";
 import { parseLeases, renderDnsmasq } from "./dnsmasq.ts";
 import { detectFromListing, inspectIso } from "./iso.ts";
@@ -11,18 +12,21 @@ import { parsePlanTable } from "./plan-sheet.ts";
 import { parseIpmiUserList } from "./ipmi-remote.ts";
 import { parseServerTable } from "./server-sheet.ts";
 import { serialProbe } from "./boot.ts";
+import { createTask, resolveHost, runTask, type Exec } from "./remote.ts";
 import { UploadConflict, appendUpload, openUpload } from "./uploads.ts";
 import { applyHostname, normalizeMac } from "./net.ts";
 import {
   renderDebianPreseed,
   renderDiagTask,
   renderIpxeMenu,
+  renderAuthorizedKeyScript,
   renderIpmiScript,
   renderKickstart,
+  renderRevokeScript,
   renderNicScript,
   renderUbuntuAutoinstall,
 } from "./render.ts";
-import { bindServerBoot, createIpmi, createNic, createProfile, createProject, createReport, customizationForMac, getIpmiBySn, getMachine, getProject, getState, importProjectPlan, importServerSheet, listImages, listNicsBySn, listProjects, publicServer, reconcileServers, saveMachine, saveMachineFact, saveNetwork, setProjectEnabled, updateProjectNetwork } from "./store.ts";
+import { bindServerBoot, createIpmi, getTask, listServers, saveFile, createNic, createProfile, createProject, createReport, customizationForMac, getIpmiBySn, getMachine, getProject, getState, importProjectPlan, importServerSheet, listImages, listNicsBySn, listProjects, publicServer, reconcileServers, saveMachine, saveMachineFact, saveNetwork, setProjectEnabled, updateProjectNetwork } from "./store.ts";
 import { DEFAULT_STATE, type ImageRecord, type Profile } from "./types.ts";
 
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pxe-test-"));
@@ -505,4 +509,82 @@ test("custom disk partitions are written into each answer file", () => {
   assert.match(kickstart, /part \/ --fstype=ext4 --size=1 --grow/);
   assert.match(kickstart, /part swap --fstype=swap --size=8192/);
   assert.doesNotMatch(kickstart, /autopart/);
+});
+
+test("install writes the console key and delivery removes it", () => {
+  const key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest pxe-console";
+  const answer = renderUbuntuAutoinstall(profile, "srv-eeff", null, "192.168.77.1", 8080);
+  const decoded = [...answer.userData.matchAll(/echo ([A-Za-z0-9+/=]+) \| base64/g)].map((match) => Buffer.from(match[1], "base64").toString("utf8"));
+  const lookup = decoded.find((item) => item.includes("/boot/authorized-key.sh")) || "";
+  assert.match(lookup, /http:\/\/192\.168\.77\.1:8080\/boot\/authorized-key\.sh/);
+  assert.ok(lookup.indexOf("authorized-key.sh") < lookup.indexOf("读不到序列号"), "没有序列号也要写入公钥");
+  assert.match(renderKickstart(profile, "srv-eeff", "192.168.77.1", profile.imageId), /authorized-key\.sh/);
+  const preseed = renderDebianPreseed(profile, "srv-eeff", "192.168.77.1", profile.imageId);
+  const late = Buffer.from(preseed.match(/echo ([A-Za-z0-9+/=]+) \| base64/)?.[1] || "", "base64").toString("utf8");
+  assert.match(late, /authorized-key\.sh/);
+  const install = renderAuthorizedKeyScript(key);
+  assert.match(install, /grep -qxF "\$key"/);
+  assert.ok(install.includes(`key='${key}'`));
+  const revoke = renderRevokeScript(key);
+  assert.match(revoke, /grep -vxF "\$key"/);
+  assert.match(revoke, /cat "\$f.pxe-revoke" > "\$f"/);
+});
+
+test("batch tasks find each host and record every result", async () => {
+  const projectId = listProjects().find((item) => item.name === "机房A")?.id || "";
+  const rows = listServers().filter((row) => row.projectId === projectId);
+  const installed = rows.find((row) => row.bootMac === "aa:bb:cc:dd:ee:92");
+  assert.ok(installed);
+  const nic = { id: "n1", projectId, sn: installed.sn, address: "10.20.0.5", netmask: "255.255.255.0", gateway: "10.20.0.1", dns: "", note: "", createdAt: "", updatedAt: "" };
+  const lease = { expiry: 0, mac: "aa:bb:cc:dd:ee:92", ip: "192.168.77.92", hostname: "", active: true };
+  const machine = { mac: "aa:bb:cc:dd:ee:92", action: "install" as const, scriptIds: [], note: "", fixedIp: "10.30.0.9" };
+  assert.deepEqual(resolveHost(installed, { nics: [nic], machines: [machine], leases: [lease], locals: ["10.20.0.250"] }), { host: "10.20.0.5", source: "nic" });
+  assert.deepEqual(resolveHost(installed, { nics: [nic], machines: [machine], leases: [lease], locals: ["192.168.77.1"] }), { host: "10.30.0.9", source: "fixed" });
+  assert.deepEqual(resolveHost(installed, { nics: [nic], machines: [], leases: [lease], locals: ["192.168.77.1"] }), { host: "192.168.77.92", source: "lease" });
+  assert.deepEqual(resolveHost(installed, { nics: [nic], machines: [], leases: [], locals: ["192.168.77.1"] }), { host: "10.20.0.5", source: "nic" });
+  assert.deepEqual(resolveHost(installed, { nics: [], machines: [], leases: [{ ...lease, active: false }], locals: [] }), { host: "", source: "" });
+
+  const others = rows.filter((row) => row.id !== installed.id);
+  assert.ok(others.length >= 1);
+  await assert.rejects(async () => createTask(projectId, { script: "true", serverIds: [] }), /至少选一台/);
+  assert.throws(() => createTask(projectId, { script: "  ", serverIds: [installed.id] }), /脚本是空的/);
+  assert.throws(() => createTask(projectId, { script: "true", serverIds: ["not-in-project"] }), /不在这个项目里/);
+  assert.throws(() => createTask(projectId, { script: "true", serverIds: [installed.id], concurrency: 99 }), /并发数/);
+
+  const file = await saveFile("drv 1.run", Readable.from([Buffer.from("#!/bin/sh\necho drv\n")]));
+  assert.equal(file.name, "drv_1.run");
+  await assert.rejects(saveFile("../drv 1.run", Readable.from([Buffer.from("x")])), /已经有/);
+
+  const context = { nics: [], machines: [], leases: [lease, { ...lease, mac: "aa:bb:cc:dd:ee:77", ip: "192.168.77.77" }], locals: ["192.168.77.1"] };
+  const task = createTask(projectId, { name: "装驱动", script: "sh ./drv_1.run", serverIds: [installed.id, others[0].id], fileIds: [file.id], concurrency: 2 }, context);
+  assert.equal(task.status, "running");
+  assert.equal(task.targets[0].host, "192.168.77.92");
+  assert.equal(task.targets[1].status, "unreachable");
+  assert.match(task.targets[1].output, /找不到这台机器的地址/);
+
+  const calls: { command: string; args: string[]; stdin: string | null }[] = [];
+  const exec: Exec = async (command, args, stdin) => {
+    calls.push({ command, args, stdin });
+    if (command === "ssh" && stdin) return { code: 3, output: "drv\nfailed on purpose\n", timedOut: false };
+    return { code: 0, output: "", timedOut: false };
+  };
+  const done = await runTask(task.id, exec);
+  assert.equal(done.status, "done");
+  assert.equal(done.targets[0].status, "failed");
+  assert.equal(done.targets[0].exitCode, 3);
+  assert.match(done.targets[0].output, /failed on purpose/);
+  assert.equal(getTask(task.id)?.targets[0].status, "failed");
+  assert.deepEqual(calls.map((call) => call.command), ["ssh", "scp", "ssh"]);
+  assert.ok(calls[0].args.includes("root@192.168.77.92"));
+  assert.ok(calls[1].args.some((arg) => arg.endsWith("/drv_1.run")));
+  assert.match(calls[2].stdin || "", /export PXE_FILES='\/tmp\/pxe-task-/);
+  assert.match(calls[2].stdin || "", /trap 'cd \/; rm -rf "\$PXE_FILES"' EXIT/);
+  assert.match(calls[2].stdin || "", /sh \.\/drv_1\.run\n$/);
+
+  const unreachable = createTask(projectId, { script: "true", serverIds: [installed.id] }, context);
+  const offline: Exec = async () => ({ code: 255, output: "ssh: connect to host 192.168.77.92 port 22: No route to host\n", timedOut: false });
+  assert.equal((await runTask(unreachable.id, offline)).targets[0].status, "unreachable");
+  const slow = createTask(projectId, { script: "sleep 999", serverIds: [installed.id], timeoutSec: 10 }, context);
+  const hang: Exec = async (_command, _args, stdin) => (stdin ? { code: null, output: "", timedOut: true } : { code: 0, output: "", timedOut: false });
+  assert.equal((await runTask(slow.id, hang)).targets[0].status, "timeout");
 });

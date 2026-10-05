@@ -26,6 +26,9 @@ export function ensureDataDirs(): void {
     "tftp",
     "diag",
     "dnsmasq",
+    "ssh",
+    "tasks",
+    "files",
   ]) {
     fs.mkdirSync(path.join(dataDir(), rel), { recursive: true });
   }
@@ -105,4 +108,16 @@ export function leasePath(): string {
 
 export function dnsmasqConfPath(): string {
   return path.join(dataDir(), "dnsmasq", "dnsmasq.conf");
+}
+
+export function sshKeyPath(): string {
+  return path.join(dataDir(), "ssh", "id_ed25519");
+}
+
+export function taskPath(id: string): string {
+  return path.join(dataDir(), "tasks", `${id}.json`);
+}
+
+export function fileDir(id: string): string {
+  return path.join(dataDir(), "files", id);
 }

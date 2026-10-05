@@ -5,8 +5,9 @@ import { ProfileManager } from "@/components/profile-manager";
 import { ProjectDhcpForm } from "@/components/project-dhcp-form";
 import { ProjectServerImport } from "@/components/project-server-import";
 import { ProjectServerList } from "@/components/project-server-list";
+import { ProjectTaskRunner } from "@/components/project-task-runner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { getProject, getServerImportReport, listImages, listProfiles, listServers, publicProfile, publicServer } from "@/lib/store";
+import { getProject, getServerImportReport, listFiles, listImages, listProfiles, listServers, listTasks, publicProfile, publicServer } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
@@ -56,6 +57,19 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
         <CardContent className="grid gap-4">
           <ProjectServerImport projectId={project.id} enabled={project.enabled} />
           <ProjectServerList rows={servers} report={getServerImportReport(project.id)} />
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>批量任务</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ProjectTaskRunner
+            projectId={project.id}
+            servers={servers.map((row) => ({ id: row.id, sn: row.sn, osName: row.osName, installed: row.installed }))}
+            files={listFiles()}
+            tasks={listTasks(project.id).slice(0, 10)}
+          />
         </CardContent>
       </Card>
     </div>

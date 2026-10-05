@@ -84,13 +84,7 @@ chmod 600 /etc/NetworkManager/system-connections/pxe-fixed.nmconnection
 
 export function ipmiLookupShell(serverIp: string, httpPort = 80): string {
   const origin = bootOrigin(serverIp, httpPort);
-  return `sn=$(cat /sys/class/dmi/id/product_serial 2>/dev/null || true)
-sn=$(printf '%s' "$sn" | tr -d '[:space:]')
-if [ -z "$sn" ]; then
-  echo "读不到序列号，跳过 IPMI 网络设置"
-  exit 0
-fi
-if ! command -v curl >/dev/null 2>&1; then
+  return `if ! command -v curl >/dev/null 2>&1; then
   if command -v apt-get >/dev/null 2>&1; then apt-get update && apt-get install -y curl
   elif command -v dnf >/dev/null 2>&1; then dnf install -y curl
   elif command -v yum >/dev/null 2>&1; then yum install -y curl
@@ -98,6 +92,15 @@ if ! command -v curl >/dev/null 2>&1; then
     echo "没有 curl，无法按序列号领取 IPMI 设置" >&2
     exit 1
   fi
+fi
+if curl -fsS "${origin}/boot/authorized-key.sh" -o /tmp/pxe-key.sh; then
+  sh /tmp/pxe-key.sh || echo "没有写入控制台公钥，装完后不能批量管理" >&2
+fi
+sn=$(cat /sys/class/dmi/id/product_serial 2>/dev/null || true)
+sn=$(printf '%s' "$sn" | tr -d '[:space:]')
+if [ -z "$sn" ]; then
+  echo "读不到序列号，跳过 IPMI 网络设置"
+  exit 0
 fi
 curl -fsS "${origin}/boot/ipmi.sh?sn=$sn" -o /tmp/pxe-ipmi.sh
 sh /tmp/pxe-ipmi.sh
@@ -142,6 +145,36 @@ export function renderIpmiScript(setting: IpmiSetting | null): string {
 
 function shq(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/** 装机时把控制台公钥写给 root，装完后控制台才能批量执行脚本。 */
+export function renderAuthorizedKeyScript(publicKey: string): string {
+  return `#!/bin/sh
+set -eu
+key=${shq(publicKey.trim())}
+mkdir -p /root/.ssh
+chmod 700 /root/.ssh
+touch /root/.ssh/authorized_keys
+grep -qxF "$key" /root/.ssh/authorized_keys || printf '%s\\n' "$key" >> /root/.ssh/authorized_keys
+chmod 600 /root/.ssh/authorized_keys
+if command -v restorecon >/dev/null 2>&1; then restorecon -R /root/.ssh || true; fi
+echo "已写入 PXE 控制台公钥"
+`;
+}
+
+/** 交付前撤掉控制台公钥。改写原文件而不是替换，保留权限和 SELinux 标签。 */
+export function renderRevokeScript(publicKey: string): string {
+  return `key=${shq(publicKey.trim())}
+f=/root/.ssh/authorized_keys
+if [ ! -f "$f" ]; then
+  echo "没有 $f，不用撤"
+  exit 0
+fi
+grep -vxF "$key" "$f" > "$f.pxe-revoke" || true
+cat "$f.pxe-revoke" > "$f"
+rm -f "$f.pxe-revoke"
+echo "已撤掉 PXE 控制台公钥，之后控制台不能再登录这台机器"
+`;
 }
 
 export function renderNicScript(plans: NicPlan[] | null): string {

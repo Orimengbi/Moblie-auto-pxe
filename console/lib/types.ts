@@ -286,3 +286,45 @@ export const DEFAULT_STATE: ApplianceState = {
     firmware: true,
   },
 };
+
+export type TaskKind = "script" | "revoke";
+export type TaskStatus = "running" | "done";
+export type TaskTargetStatus = "pending" | "running" | "ok" | "failed" | "timeout" | "unreachable";
+export type TaskHostSource = "nic" | "fixed" | "lease" | "";
+
+export interface TaskTarget {
+  serverId: string;
+  sn: string;
+  host: string;
+  hostSource: TaskHostSource;
+  status: TaskTargetStatus;
+  exitCode: number | null;
+  output: string;
+  startedAt?: string;
+  finishedAt?: string;
+}
+
+/** 装完系统后，控制台用自己的 SSH 密钥对一批机器执行同一段脚本。 */
+export interface RemoteTask {
+  id: string;
+  projectId: string;
+  kind: TaskKind;
+  name: string;
+  script: string;
+  fileIds: string[];
+  concurrency: number;
+  timeoutSec: number;
+  status: TaskStatus;
+  runnerPid?: number;
+  targets: TaskTarget[];
+  createdAt: string;
+  finishedAt?: string;
+}
+
+/** 上传给批量任务用的文件，例如驱动包。执行前用 scp 推到目标机。 */
+export interface RemoteFile {
+  id: string;
+  name: string;
+  size: number;
+  createdAt: string;
+}

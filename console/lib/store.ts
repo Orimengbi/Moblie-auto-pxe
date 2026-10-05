@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { parseLeases, renderBootIpxe, renderDnsmasq } from "./dnsmasq.ts";
 import { bootFromPxe, changeIpmiAccount, defaultIpmiExec, probeIpmi, setIpmiLan, type IpmiExec } from "./ipmi-remote.ts";
 import type { PlanCells } from "./plan-sheet.ts";
@@ -29,6 +31,7 @@ import {
   dataDir,
   diagDir,
   dnsmasqConfPath,
+  fileDir,
   ensureDataDirs,
   imageDir,
   incomingDir,
@@ -45,6 +48,7 @@ import {
   scriptBodyPath,
   scriptMetaPath,
   statePath,
+  taskPath,
   tftpDir,
 } from "./paths.ts";
 import {
@@ -67,6 +71,8 @@ import {
   type Project,
   type ProjectDhcp,
   type ProjectFixed,
+  type RemoteFile,
+  type RemoteTask,
   type Report,
   type ServerImportReport,
   type ServerRow,
@@ -1493,4 +1499,104 @@ export function readLeasesText(): string {
 export function publicProfile(profile: Profile): Omit<Profile, "passwordHash"> & { hasPassword: boolean } {
   const { passwordHash, ...rest } = profile;
   return { ...rest, hasPassword: Boolean(passwordHash) };
+}
+
+export function listTasks(projectId: string): RemoteTask[] {
+  ensureDataDirs();
+  return listJson<RemoteTask>(path.join(dataDir(), "tasks"))
+    .filter((task) => task.projectId === projectId)
+    .map(hydrateTask)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+export function getTask(id: string): RemoteTask | null {
+  if (!/^[a-zA-Z0-9_-]{8,80}$/.test(id)) return null;
+  const task = readJson<RemoteTask>(taskPath(id));
+  return task ? hydrateTask(task) : null;
+}
+
+/** 只由创建任务的请求和执行任务的那个进程写，所以不进锁。 */
+export function writeTask(task: RemoteTask): void {
+  writeJson(taskPath(task.id), task);
+}
+
+function runnerAlive(task: RemoteTask): boolean {
+  const pid = task.runnerPid;
+  // 进程刚拉起来、还没写回自己的 pid 时，先当它活着。
+  if (!pid) return Date.now() - Date.parse(task.createdAt) < 60000;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function hydrateTask(task: RemoteTask): RemoteTask {
+  if (task.status !== "running" || runnerAlive(task)) return task;
+  return {
+    ...task,
+    status: "done",
+    targets: task.targets.map((target) =>
+      target.status === "pending" || target.status === "running"
+        ? { ...target, status: "failed", output: `${target.output}\n执行任务的进程已经退出（控制台重启过？），这台没有执行完`.trim() }
+        : target,
+    ),
+  };
+}
+
+export function listFiles(): RemoteFile[] {
+  ensureDataDirs();
+  const root = path.join(dataDir(), "files");
+  return fs
+    .readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => readJson<RemoteFile>(path.join(root, entry.name, "meta.json")))
+    .filter((item): item is RemoteFile => item !== null)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+export function getFile(id: string): RemoteFile | null {
+  if (!/^[a-zA-Z0-9_-]{8,80}$/.test(id)) return null;
+  return readJson<RemoteFile>(path.join(fileDir(id), "meta.json"));
+}
+
+export function filePayloadPath(file: RemoteFile): string {
+  return path.join(fileDir(file.id), file.name);
+}
+
+export function safeFileName(raw: string): string {
+  const base = path.basename(raw.trim()).replace(/[^A-Za-z0-9._+-]/g, "_").replace(/^\.+/, "");
+  if (!base || base.length > 120) throw new Error("文件名需要 1 到 120 个字符");
+  return base;
+}
+
+export async function saveFile(rawName: string, body: ReadableStream<Uint8Array> | Readable): Promise<RemoteFile> {
+  ensureDataDirs();
+  const name = safeFileName(rawName);
+  if (listFiles().some((item) => item.name === name)) throw new Error(`已经有一个叫 ${name} 的文件，先删掉旧的再传`);
+  const id = crypto.randomUUID();
+  const dir = fileDir(id);
+  fs.mkdirSync(dir, { recursive: true });
+  const target = path.join(dir, name);
+  try {
+    const source = body instanceof Readable ? body : Readable.fromWeb(body as import("node:stream/web").ReadableStream);
+    await pipeline(source, fs.createWriteStream(target, { mode: 0o644 }));
+  } catch (error) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    throw error;
+  }
+  const size = fs.statSync(target).size;
+  if (!size) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    throw new Error("文件是空的");
+  }
+  const file: RemoteFile = { id, name, size, createdAt: new Date().toISOString() };
+  writeJson(path.join(dir, "meta.json"), file);
+  return file;
+}
+
+export async function deleteFile(id: string): Promise<void> {
+  if (!getFile(id)) throw new Error("文件不存在");
+  fs.rmSync(fileDir(id), { recursive: true, force: true });
 }
