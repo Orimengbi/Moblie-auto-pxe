@@ -191,12 +191,21 @@ export function listImages(): ImageRecord[] {
     .filter((entry) => entry.isDirectory())
     .map((entry) => readJson<ImageRecord>(path.join(root, entry.name, "meta.json")))
     .filter((item): item is ImageRecord => item !== null)
+    .map(withImageSize)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+/** 早先导入的镜像没有记大小，按 ISO 文件补上。 */
+function withImageSize(image: ImageRecord): ImageRecord {
+  if (image.size) return image;
+  const iso = path.join(imageDir(image.id), "source.iso");
+  return fs.existsSync(iso) ? { ...image, size: fs.statSync(iso).size } : image;
 }
 
 export function getImage(id: string): ImageRecord | null {
   if (!/^[a-zA-Z0-9_-]{8,80}$/.test(id)) return null;
-  return readJson<ImageRecord>(path.join(imageDir(id), "meta.json"));
+  const image = readJson<ImageRecord>(path.join(imageDir(id), "meta.json"));
+  return image ? withImageSize(image) : null;
 }
 
 export function writeImage(record: ImageRecord): void {
@@ -236,6 +245,7 @@ export async function createImageFromIncoming(input: NewImageInput): Promise<Ima
       filename,
       status: "extracting",
       hasTree: false,
+      size: fs.statSync(path.join(dir, "source.iso")).size,
       createdAt: new Date().toISOString(),
     };
     writeImage(record);

@@ -9,16 +9,36 @@ import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { FAMILY_LABEL, type ImageRecord } from "@/lib/types";
 
-export function ImageManager({ images, incoming }: { images: ImageRecord[]; incoming: string[] }) {
+export interface PendingUpload {
+  id: string;
+  filename: string;
+  name: string;
+  size: number;
+  offset: number;
+  fingerprint: string;
+  updatedAt: string;
+}
+
+const CHUNK = 4 * 1024 * 1024;
+const RETRIES = 5;
+
+function fingerprintOf(file: File): string {
+  return `${file.name}:${file.size}:${file.lastModified}`;
+}
+
+function percent(offset: number, size: number): number {
+  return size ? Math.floor((offset / size) * 100) : 0;
+}
+
+export function ImageManager({ images, uploads }: { images: ImageRecord[]; uploads: PendingUpload[] }) {
   const router = useRouter();
-  const [name, setName] = useState("");
-  const [filename, setFilename] = useState(incoming[0] || "");
   const [uploadName, setUploadName] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [progress, setProgress] = useState<{ offset: number; size: number } | null>(null);
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
   const extracting = images.some((image) => image.status === "extracting");
+  const resumable = file ? uploads.find((item) => item.fingerprint === fingerprintOf(file) && item.size === file.size) : undefined;
 
   useEffect(() => {
     if (!extracting) return;
@@ -27,74 +47,79 @@ export function ImageManager({ images, incoming }: { images: ImageRecord[]; inco
   }, [extracting, router]);
 
   useEffect(() => {
-    if (!filename && incoming[0]) setFilename(incoming[0]);
-  }, [filename, incoming]);
+    if (!pending) return;
+    const warn = (event: BeforeUnloadEvent) => event.preventDefault();
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [pending]);
 
-  async function importIncoming() {
-    setPending(true);
-    setError("");
-    const response = await fetch("/api/images", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ filename, name }),
-    });
-    const body = await response.json();
-    setPending(false);
-    if (!response.ok) {
-      setError(body.error || "导入失败");
-      return;
+  /** 发一段。网络断开或控制台 5xx 时等一会再试；服务器说位置不对时按它的位置继续。 */
+  async function sendChunk(id: string, selected: File, offset: number): Promise<{ offset: number; done: boolean }> {
+    for (let attempt = 0; attempt < RETRIES; attempt += 1) {
+      if (attempt) await new Promise((resolve) => setTimeout(resolve, attempt * 2000));
+      let response: Response;
+      try {
+        response = await fetch(`/api/images/uploads/${id}`, {
+          method: "PATCH",
+          headers: { "upload-offset": String(offset), "content-type": "application/octet-stream" },
+          body: selected.slice(offset, Math.min(offset + CHUNK, selected.size)),
+        });
+      } catch {
+        continue;
+      }
+      const body = await response.json().catch(() => ({}));
+      if (response.status === 409 && Number.isInteger(body.offset)) return { offset: body.offset, done: false };
+      if (response.status >= 500) continue;
+      if (!response.ok) throw new Error(body.error || "上传中断");
+      return { offset: body.offset, done: Boolean(body.image) };
     }
-    setName("");
-    router.refresh();
+    throw new Error(`网络断开，重试 ${RETRIES} 次都没成功`);
   }
 
   async function uploadSelected() {
     if (!file) return;
-    const fingerprint = `${file.name}:${file.size}:${file.lastModified}`;
+    const selected = file;
     setPending(true);
     setError("");
-    setProgress({ offset: 0, size: file.size });
+    setProgress({ offset: resumable?.offset || 0, size: selected.size });
     try {
       const opened = await fetch("/api/images/uploads", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ filename: file.name, size: file.size, name: uploadName, fingerprint }),
+        body: JSON.stringify({ filename: selected.name, size: selected.size, name: uploadName, fingerprint: fingerprintOf(selected) }),
       });
       const session = await opened.json();
       if (!opened.ok) throw new Error(session.error || "无法开始上传");
-      localStorage.setItem(`pxe-iso:${fingerprint}`, session.id);
       let offset = Number(session.offset) || 0;
-      const chunkSize = 4 * 1024 * 1024;
-      while (offset < file.size) {
-        const end = Math.min(offset + chunkSize, file.size);
-        const response = await fetch(`/api/images/uploads/${session.id}`, {
-          method: "PATCH",
-          headers: { "upload-offset": String(offset), "content-type": "application/octet-stream" },
-          body: file.slice(offset, end),
-        });
-        const body = await response.json();
-        if (response.status === 409 && Number.isInteger(body.offset)) {
-          offset = body.offset;
-          setProgress({ offset, size: file.size });
-          continue;
-        }
-        if (!response.ok) throw new Error(body.error || "上传中断");
-        offset = body.offset;
-        setProgress({ offset, size: file.size });
-        if (body.image) {
-          localStorage.removeItem(`pxe-iso:${fingerprint}`);
-          setFile(null);
-          setUploadName("");
-          setProgress(null);
-          router.refresh();
-          return;
-        }
+      setProgress({ offset, size: selected.size });
+      while (offset < selected.size) {
+        const sent = await sendChunk(session.id, selected, offset);
+        offset = sent.offset;
+        setProgress({ offset, size: selected.size });
+        if (sent.done) break;
       }
+      setFile(null);
+      setUploadName("");
+      setProgress(null);
+      router.refresh();
     } catch (uploadError) {
-      setError(uploadError instanceof Error ? `${uploadError.message}。重新选择同一个 ISO 会从上次的位置继续。` : "上传中断。重新选择同一个 ISO 会从上次的位置继续。");
+      const message = uploadError instanceof Error ? uploadError.message : "上传中断";
+      setError(`${message}。已经传上去的部分会保留，重新选择同一个 ISO 会从断开的位置继续。`);
+      router.refresh();
     } finally {
       setPending(false);
     }
+  }
+
+  async function discard(id: string) {
+    if (!window.confirm("放弃这个没传完的 ISO？已经传上去的部分会删除。")) return;
+    const response = await fetch(`/api/images/uploads/${id}`, { method: "DELETE" });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      setError(body.error || "删除失败");
+      return;
+    }
+    router.refresh();
   }
 
   async function remove(id: string) {
@@ -110,76 +135,77 @@ export function ImageManager({ images, incoming }: { images: ImageRecord[]; inco
 
   return (
     <div className="grid gap-6">
-      <div className="grid gap-6 lg:grid-cols-2">
-        <section className="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
-          <h2 className="font-medium">从 incoming 导入</h2>
-          <p className="mt-1 text-sm text-muted-foreground">把 ISO 放到小主机的 data/incoming。大文件用这个方式，不经过浏览器。</p>
-          {incoming.length === 0 ? (
-            <p className="mt-4 text-sm text-muted-foreground">incoming 里还没有 ISO。</p>
-          ) : (
-            <div className="mt-4 grid gap-3">
-              <div className="grid gap-1.5">
-                <Label htmlFor="iso-file">ISO 文件</Label>
-                <select
-                  id="iso-file"
-                  className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm"
-                  value={filename}
-                  onChange={(event) => setFilename(event.target.value)}
-                >
-                  {incoming.map((item) => (
-                    <option key={item} value={item}>
-                      {item}
-                    </option>
-                  ))}
-                </select>
+      <section className="grid gap-3 rounded-xl bg-card p-4 ring-1 ring-foreground/10">
+        <h2 className="font-medium">上传 ISO</h2>
+        <p className="text-sm text-muted-foreground">
+          支持 Ubuntu、Debian、Rocky Linux、AlmaLinux 的 x86_64 安装 ISO。按 4MB 一段上传，网络抖动会自动重试；断开后重新选择同一个文件，会从断开的位置接着传，传完自动识别抽取。
+        </p>
+        <div className="grid gap-3 sm:max-w-md">
+          <div className="grid gap-1.5">
+            <Label htmlFor="upload-name">显示名称</Label>
+            <Input id="upload-name" value={uploadName} placeholder="可留空，默认用文件名" onChange={(event) => setUploadName(event.target.value)} />
+          </div>
+          <Input
+            type="file"
+            accept=".iso"
+            disabled={pending}
+            onChange={(event) => {
+              setFile(event.target.files?.[0] || null);
+              setProgress(null);
+              setError("");
+            }}
+          />
+          {resumable && !pending ? (
+            <p className="text-sm text-muted-foreground">
+              这个文件上次传到 {formatBytes(resumable.offset)}（{percent(resumable.offset, resumable.size)}%），会从这里继续。
+            </p>
+          ) : null}
+          {progress ? (
+            <div className="grid gap-1">
+              <div className="h-2 overflow-hidden rounded-full bg-muted">
+                <div className="h-full bg-primary transition-all" style={{ width: `${percent(progress.offset, progress.size)}%` }} />
               </div>
-              <div className="grid gap-1.5">
-                <Label htmlFor="iso-name">显示名称</Label>
-                <Input id="iso-name" value={name} placeholder="可留空，默认用文件名" onChange={(event) => setName(event.target.value)} />
-              </div>
-              <Button type="button" disabled={pending || !filename} onClick={importIncoming}>
-                {pending ? "处理中" : "开始识别并抽取"}
+              <p className="text-sm text-muted-foreground">
+                已上传 {formatBytes(progress.offset)} / {formatBytes(progress.size)}（{percent(progress.offset, progress.size)}%）
+              </p>
+            </div>
+          ) : null}
+          <Button type="button" className="w-fit" disabled={pending || !file} onClick={uploadSelected}>
+            {pending ? "上传中，不要关闭页面" : resumable ? `从 ${percent(resumable.offset, resumable.size)}% 继续上传` : "上传并抽取"}
+          </Button>
+        </div>
+        {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      </section>
+
+      {uploads.length ? (
+        <section className="grid gap-2 rounded-xl bg-card p-4 ring-1 ring-foreground/10">
+          <h2 className="font-medium">没传完的上传</h2>
+          <p className="text-sm text-muted-foreground">在上面重新选择同一个文件就会接着传。</p>
+          {uploads.map((item) => (
+            <div key={item.id} className="flex flex-wrap items-center gap-3 text-sm">
+              <span className="font-medium">{item.name || item.filename}</span>
+              <span className="text-muted-foreground">
+                {formatBytes(item.offset)} / {formatBytes(item.size)}（{percent(item.offset, item.size)}%）
+              </span>
+              <span className="text-xs text-muted-foreground">最后更新 {new Date(item.updatedAt).toLocaleString("zh-CN")}</span>
+              <Button type="button" variant="ghost" size="sm" disabled={pending} onClick={() => discard(item.id)}>
+                放弃
               </Button>
             </div>
-          )}
+          ))}
         </section>
-        <section className="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
-          <h2 className="font-medium">上传 ISO</h2>
-          <p className="mt-1 text-sm text-muted-foreground">按 4MB 一段上传。中断后重新选择同一个文件，会从上次传到的位置继续，然后自动识别抽取。</p>
-          <div className="mt-4 grid gap-3">
-            <div className="grid gap-1.5">
-              <Label htmlFor="upload-name">显示名称</Label>
-              <Input id="upload-name" value={uploadName} placeholder="可留空" onChange={(event) => setUploadName(event.target.value)} />
-            </div>
-            <Input
-              type="file"
-              accept=".iso"
-              onChange={(event) => {
-                setFile(event.target.files?.[0] || null);
-                setProgress(null);
-              }}
-            />
-            {progress ? (
-              <p className="text-sm text-muted-foreground">
-                已上传 {formatBytes(progress.offset)} / {formatBytes(progress.size)}（{progress.size ? Math.floor((progress.offset / progress.size) * 100) : 0}%）
-              </p>
-            ) : null}
-            <Button type="button" variant="secondary" disabled={pending || !file} onClick={uploadSelected}>
-              {pending ? "上传中" : progress && progress.offset > 0 ? "继续上传" : "上传并抽取"}
-            </Button>
-          </div>
-        </section>
-      </div>
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      ) : null}
+
       {images.length === 0 ? (
-        <p className="text-sm text-muted-foreground">还没有镜像。导入 Ubuntu、Debian、Rocky Linux 或 AlmaLinux 的 x86_64 安装 ISO 后，这里会出现内核和应答入口。</p>
+        <p className="text-sm text-muted-foreground">还没有镜像。上传安装 ISO 后会出现在这里。</p>
       ) : (
         <div className="overflow-x-auto rounded-xl bg-card ring-1 ring-foreground/10">
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>名称</TableHead>
-                <TableHead>家族</TableHead>
+                <TableHead>镜像名称</TableHead>
+                <TableHead>系统版本</TableHead>
+                <TableHead>大小</TableHead>
                 <TableHead>状态</TableHead>
                 <TableHead />
               </TableRow>
@@ -191,7 +217,19 @@ export function ImageManager({ images, incoming }: { images: ImageRecord[]; inco
                     <div className="font-medium">{image.name}</div>
                     <div className="text-xs text-muted-foreground">{image.filename}</div>
                   </TableCell>
-                  <TableCell>{image.status === "ready" ? `${FAMILY_LABEL[image.family]} ${image.version}` : image.status === "error" ? "未识别" : "识别中"}</TableCell>
+                  <TableCell>
+                    {image.status === "ready" ? (
+                      <>
+                        <div>{FAMILY_LABEL[image.family]}</div>
+                        <div className="max-w-sm text-xs whitespace-normal text-muted-foreground">{image.version}</div>
+                      </>
+                    ) : image.status === "error" ? (
+                      "未识别"
+                    ) : (
+                      "识别中"
+                    )}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap">{image.size ? formatBytes(image.size) : "—"}</TableCell>
                   <TableCell>
                     <Badge variant={image.status === "ready" ? "secondary" : image.status === "error" ? "destructive" : "outline"}>
                       {image.status === "ready" ? "可安装" : image.status === "error" ? "失败" : "抽取中"}
@@ -214,6 +252,7 @@ export function ImageManager({ images, incoming }: { images: ImageRecord[]; inco
 }
 
 function formatBytes(value: number): string {
-  if (value < 1024 * 1024) return `${Math.max(1, Math.round(value / 1024))} KB`;
-  return `${(value / 1024 / 1024).toFixed(1)} MB`;
+  if (value >= 1024 * 1024 * 1024) return `${(value / 1024 / 1024 / 1024).toFixed(2)} GB`;
+  if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(value / 1024))} KB`;
 }

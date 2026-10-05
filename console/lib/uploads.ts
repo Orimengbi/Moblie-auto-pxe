@@ -105,6 +105,11 @@ export function openUpload(input: { filename: string; size: number; name?: strin
   return session;
 }
 
+export function discardUpload(id: string): void {
+  if (!readSession(id)) throw new Error("上传不存在或已经完成");
+  fs.rmSync(uploadDir(id), { recursive: true, force: true });
+}
+
 export function uploadStatus(id: string): UploadSession {
   const session = readSession(id);
   if (!session) throw new Error("上传不存在或已经完成");

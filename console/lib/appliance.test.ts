@@ -13,7 +13,7 @@ import { parseIpmiUserList } from "./ipmi-remote.ts";
 import { parseServerTable } from "./server-sheet.ts";
 import { serialProbe } from "./boot.ts";
 import { createTask, resolveHost, runTask, type Exec } from "./remote.ts";
-import { UploadConflict, appendUpload, openUpload } from "./uploads.ts";
+import { UploadConflict, appendUpload, discardUpload, listUploadSessions, openUpload } from "./uploads.ts";
 import { applyHostname, normalizeMac } from "./net.ts";
 import {
   renderDebianPreseed,
@@ -480,7 +480,15 @@ test("iso upload resumes from the received offset", async () => {
   const done = await appendUpload(first.id, 3, Buffer.from("de"));
   assert.equal(done.image?.status, "extracting");
   assert.equal(done.image?.filename.endsWith(".iso"), true);
+  assert.equal(done.image?.size, 5);
+  assert.equal(listImages().find((image) => image.id === done.image?.id)?.size, 5);
   assert.equal(uploadGone(first.id), true);
+  const dropped = openUpload({ filename: "debian-mini.iso", size: 9, fingerprint: "debian-mini.iso:9:1" });
+  await appendUpload(dropped.id, 0, Buffer.from("abcd"));
+  assert.equal(listUploadSessions().find((item) => item.id === dropped.id)?.offset, 4);
+  discardUpload(dropped.id);
+  assert.equal(uploadGone(dropped.id), true);
+  assert.throws(() => discardUpload(dropped.id), /上传不存在/);
 });
 
 function uploadGone(id: string): boolean {

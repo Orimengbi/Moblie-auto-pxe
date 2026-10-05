@@ -1,6 +1,6 @@
 import { jsonError } from "@/lib/api";
 import { startExtract } from "@/lib/jobs";
-import { UploadConflict, appendUpload, uploadStatus } from "@/lib/uploads";
+import { UploadConflict, appendUpload, discardUpload, uploadStatus } from "@/lib/uploads";
 
 export const dynamic = "force-dynamic";
 
@@ -28,5 +28,15 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       return Response.json({ error: error.message, offset: error.offset }, { status: 409 });
     }
     return jsonError(error);
+  }
+}
+
+export async function DELETE(_: Request, context: { params: Promise<{ id: string }> }) {
+  try {
+    const { id } = await context.params;
+    discardUpload(id);
+    return Response.json({ ok: true });
+  } catch (error) {
+    return jsonError(error, 404);
   }
 }

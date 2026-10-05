@@ -25,6 +25,8 @@ export interface ImageRecord {
   kernelFile?: string;
   initrdFile?: string;
   hasTree: boolean;
+  /** ISO 的字节数。 */
+  size?: number;
   createdAt: string;
 }
 
