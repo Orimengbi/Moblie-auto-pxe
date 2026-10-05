@@ -8,8 +8,6 @@ const LINKS = [
   { href: "/", label: "总览" },
   { href: "/projects", label: "项目" },
   { href: "/images", label: "镜像" },
-  { href: "/menu", label: "启动菜单" },
-  { href: "/machines", label: "机器" },
 ];
 
 export function Nav() {

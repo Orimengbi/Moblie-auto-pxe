@@ -1,20 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import type { InstallState, RemoteFile, RemoteTask, TaskHostSource, TaskTargetStatus } from "@/lib/types";
-
-export interface TaskServer {
-  id: string;
-  sn: string;
-  osName: string;
-  installed: InstallState;
-}
+import type { RemoteFile, RemoteTask, TaskHostSource, TaskTargetStatus } from "@/lib/types";
 
 const TARGET: Record<TaskTargetStatus, string> = {
   pending: "排队",
@@ -25,7 +18,8 @@ const TARGET: Record<TaskTargetStatus, string> = {
   unreachable: "连不上",
 };
 
-const SOURCE: Record<TaskHostSource, string> = {
+export const HOST_SOURCE: Record<TaskHostSource, string> = {
+  sheet: "服务器表",
   nic: "网卡规划",
   fixed: "固定 IP",
   lease: "DHCP 租约",
@@ -80,20 +74,23 @@ function formatSize(bytes: number): string {
   return `${Math.max(1, Math.round(bytes / 1024))} KB`;
 }
 
+/** 机器在服务器列表里勾选，这里只管脚本、文件和执行结果。 */
 export function ProjectTaskRunner({
   projectId,
-  servers,
+  picked,
+  installed,
+  onPick,
   files,
   tasks,
 }: {
   projectId: string;
-  servers: TaskServer[];
+  picked: string[];
+  installed: string[];
+  onPick: (ids: string[]) => void;
   files: RemoteFile[];
   tasks: RemoteTask[];
 }) {
   const router = useRouter();
-  const installed = useMemo(() => servers.filter((row) => row.installed === "yes").map((row) => row.id), [servers]);
-  const [picked, setPicked] = useState<string[]>([]);
   const [fileIds, setFileIds] = useState<string[]>([]);
   const [name, setName] = useState("");
   const [script, setScript] = useState("");
@@ -179,34 +176,8 @@ export function ProjectTaskRunner({
     <div className="grid gap-6">
       <form onSubmit={run} className="grid gap-4">
         <p className="text-sm text-muted-foreground">
-          装机时会把小主机的公钥写给 root。装完以后，可以在这里选几台机器，用 SSH 执行同一段脚本。地址按网卡规划、固定 IP、DHCP 租约的顺序找。上传的文件先推到目标机，脚本里用 <code>$PXE_FILES</code> 访问，执行完就删掉。
+          在上面的列表里勾选机器，用 SSH 以 root 执行同一段脚本。装机时已经把小主机的公钥写给 root。上传的文件先推到目标机，脚本里用 <code>$PXE_FILES</code> 访问，执行完就删掉。
         </p>
-
-        <div className="grid gap-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <Label>机器</Label>
-            <Button type="button" size="xs" variant="outline" onClick={() => setPicked(installed)}>
-              选中已安装的 {installed.length} 台
-            </Button>
-            <Button type="button" size="xs" variant="ghost" onClick={() => setPicked([])}>
-              清空
-            </Button>
-            <span className="text-xs text-muted-foreground">已选 {picked.length} 台</span>
-          </div>
-          {servers.length === 0 ? (
-            <p className="text-sm text-muted-foreground">先在上面上传服务器表。</p>
-          ) : (
-            <div className="grid max-h-56 gap-1 overflow-y-auto rounded-lg border p-2 sm:grid-cols-2 lg:grid-cols-3">
-              {servers.map((row) => (
-                <label key={row.id} className="flex items-center gap-2 text-sm">
-                  <input type="checkbox" checked={picked.includes(row.id)} onChange={() => setPicked((list) => toggle(list, row.id))} />
-                  <span className="font-mono text-xs">{row.sn}</span>
-                  <span className="text-xs text-muted-foreground">{row.installed === "yes" ? row.osName || "已安装" : "未装完"}</span>
-                </label>
-              ))}
-            </div>
-          )}
-        </div>
 
         <div className="grid gap-2">
           <div className="flex flex-wrap items-center gap-2">
@@ -257,7 +228,7 @@ export function ProjectTaskRunner({
             <Input id="task-timeout" type="number" min={10} max={7200} value={timeoutSec} onChange={(event) => setTimeoutSec(event.target.value)} className="w-28" />
           </div>
           <Button type="submit" disabled={pending || !picked.length}>
-            {pending ? "正在创建" : `对 ${picked.length} 台执行`}
+            {pending ? "正在创建" : picked.length ? `对选中的 ${picked.length} 台执行` : "先在列表里勾选机器"}
           </Button>
         </div>
         {error ? <p className="text-sm text-destructive">{error}</p> : null}
@@ -295,7 +266,7 @@ export function ProjectTaskRunner({
                       setName(task.name);
                       setFileIds(task.fileIds.filter((id) => files.some((file) => file.id === id)));
                     }
-                    setPicked(task.targets.filter((target) => target.status !== "ok").map((target) => target.serverId));
+                    onPick(task.targets.filter((target) => target.status !== "ok").map((target) => target.serverId));
                   }}
                 >
                   选中没成功的机器
@@ -310,7 +281,7 @@ export function ProjectTaskRunner({
                     <span className="font-mono text-xs">{target.sn}</span>
                     <span className="text-xs text-muted-foreground">
                       {target.host || "无地址"}
-                      {target.hostSource ? `（${SOURCE[target.hostSource]}）` : ""}
+                      {target.hostSource ? `（${HOST_SOURCE[target.hostSource]}）` : ""}
                       {target.exitCode !== null ? ` · 退出码 ${target.exitCode}` : ""}
                     </span>
                   </summary>

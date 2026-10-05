@@ -5,8 +5,8 @@ import { ProfileManager } from "@/components/profile-manager";
 import { ProjectDhcpForm } from "@/components/project-dhcp-form";
 import { ProjectServerImport } from "@/components/project-server-import";
 import { ProjectServerList } from "@/components/project-server-list";
-import { ProjectTaskRunner } from "@/components/project-task-runner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { hostContext, resolveHost } from "@/lib/remote";
 import { getProject, getServerImportReport, listFiles, listImages, listProfiles, listServers, listTasks, publicProfile, publicServer } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
@@ -18,9 +18,13 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
   const profiles = listProfiles()
     .filter((profile) => profile.projectId === project.id)
     .map(publicProfile);
+  const hosts = hostContext();
   const servers = listServers()
     .filter((row) => row.projectId === project.id)
-    .map(publicServer);
+    .map((row) => {
+      const found = resolveHost(row, hosts);
+      return { ...publicServer(row), host: found.host, hostSource: found.source };
+    });
   return (
     <div className="grid gap-4">
       <div>
@@ -56,17 +60,10 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
         </CardHeader>
         <CardContent className="grid gap-4">
           <ProjectServerImport projectId={project.id} enabled={project.enabled} />
-          <ProjectServerList rows={servers} report={getServerImportReport(project.id)} />
-        </CardContent>
-      </Card>
-      <Card>
-        <CardHeader>
-          <CardTitle>批量任务</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <ProjectTaskRunner
+          <ProjectServerList
             projectId={project.id}
-            servers={servers.map((row) => ({ id: row.id, sn: row.sn, osName: row.osName, installed: row.installed }))}
+            rows={servers}
+            report={getServerImportReport(project.id)}
             files={listFiles()}
             tasks={listTasks(project.id).slice(0, 10)}
           />

@@ -11,7 +11,7 @@ import { mergeMachineRows } from "./machine-rows.ts";
 import { parsePlanTable } from "./plan-sheet.ts";
 import { parseIpmiUserList } from "./ipmi-remote.ts";
 import { parseServerTable } from "./server-sheet.ts";
-import { serialProbe } from "./boot.ts";
+import { menuFor, serialProbe } from "./boot.ts";
 import { createTask, resolveHost, runTask, type Exec } from "./remote.ts";
 import { UploadConflict, appendUpload, discardUpload, listUploadSessions, openUpload } from "./uploads.ts";
 import { applyHostname, normalizeMac } from "./net.ts";
@@ -26,7 +26,7 @@ import {
   renderNicScript,
   renderUbuntuAutoinstall,
 } from "./render.ts";
-import { bindServerBoot, createIpmi, getTask, listServers, saveFile, createNic, createProfile, createProject, createReport, customizationForMac, getIpmiBySn, getMachine, getProject, getState, importProjectPlan, importServerSheet, listImages, listNicsBySn, listProjects, publicServer, reconcileServers, saveMachine, saveMachineFact, saveNetwork, setProjectEnabled, updateProjectNetwork } from "./store.ts";
+import { bindServerBoot, createIpmi, deleteProject, getTask, listMachines, listServers, markServerInstalled, requestReinstall, saveFile, createNic, createProfile, createProject, createReport, customizationForMac, getIpmiBySn, getMachine, getProject, getState, importProjectPlan, importServerSheet, listImages, listNicsBySn, listProjects, publicServer, reconcileServers, saveMachine, saveMachineFact, saveNetwork, setProjectEnabled, updateProjectNetwork } from "./store.ts";
 import { DEFAULT_STATE, type ImageRecord, type Profile } from "./types.ts";
 
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pxe-test-"));
@@ -595,4 +595,50 @@ test("batch tasks find each host and record every result", async () => {
   const slow = createTask(projectId, { script: "sleep 999", serverIds: [installed.id], timeoutSec: 10 }, context);
   const hang: Exec = async (_command, _args, stdin) => (stdin ? { code: null, output: "", timedOut: true } : { code: 0, output: "", timedOut: false });
   assert.equal((await runTask(slow.id, hang)).targets[0].status, "timeout");
+});
+
+test("an installed server boots from disk until someone asks to reinstall", async () => {
+  const projectId = listProjects().find((item) => item.name === "机房A")?.id || "";
+  const mac = "aa:bb:cc:dd:ee:92";
+  assert.equal(getMachine(mac)?.action, "install");
+  await markServerInstalled("SN-SRV9");
+  assert.equal(getMachine(mac)?.action, "menu");
+  assert.equal(getMachine(mac)?.profileId, undefined);
+  const again = await bindServerBoot("SN-SRV9", mac);
+  assert.equal(again?.installed, "yes");
+  assert.equal(getMachine(mac)?.action, "menu");
+  assert.match(await menuFor(mac, "SN-SRV9"), /choose --default local/);
+
+  const row = listServers().find((item) => item.projectId === projectId && item.sn === "SN-SRV9");
+  assert.ok(row);
+  const marked = await requestReinstall(projectId, row.id);
+  assert.equal(marked.installed, "no");
+  assert.equal(marked.stage, "waiting");
+  await bindServerBoot("SN-SRV9", mac);
+  assert.equal(getMachine(mac)?.action, "install");
+  await assert.rejects(requestReinstall(projectId, "missing-row-id"), /不在这个项目里/);
+});
+
+test("the server sheet can give each system address for batch tasks", async () => {
+  const parsed = parseServerTable([
+    ["序列号", "IPMI MAC", "原用户", "原密码", "目标用户", "目标密码", "安装系统", "系统地址"],
+    ["sn-os 1", "aa:bb:cc:dd:ee:a1", "ADMIN", "old-pass", "ops", "new-pass", "机房 Ubuntu", "10.50.0.11"],
+    ["sn-os 2", "aa:bb:cc:dd:ee:a2", "ADMIN", "old-pass", "ops", "new-pass", "机房 Ubuntu", "10.50.0.300"],
+  ]);
+  assert.equal(parsed.records[0]?.cells.osAddress, "10.50.0.11");
+  const project = await createProject({ name: "机房 OS 地址" });
+  const imported = await importServerSheet(project.id, parsed.records);
+  assert.equal(imported.errors.length, 1);
+  assert.match(imported.errors[0].message, /系统地址/);
+  const row = listServers().find((item) => item.projectId === project.id && item.sn === "SN-OS1");
+  assert.equal(row?.osAddress, "10.50.0.11");
+  const lease = { expiry: 0, mac: "aa:bb:cc:dd:ee:f1", ip: "192.168.77.11", hostname: "", active: true };
+  assert.deepEqual(resolveHost({ ...row!, bootMac: lease.mac }, { nics: [], machines: [], leases: [lease], locals: [] }), { host: "10.50.0.11", source: "sheet" });
+
+  const task = createTask(project.id, { script: "true", serverIds: [row!.id] }, { nics: [], machines: [], leases: [], locals: [] });
+  assert.equal(task.targets[0].host, "10.50.0.11");
+  await saveMachine({ mac: "aa:bb:cc:dd:ee:f2", action: "menu", projectId: project.id });
+  await deleteProject(project.id);
+  assert.equal(listMachines().some((item) => item.projectId === project.id), false);
+  assert.equal(getTask(task.id), null);
 });

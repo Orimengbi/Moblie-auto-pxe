@@ -41,10 +41,11 @@ export interface HostContext {
 }
 
 /**
- * 找装好的系统现在的地址。先用和小主机同网段的规划网卡，再用固定 IP，
+ * 找装好的系统现在的地址。服务器表填了系统地址就用它；否则先用和小主机同网段的规划网卡，再用固定 IP，
  * 再用装机网的 DHCP 租约，最后才用需要走路由的规划网卡。
  */
-export function resolveHost(row: Pick<ServerRow, "projectId" | "sn" | "bootMac">, context: HostContext): { host: string; source: TaskHostSource } {
+export function resolveHost(row: Pick<ServerRow, "projectId" | "sn" | "bootMac" | "osAddress">, context: HostContext): { host: string; source: TaskHostSource } {
+  if (row.osAddress) return { host: row.osAddress, source: "sheet" };
   const nics = context.nics.filter((item) => item.projectId === row.projectId && item.sn === row.sn);
   const local = nics.find((nic) => context.locals.some((ip) => sameSubnet(ip, nic.address, nic.netmask)));
   if (local) return { host: local.address, source: "nic" };
@@ -109,7 +110,7 @@ export function createTask(projectId: string, input: TaskInput, context: HostCon
       hostSource: found.source,
       status: found.host ? "pending" : "unreachable",
       exitCode: null,
-      output: found.host ? "" : "找不到这台机器的地址：没有网卡规划、固定 IP，DHCP 租约里也没有它的装机网卡",
+      output: found.host ? "" : "找不到这台机器的地址：服务器表没填系统地址，DHCP 租约里也没有它的装机网卡",
     };
   });
   const task: RemoteTask = {

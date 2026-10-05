@@ -392,8 +392,11 @@ export async function updateProfile(id: string, input: ProfileInput): Promise<Pr
 export async function deleteProfile(id: string): Promise<void> {
   return withLock(() => {
     if (!getProfile(id)) throw new Error("安装配置不存在");
-    const bound = listMachines().filter((machine) => machine.profileId === id);
-    if (bound.length) throw new Error("还有机器绑定了这个配置");
+    // 绑定是按服务器表自动生成的，配置删了就让这些机器回到菜单，超时后从本地硬盘启动。
+    for (const machine of listMachines()) {
+      if (machine.profileId !== id) continue;
+      writeJson(machinePath(machine.mac), { ...machine, action: "menu", profileId: undefined });
+    }
     fs.rmSync(profilePath(id), { force: true });
   });
 }
@@ -574,13 +577,15 @@ export async function deleteProject(id: string): Promise<void> {
   return withLock(() => {
     const existing = getProject(id);
     if (!existing) throw new Error("项目不存在");
-    const used = listMachines().filter((machine) => machine.projectId === id);
-    if (used.length) throw new Error(`还有机器属于这个项目：${used.map((item) => item.mac).join("、")}`);
-    for (const profile of profilesForProject(id)) {
-      const bound = listMachines().filter((machine) => machine.profileId === profile.id);
-      if (bound.length) throw new Error("还有机器绑定了这个项目里的安装配置");
-      fs.rmSync(profilePath(profile.id), { force: true });
+    const profileIds = new Set(profilesForProject(id).map((profile) => profile.id));
+    for (const machine of listMachines()) {
+      if (machine.projectId === id) fs.rmSync(machinePath(machine.mac), { force: true });
+      else if (machine.profileId && profileIds.has(machine.profileId)) {
+        writeJson(machinePath(machine.mac), { ...machine, action: "menu", profileId: undefined });
+      }
     }
+    for (const profileId of profileIds) fs.rmSync(profilePath(profileId), { force: true });
+    for (const task of listTasks(id)) fs.rmSync(taskPath(task.id), { force: true });
     for (const setting of listIpmi()) {
       if (setting.projectId !== id) continue;
       fs.rmSync(ipmiPath(setting.id), { force: true });
@@ -1250,6 +1255,14 @@ export async function importServerSheet(projectId: string, records: { row: numbe
       }
       const osName = cells.osName.trim().slice(0, 80);
       if (!osName) problems.push("没有填写安装系统");
+      let osAddress = "";
+      if (cells.osAddress?.trim()) {
+        try {
+          osAddress = assertIpv4(cells.osAddress, "系统地址");
+        } catch (error) {
+          problems.push(error instanceof Error ? error.message : "系统地址不合法");
+        }
+      }
       let ipmiAddress = "";
       let ipmiNetmask = "";
       let ipmiGateway = "";
@@ -1302,6 +1315,7 @@ export async function importServerSheet(projectId: string, records: { row: numbe
         networkApplied: sameNetwork ? Boolean(existing?.networkApplied) : false,
         bmcIp: sameMac ? existing?.bmcIp : undefined,
         bootMac: sameMac ? existing?.bootMac : undefined,
+        osAddress: osAddress || undefined,
         passwordChanged: sameMac ? Boolean(existing?.passwordChanged) : false,
         canApply,
         ipmiLink: sameMac ? existing?.ipmiLink || "unknown" : "unknown",
@@ -1446,6 +1460,12 @@ export async function bindServerBoot(snRaw: string, macRaw: string): Promise<Ser
     const profile = profilesForProject(active.id).find((item) => item.name === row.osName);
     row.bootMac = mac;
     row.updatedAt = new Date().toISOString();
+    if (row.installed === "yes") {
+      // 装完重启时很多机器还是先从网卡启动。不再绑定安装，菜单超时后回本地硬盘。
+      unbindInstall(mac);
+      writeJson(serverPath(row.id), row);
+      return row;
+    }
     if (!profile) {
       row.stage = "error";
       row.detail = `机器已从网卡启动，但项目里没有名为「${row.osName}」的安装设置`;
@@ -1465,7 +1485,7 @@ export async function bindServerBoot(snRaw: string, macRaw: string): Promise<Ser
     };
     writeJson(machinePath(mac), machine);
     row.stage = "installing";
-    row.installed = row.installed === "yes" ? "yes" : "installing";
+    row.installed = "installing";
     row.detail = `正在安装「${row.osName}」`;
     writeJson(serverPath(row.id), row);
     return row;
@@ -1488,7 +1508,31 @@ export async function markServerInstalled(snRaw: string): Promise<void> {
       row.detail = `「${row.osName || "系统"}」已安装`;
       row.updatedAt = new Date().toISOString();
       writeJson(serverPath(row.id), row);
+      if (row.bootMac) unbindInstall(row.bootMac);
     }
+  });
+}
+
+function unbindInstall(mac: string): void {
+  const machine = getMachine(mac);
+  if (!machine || machine.action !== "install") return;
+  writeJson(machinePath(machine.mac), { ...machine, action: "menu", profileId: undefined });
+}
+
+/** 让一台已经装好的机器重装：清掉已安装标记，下次查看 IPMI 时会让它从网卡启动。 */
+export async function requestReinstall(projectId: string, serverId: string): Promise<ServerRow> {
+  return withLock(() => {
+    const project = getProject(projectId);
+    if (!project) throw new Error("项目不存在");
+    const row = listServers().find((item) => item.projectId === project.id && item.id === serverId);
+    if (!row) throw new Error("这台机器不在这个项目里");
+    if (!row.canApply) throw new Error("这一行还有问题，先改表再重装");
+    row.installed = "no";
+    row.stage = "waiting";
+    row.detail = project.enabled ? "等待重装，马上会让它从网卡启动" : "等待重装。打开项目开关后会让它从网卡启动";
+    row.updatedAt = new Date().toISOString();
+    writeJson(serverPath(row.id), row);
+    return row;
   });
 }
 

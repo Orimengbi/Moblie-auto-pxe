@@ -137,6 +137,8 @@ export interface ServerRow {
   networkApplied: boolean;
   bmcIp?: string;
   bootMac?: string;
+  /** 装好的系统的地址，批量任务优先用它登录。不填就查网卡规划和 DHCP 租约。 */
+  osAddress?: string;
   passwordChanged: boolean;
   canApply: boolean;
   ipmiLink: IpmiLink;
@@ -292,7 +294,7 @@ export const DEFAULT_STATE: ApplianceState = {
 export type TaskKind = "script" | "revoke";
 export type TaskStatus = "running" | "done";
 export type TaskTargetStatus = "pending" | "running" | "ok" | "failed" | "timeout" | "unreachable";
-export type TaskHostSource = "nic" | "fixed" | "lease" | "";
+export type TaskHostSource = "sheet" | "nic" | "fixed" | "lease" | "";
 
 export interface TaskTarget {
   serverId: string;
