@@ -95,8 +95,9 @@ test("menu defaults to the local disk unless a machine is bound", () => {
     entries: [{ profile, image: ubuntu }],
   });
   assert.match(menu, /choose --default local --timeout 15000/);
-  assert.match(menu, /将清空所选磁盘/);
-  assert.doesNotMatch(menu, /验机/);
+  assert.match(menu, /erases the selected disk/);
+  assert.doesNotMatch(menu, /[^\x00-\x7f]/, "iPXE 显示不了中文");
+  assert.match(menu, /item install-\S+ Ubuntu 24\.04$/m, "名字全是中文时只显示系统和版本");
   assert.match(menu, /ds=nocloud-net\\;s=/);
 
   const bound = renderIpxeMenu({
@@ -106,7 +107,14 @@ test("menu defaults to the local disk unless a machine is bound", () => {
     binding: { action: "install", profileId: profile.id, profileName: profile.name },
   });
   assert.match(bound, new RegExp(`choose --default install-${profile.id}`));
-  assert.match(bound, /将清空所选磁盘/);
+  assert.match(bound, /will install Ubuntu 24\.04 when the menu times out/);
+  assert.doesNotMatch(bound, /[^\x00-\x7f]/);
+  const named = renderIpxeMenu({
+    serverIp: "192.168.77.1",
+    timeoutSec: 15,
+    entries: [{ profile: { ...profile, name: "机房 Ubuntu24.04" }, image: { ...ubuntu, version: 'Ubuntu-Server 24.04.5 LTS "Noble Numbat" - Release amd64' } }],
+  });
+  assert.match(named, /item install-\S+ Ubuntu24\.04 - Ubuntu 24\.04\.5$/m);
 });
 
 test("dnsmasq stays on the install interface", () => {

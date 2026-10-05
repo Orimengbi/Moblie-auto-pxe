@@ -582,6 +582,26 @@ function kernelLine(server: string, image: ImageRecord, profile: Profile, family
   ];
 }
 
+/** iPXE 的文字界面只有 ASCII 字形，中文会显示成乱码。菜单里只放 ASCII。 */
+export function ipxeText(value: string): string {
+  return value
+    .replace(/[^\x20-\x7e]+/g, " ")
+    .replace(/:/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function shortVersion(version: string): string {
+  return version.match(/\d+(?:\.\d+)+/)?.[0] || ipxeText(version).slice(0, 20);
+}
+
+function menuLabel(entry: MenuProfile): string {
+  const system = `${FAMILY_LABEL[entry.image.family]} ${shortVersion(entry.image.version)}`.trim();
+  const name = ipxeText(entry.profile.name);
+  // 名字全是中文时只剩空白或几个符号，这时只显示系统和版本。
+  return /[A-Za-z0-9]/.test(name) && name !== system ? `${name} - ${system}` : system;
+}
+
 export function renderIpxeMenu(input: {
   serverIp: string;
   httpPort?: number;
@@ -591,32 +611,32 @@ export function renderIpxeMenu(input: {
 }): string {
   const server = bootOrigin(input.serverIp, input.httpPort ?? 80);
   const timeoutMs = Math.max(0, input.timeoutSec) * 1000;
-  const lines = ["#!ipxe", `set server ${server}`, "menu PXE 装机台", "item --gap -- 安装系统（将清空所选磁盘）"];
+  const lines = ["#!ipxe", `set server ${server}`, "menu PXE install", "item --gap -- Install (erases the selected disk)"];
   const installIds = new Set<string>();
   if (!input.entries.length) {
-    lines.push("item --gap -- （还没有可用的安装配置）");
+    lines.push("item --gap -- (no install profile is ready)");
   }
   for (const entry of input.entries) {
     const id = `install-${entry.profile.id}`;
     installIds.add(entry.profile.id);
-    const label = `${entry.profile.name} · ${FAMILY_LABEL[entry.image.family]} ${entry.image.version}`.replace(/:/g, " ");
-    lines.push(`item ${id} ${label}`);
+    lines.push(`item ${id} ${menuLabel(entry)}`);
   }
   lines.push("item --gap --");
-  lines.push("item local 从本地硬盘启动");
+  lines.push("item local Boot from local disk");
 
   let defaultItem = "local";
   let banner = "";
   if (input.binding?.action === "install" && input.binding.profileId && installIds.has(input.binding.profileId)) {
     defaultItem = `install-${input.binding.profileId}`;
-    banner = `echo 本机已绑定安装：${(input.binding.profileName || "安装配置").replace(/:/g, " ")}。超时后开始，将清空所选磁盘。`;
+    const bound = input.entries.find((entry) => entry.profile.id === input.binding?.profileId);
+    banner = `echo This machine will install ${bound ? menuLabel(bound) : "the bound profile"} when the menu times out. The selected disk will be erased.`;
   }
 
   lines.push(`choose --default ${defaultItem} --timeout ${timeoutMs} selected || goto local`);
   lines.push("goto ${selected}");
   lines.push("");
   lines.push(":local");
-  lines.push("echo 从本地硬盘启动");
+  lines.push("echo Booting from local disk");
   lines.push("exit");
   lines.push("");
 
