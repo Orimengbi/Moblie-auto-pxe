@@ -64,6 +64,7 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
             projectId={project.id}
             enabled={project.enabled}
             rows={servers}
+            osNames={profiles.map((profile) => profile.name)}
             report={getServerImportReport(project.id)}
             files={listFiles()}
             tasks={listTasks(project.id).slice(0, 10)}

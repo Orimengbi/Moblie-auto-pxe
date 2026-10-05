@@ -26,7 +26,7 @@ import {
   renderNicScript,
   renderUbuntuAutoinstall,
 } from "./render.ts";
-import { bindServerBoot, createIpmi, deleteProject, getTask, listMachines, listServers, markServerInstalled, requestReinstall, saveFile, createNic, createProfile, createProject, createReport, customizationForMac, getIpmiBySn, getMachine, getProject, getState, importProjectPlan, importServerSheet, listImages, listNicsBySn, listProjects, publicServer, reconcileServers, renameProject, saveMachine, saveMachineFact, saveNetwork, setProjectEnabled, updateProjectNetwork } from "./store.ts";
+import { bindServerBoot, createIpmi, deleteProject, deleteServer, saveServer, getTask, listMachines, listServers, markServerInstalled, requestReinstall, saveFile, createNic, createProfile, createProject, createReport, customizationForMac, getIpmiBySn, getMachine, getProject, getState, importProjectPlan, importServerSheet, listImages, listNicsBySn, listProjects, publicServer, reconcileServers, renameProject, saveMachine, saveMachineFact, saveNetwork, setProjectEnabled, updateProjectNetwork } from "./store.ts";
 import { DEFAULT_STATE, type ImageRecord, type Profile } from "./types.ts";
 
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pxe-test-"));
@@ -731,5 +731,50 @@ test("a refused password waits for a new sheet or a manual check", async () => {
   await reconcileServers(project.id, { exec, leasesText: leases });
   assert.equal(tried.at(-1), "reset-pass");
   assert.equal(row()?.ipmiLink, "up");
+  await deleteProject(project.id);
+});
+
+test("one server can be added, fixed and removed without a new sheet", async () => {
+  const project = await createProject({ name: "机房 编辑" });
+  const base = {
+    sn: "sn-edit 1",
+    ipmiMac: "aa:bb:cc:dd:ee:e1",
+    originalUser: "admin",
+    originalPassword: "factory",
+    targetUser: "ops",
+    targetPassword: "new-pass",
+    osName: "机房 Ubuntu",
+    customization: "",
+    ipmiAddress: "",
+    ipmiNetmask: "",
+    ipmiGateway: "",
+    ipmiVlan: "",
+    osAddress: "",
+  };
+  const created = await saveServer(project.id, null, base);
+  assert.equal(created.sn, "SN-EDIT1");
+  assert.equal(created.stage, "waiting");
+  await assert.rejects(saveServer(project.id, null, { ...base, ipmiMac: "aa:bb:cc:dd:ee:e2" }), /序列号 SN-EDIT1 已经在列表里/);
+  await assert.rejects(saveServer(project.id, null, { ...base, sn: "sn-edit 2" }), /IPMI MAC aa:bb:cc:dd:ee:e1 已经属于序列号 SN-EDIT1/);
+  await assert.rejects(saveServer(project.id, created.id, { ...base, ipmiAddress: "10.9.0.5" }), /IPMI 掩码/);
+  assert.equal(listServers().find((row) => row.id === created.id)?.ipmiAddress, "", "有问题的修改不保存");
+
+  const file = path.join(temp, "servers", `${created.id}.json`);
+  fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, "utf8")), passwordChanged: true, bmcIp: "192.168.77.9" }));
+  const renamed = await saveServer(project.id, created.id, { ...base, sn: "sn-edit 9", originalPassword: "", targetPassword: "", osAddress: "10.60.0.9" });
+  assert.equal(renamed.id, created.id);
+  assert.equal(renamed.sn, "SN-EDIT9");
+  assert.equal(renamed.originalPassword, "factory", "密码留空不改");
+  assert.equal(renamed.targetPassword, "new-pass");
+  assert.equal(renamed.passwordChanged, true, "原账号没变就保留已改密码");
+  assert.equal(renamed.bmcIp, "192.168.77.9");
+  assert.equal(renamed.osAddress, "10.60.0.9");
+  const reset = await saveServer(project.id, created.id, { ...base, sn: "sn-edit 9", originalPassword: "after-reset", targetPassword: "" });
+  assert.equal(reset.passwordChanged, false, "原密码改了就重新用原账号登录");
+  assert.match(reset.detail, /原账号已更新/);
+  await assert.rejects(saveServer(project.id, "not-a-row", base), /不在这个项目里/);
+
+  await deleteServer(project.id, created.id);
+  assert.equal(listServers().some((row) => row.id === created.id), false);
   await deleteProject(project.id);
 });

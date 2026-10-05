@@ -1205,6 +1205,141 @@ export interface ServerImportResult {
   errors: { row: number; message: string }[];
 }
 
+function problemOf(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
+}
+
+/**
+ * 把一行表格变成服务器记录。上传和页面编辑都走这里，规则一样：
+ * IPMI MAC 没变就保留找 BMC 的进度；原账号也没变才保留「已改密码」。
+ */
+function buildServerRow(project: Project, cells: ServerCells, existing: ServerRow | undefined, label: string, now: string): { row: ServerRow; problems: string[] } {
+  const problems: string[] = [];
+  let sn = "";
+  try {
+    sn = normalizeSn(cells.sn);
+  } catch (error) {
+    problems.push(problemOf(error, "序列号不合法"));
+    sn = label;
+  }
+  let ipmiMac = "";
+  try {
+    ipmiMac = cells.ipmiMac ? normalizeMac(cells.ipmiMac) : "";
+    if (!ipmiMac) problems.push("没有 IPMI MAC");
+  } catch (error) {
+    problems.push(problemOf(error, "IPMI MAC 不合法"));
+  }
+  let originalUser = cells.originalUser.trim();
+  let originalPassword = cells.originalPassword.trim();
+  let targetUser = cells.targetUser.trim();
+  let targetPassword = cells.targetPassword.trim();
+  try {
+    originalUser = assertIpmiUser(cells.originalUser, "原用户");
+  } catch (error) {
+    problems.push(problemOf(error, "原用户不合法"));
+  }
+  try {
+    originalPassword = assertIpmiPassword(cells.originalPassword, "原密码");
+  } catch (error) {
+    problems.push(problemOf(error, "原密码不合法"));
+  }
+  try {
+    targetUser = assertIpmiUser(cells.targetUser, "目标用户");
+  } catch (error) {
+    problems.push(problemOf(error, "目标用户不合法"));
+  }
+  try {
+    targetPassword = assertIpmiPassword(cells.targetPassword, "目标密码");
+  } catch (error) {
+    problems.push(problemOf(error, "目标密码不合法"));
+  }
+  const osName = cells.osName.trim().slice(0, 80);
+  if (!osName) problems.push("没有填写安装系统");
+  let osAddress = "";
+  if (cells.osAddress?.trim()) {
+    try {
+      osAddress = assertIpv4(cells.osAddress, "系统地址");
+    } catch (error) {
+      problems.push(problemOf(error, "系统地址不合法"));
+    }
+  }
+  let ipmiAddress = "";
+  let ipmiNetmask = "";
+  let ipmiGateway = "";
+  let ipmiVlan: number | undefined;
+  const hasNetwork = Boolean(cells.ipmiAddress || cells.ipmiNetmask || cells.ipmiGateway);
+  if (hasNetwork) {
+    try {
+      ipmiAddress = assertIpv4(cells.ipmiAddress, "IPMI 地址");
+      ipmiNetmask = assertIpv4(cells.ipmiNetmask, "IPMI 掩码");
+      ipmiGateway = assertIpv4(cells.ipmiGateway, "IPMI 路由");
+      netmaskToPrefix(ipmiNetmask);
+      if (!sameSubnet(ipmiAddress, ipmiGateway, ipmiNetmask)) problems.push("IPMI 地址和路由不在同一个子网");
+    } catch (error) {
+      problems.push(problemOf(error, "IPMI 网络不合法"));
+    }
+  }
+  if (cells.ipmiVlan.trim()) {
+    try {
+      ipmiVlan = assertVlanId(Number(cells.ipmiVlan));
+      if (!ipmiVlan) problems.push("IPMI VLAN 需要是 1 到 4094 的整数");
+    } catch (error) {
+      problems.push(problemOf(error, "IPMI VLAN 不合法"));
+    }
+  }
+  const others = listServers().filter((item) => item.projectId === project.id && item.id !== existing?.id);
+  if (ipmiMac) {
+    const duplicateMac = others.find((item) => item.ipmiMac === ipmiMac);
+    if (duplicateMac) problems.push(`IPMI MAC ${ipmiMac} 已经属于序列号 ${duplicateMac.sn}`);
+  }
+  if (others.some((item) => item.sn === sn)) problems.push(`序列号 ${sn} 已经在列表里`);
+  const sameMac = existing?.ipmiMac === ipmiMac;
+  // 原账号改了（比如 BMC 恢复过出厂设置），就当还没改过密码，重新用原账号登录。
+  const sameAccount = sameMac && existing?.originalUser === originalUser && existing?.originalPassword === originalPassword;
+  const keepStage = sameAccount || existing?.stage === "installing";
+  const sameNetwork = Boolean(
+    existing && existing.ipmiAddress === ipmiAddress && existing.ipmiNetmask === ipmiNetmask && existing.ipmiGateway === ipmiGateway && existing.ipmiVlan === ipmiVlan,
+  );
+  const canApply = problems.length === 0;
+  const row: ServerRow = {
+    id: existing?.id || crypto.randomUUID(),
+    projectId: project.id,
+    sn,
+    ipmiMac,
+    originalUser,
+    originalPassword,
+    targetUser,
+    targetPassword,
+    osName,
+    customization: cells.customization.slice(0, 4000),
+    ipmiAddress,
+    ipmiNetmask,
+    ipmiGateway,
+    ipmiVlan,
+    networkApplied: sameNetwork ? Boolean(existing?.networkApplied) : false,
+    bmcIp: sameMac ? existing?.bmcIp : undefined,
+    bootMac: sameMac ? existing?.bootMac : undefined,
+    osAddress: osAddress || undefined,
+    passwordChanged: sameAccount ? Boolean(existing?.passwordChanged) : false,
+    canApply,
+    ipmiLink: sameAccount ? existing?.ipmiLink || "unknown" : "unknown",
+    ipSource: sameMac ? existing?.ipSource || "unknown" : "unknown",
+    power: sameMac ? existing?.power || "unknown" : "unknown",
+    installed: sameMac ? existing?.installed || "no" : "no",
+    stage: canApply ? (sameMac && keepStage ? existing?.stage || "waiting" : "waiting") : "error",
+    detail: canApply
+      ? sameMac && keepStage
+        ? existing?.detail || "已列入，等待查看 IPMI"
+        : sameMac
+          ? "原账号已更新，等待重新登录 BMC"
+          : "已列入，等待查看 IPMI"
+      : problems.join("；"),
+    createdAt: existing?.createdAt || now,
+    updatedAt: now,
+  };
+  return { row, problems };
+}
+
 export async function importServerSheet(projectId: string, records: { row: number; cells: ServerCells }[]): Promise<ServerImportResult> {
   return withLock(() => {
     const project = getProject(projectId);
@@ -1214,128 +1349,14 @@ export async function importServerSheet(projectId: string, records: { row: numbe
     for (const record of records) {
       const cells = record.cells;
       if (!cells.sn && !cells.ipmiMac && !cells.osName && !cells.originalUser) continue;
-      const problems: string[] = [];
       let sn = "";
       try {
         sn = normalizeSn(cells.sn);
-      } catch (error) {
-        problems.push(error instanceof Error ? error.message : "序列号不合法");
-        sn = `第${record.row}行`;
+      } catch {
+        sn = "";
       }
-      let ipmiMac = "";
-      try {
-        ipmiMac = cells.ipmiMac ? normalizeMac(cells.ipmiMac) : "";
-        if (!ipmiMac) problems.push("没有 IPMI MAC");
-      } catch (error) {
-        problems.push(error instanceof Error ? error.message : "IPMI MAC 不合法");
-      }
-      let originalUser = cells.originalUser.trim();
-      let originalPassword = cells.originalPassword.trim();
-      let targetUser = cells.targetUser.trim();
-      let targetPassword = cells.targetPassword.trim();
-      try {
-        originalUser = assertIpmiUser(cells.originalUser, "原用户");
-      } catch (error) {
-        problems.push(error instanceof Error ? error.message : "原用户不合法");
-      }
-      try {
-        originalPassword = assertIpmiPassword(cells.originalPassword, "原密码");
-      } catch (error) {
-        problems.push(error instanceof Error ? error.message : "原密码不合法");
-      }
-      try {
-        targetUser = assertIpmiUser(cells.targetUser, "目标用户");
-      } catch (error) {
-        problems.push(error instanceof Error ? error.message : "目标用户不合法");
-      }
-      try {
-        targetPassword = assertIpmiPassword(cells.targetPassword, "目标密码");
-      } catch (error) {
-        problems.push(error instanceof Error ? error.message : "目标密码不合法");
-      }
-      const osName = cells.osName.trim().slice(0, 80);
-      if (!osName) problems.push("没有填写安装系统");
-      let osAddress = "";
-      if (cells.osAddress?.trim()) {
-        try {
-          osAddress = assertIpv4(cells.osAddress, "系统地址");
-        } catch (error) {
-          problems.push(error instanceof Error ? error.message : "系统地址不合法");
-        }
-      }
-      let ipmiAddress = "";
-      let ipmiNetmask = "";
-      let ipmiGateway = "";
-      let ipmiVlan: number | undefined;
-      const hasNetwork = Boolean(cells.ipmiAddress || cells.ipmiNetmask || cells.ipmiGateway);
-      if (hasNetwork) {
-        try {
-          ipmiAddress = assertIpv4(cells.ipmiAddress, "IPMI 地址");
-          ipmiNetmask = assertIpv4(cells.ipmiNetmask, "IPMI 掩码");
-          ipmiGateway = assertIpv4(cells.ipmiGateway, "IPMI 路由");
-          netmaskToPrefix(ipmiNetmask);
-          if (!sameSubnet(ipmiAddress, ipmiGateway, ipmiNetmask)) problems.push("IPMI 地址和路由不在同一个子网");
-        } catch (error) {
-          problems.push(error instanceof Error ? error.message : "IPMI 网络不合法");
-        }
-      }
-      if (cells.ipmiVlan.trim()) {
-        try {
-          ipmiVlan = assertVlanId(Number(cells.ipmiVlan));
-          if (!ipmiVlan) problems.push("IPMI VLAN 需要是 1 到 4094 的整数");
-        } catch (error) {
-          problems.push(error instanceof Error ? error.message : "IPMI VLAN 不合法");
-        }
-      }
-      if (ipmiMac) {
-        const duplicateMac = listServers().find((item) => item.projectId === project.id && item.ipmiMac === ipmiMac && item.sn !== sn);
-        if (duplicateMac) problems.push(`IPMI MAC ${ipmiMac} 已经属于序列号 ${duplicateMac.sn}`);
-      }
-      const existing = listServers().find((item) => item.projectId === project.id && item.sn === sn);
-      const sameMac = existing?.ipmiMac === ipmiMac;
-      // 原账号改了（比如 BMC 恢复过出厂设置），就当还没改过密码，重新用原账号登录。
-      const sameAccount = sameMac && existing?.originalUser === originalUser && existing?.originalPassword === originalPassword;
-      const keepStage = sameAccount || existing?.stage === "installing";
-      const sameNetwork = Boolean(
-        existing && existing.ipmiAddress === ipmiAddress && existing.ipmiNetmask === ipmiNetmask && existing.ipmiGateway === ipmiGateway && existing.ipmiVlan === ipmiVlan,
-      );
-      const canApply = problems.length === 0;
-      const row: ServerRow = {
-        id: existing?.id || crypto.randomUUID(),
-        projectId: project.id,
-        sn,
-        ipmiMac,
-        originalUser,
-        originalPassword,
-        targetUser,
-        targetPassword,
-        osName,
-        customization: cells.customization.slice(0, 4000),
-        ipmiAddress,
-        ipmiNetmask,
-        ipmiGateway,
-        ipmiVlan,
-        networkApplied: sameNetwork ? Boolean(existing?.networkApplied) : false,
-        bmcIp: sameMac ? existing?.bmcIp : undefined,
-        bootMac: sameMac ? existing?.bootMac : undefined,
-        osAddress: osAddress || undefined,
-        passwordChanged: sameAccount ? Boolean(existing?.passwordChanged) : false,
-        canApply,
-        ipmiLink: sameAccount ? existing?.ipmiLink || "unknown" : "unknown",
-        ipSource: sameMac ? existing?.ipSource || "unknown" : "unknown",
-        power: sameMac ? existing?.power || "unknown" : "unknown",
-        installed: sameMac ? existing?.installed || "no" : "no",
-        stage: canApply ? (sameMac && keepStage ? existing?.stage || "waiting" : "waiting") : "error",
-        detail: canApply
-          ? sameMac && keepStage
-            ? existing?.detail || "已列入，等待查看 IPMI"
-            : sameMac
-              ? "原账号已更新，等待重新登录 BMC"
-              : "已列入，等待查看 IPMI"
-          : problems.join("；"),
-        createdAt: existing?.createdAt || now,
-        updatedAt: now,
-      };
+      const existing = sn ? listServers().find((item) => item.projectId === project.id && item.sn === sn) : undefined;
+      const { row, problems } = buildServerRow(project, cells, existing, `第${record.row}行`, now);
       writeJson(serverPath(row.id), row);
       result.servers += 1;
       if (problems.length) result.errors.push({ row: record.row, message: problems.join("；") });
@@ -1349,6 +1370,34 @@ export async function importServerSheet(projectId: string, records: { row: numbe
     };
     writeJson(serverImportPath(project.id), report);
     return result;
+  });
+}
+
+/** 页面上改一台或加一台。密码留空表示不改。有问题就不保存，直接告诉用户。 */
+export async function saveServer(projectId: string, serverId: string | null, cells: ServerCells): Promise<ServerRow> {
+  return withLock(() => {
+    const project = getProject(projectId);
+    if (!project) throw new Error("项目不存在");
+    const existing = serverId ? listServers().find((item) => item.projectId === project.id && item.id === serverId) : undefined;
+    if (serverId && !existing) throw new Error("这台机器不在这个项目里，刷新页面再改");
+    const filled: ServerCells = {
+      ...cells,
+      originalPassword: cells.originalPassword.trim() || existing?.originalPassword || "",
+      targetPassword: cells.targetPassword.trim() || existing?.targetPassword || "",
+    };
+    const { row, problems } = buildServerRow(project, filled, existing, "这一行", new Date().toISOString());
+    if (problems.length) throw new Error(problems.join("；"));
+    writeJson(serverPath(row.id), row);
+    return row;
+  });
+}
+
+export async function deleteServer(projectId: string, serverId: string): Promise<void> {
+  return withLock(() => {
+    const row = listServers().find((item) => item.projectId === projectId && item.id === serverId);
+    if (!row) throw new Error("这台机器不在这个项目里");
+    if (row.bootMac) unbindInstall(row.bootMac);
+    fs.rmSync(serverPath(row.id), { force: true });
   });
 }
 

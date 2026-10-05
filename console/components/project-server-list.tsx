@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { HOST_SOURCE, ProjectTaskRunner } from "@/components/project-task-runner";
+import { ServerEditDialog } from "@/components/server-edit-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -48,6 +49,7 @@ export function ProjectServerList({
   projectId,
   enabled,
   rows,
+  osNames,
   report,
   files,
   tasks,
@@ -55,6 +57,7 @@ export function ProjectServerList({
   projectId: string;
   enabled: boolean;
   rows: ServerListRow[];
+  osNames: string[];
   report: ServerImportReport | null;
   files: RemoteFile[];
   tasks: RemoteTask[];
@@ -68,6 +71,21 @@ export function ProjectServerList({
   const [checkedAt, setCheckedAt] = useState<Date | null>(null);
   const [checkError, setCheckError] = useState("");
   const busy = useRef(false);
+  const [editing, setEditing] = useState<ServerListRow | null>(null);
+  const [adding, setAdding] = useState(false);
+
+  async function remove(row: ServerListRow) {
+    if (!window.confirm(`从列表里删掉 ${row.sn}？不会动这台机器的 BMC 和系统。`)) return;
+    setError("");
+    const response = await fetch(`/api/projects/${projectId}/servers/${row.id}`, { method: "DELETE" });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      setError(body.error || "删除失败");
+      return;
+    }
+    setPicked((list) => list.filter((id) => id !== row.id));
+    router.refresh();
+  }
 
   /** 按租约找 BMC 并推进每台机器。force 时连上次密码不对的机器也重新登录。 */
   const check = useCallback(
@@ -124,6 +142,9 @@ export function ProjectServerList({
       <div className="grid gap-3">
         <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
           <span>已列入 {rows.length} 台，已安装 {installed.length} 台。</span>
+          <Button type="button" size="xs" variant="outline" onClick={() => setAdding(true)}>
+            新增一台
+          </Button>
           <Button type="button" size="xs" variant="outline" disabled={checking || rows.length === 0} onClick={() => void check(true)}>
             {checking ? "检查中" : "立即检查"}
           </Button>
@@ -202,12 +223,18 @@ export function ProjectServerList({
                       {row.host || "—"}
                       {row.hostSource ? <span className="mt-1 block font-sans text-muted-foreground">{HOST_SOURCE[row.hostSource]}</span> : null}
                     </TableCell>
-                    <TableCell className="text-right">
+                    <TableCell className="text-right whitespace-nowrap">
+                      <Button type="button" size="xs" variant="ghost" onClick={() => setEditing(row)}>
+                        编辑
+                      </Button>
                       {row.installed === "yes" ? (
                         <Button type="button" size="xs" variant="ghost" onClick={() => reinstall(row)}>
                           重装
                         </Button>
                       ) : null}
+                      <Button type="button" size="xs" variant="ghost" onClick={() => remove(row)}>
+                        删除
+                      </Button>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -216,6 +243,16 @@ export function ProjectServerList({
           </div>
         )}
       </div>
+      <ServerEditDialog
+        projectId={projectId}
+        row={editing}
+        open={adding || Boolean(editing)}
+        osNames={osNames}
+        onClose={() => {
+          setEditing(null);
+          setAdding(false);
+        }}
+      />
       <div className="grid gap-3 border-t pt-4">
         <h3 className="font-medium">批量任务</h3>
         <ProjectTaskRunner projectId={projectId} picked={picked} installed={installed} onPick={setPicked} files={files} tasks={tasks} />
