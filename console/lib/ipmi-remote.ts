@@ -34,15 +34,24 @@ export function parsePowerStatus(text: string): "on" | "off" | "unknown" {
   return "unknown";
 }
 
+/**
+ * 认出登录失败的原因。ipmitool 带 -v 时，密码错是 RAKP 2 HMAC is invalid，
+ * 用户名错是 unauthorized name；BMC 没有回应是 Get Auth Capabilities error。
+ */
+export function ipmiFailure(text: string): "denied" | "down" {
+  if (/RAKP 2 HMAC is invalid|unauthorized name|invalid (user ?name|password)|insufficient privilege|privilege level not available/i.test(text)) return "denied";
+  return "down";
+}
+
 export async function probeIpmi(
   host: string,
   username: string,
   password: string,
   exec: IpmiExec,
-): Promise<{ link: "up" | "down"; ip: string; source: "unknown" | "dhcp" | "static"; power: "on" | "off" | "unknown" }> {
+): Promise<{ link: "up" | "down" | "denied"; ip: string; source: "unknown" | "dhcp" | "static"; power: "on" | "off" | "unknown" }> {
   const lan = await exec(host, username, password, ["lan", "print", "1"]);
   if (lan.code !== 0 && !lan.stdout.trim()) {
-    return { link: "down", ip: "", source: "unknown", power: "unknown" };
+    return { link: ipmiFailure(lan.stderr), ip: "", source: "unknown", power: "unknown" };
   }
   const parsed = parseLanPrint(lan.stdout);
   const power = await exec(host, username, password, ["chassis", "power", "status"]);
@@ -130,7 +139,8 @@ export async function defaultIpmiExec(host: string, username: string, password: 
   const file = path.join(os.tmpdir(), `pxe-ipmi-${process.pid}-${Date.now()}.pw`);
   fs.writeFileSync(file, password, { mode: 0o600 });
   try {
-    return await runIpmitool(["-I", "lanplus", "-H", host, "-U", username, "-f", file, ...args]);
+    // -v 让 ipmitool 说出登录失败的原因，见 ipmiFailure。
+    return await runIpmitool(["-v", "-I", "lanplus", "-H", host, "-U", username, "-f", file, ...args]);
   } finally {
     fs.rmSync(file, { force: true });
   }
@@ -162,7 +172,8 @@ function runIpmitool(args: string[]): Promise<IpmiExecResult> {
     });
     child.on("close", (code) => {
       clearTimeout(timer);
-      resolve({ code: code ?? 1, stdout, stderr });
+      const noise = /^(Loading IANA PEN Registry\.\.\.|Using best available cipher suite \d+)$/;
+      resolve({ code: code ?? 1, stdout, stderr: stderr.split("\n").filter((line) => line.trim() && !noise.test(line.trim())).join("\n") });
     });
   });
 }

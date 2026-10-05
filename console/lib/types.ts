@@ -115,7 +115,8 @@ export interface MachineFact {
 }
 
 export type ServerStage = "waiting" | "ready" | "installing" | "error";
-export type IpmiLink = "unknown" | "up" | "down";
+/** denied：BMC 有回应，但拒绝了表里的账号或密码。 */
+export type IpmiLink = "unknown" | "up" | "down" | "denied";
 export type IpSource = "unknown" | "dhcp" | "static";
 export type InstallState = "no" | "installing" | "yes";
 

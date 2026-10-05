@@ -9,7 +9,7 @@ import { parseLeases, renderDnsmasq } from "./dnsmasq.ts";
 import { detectFromListing, inspectIso } from "./iso.ts";
 import { mergeMachineRows } from "./machine-rows.ts";
 import { parsePlanTable } from "./plan-sheet.ts";
-import { parseIpmiUserList } from "./ipmi-remote.ts";
+import { ipmiFailure, parseIpmiUserList } from "./ipmi-remote.ts";
 import { parseServerTable } from "./server-sheet.ts";
 import { menuFor, serialProbe } from "./boot.ts";
 import { createTask, resolveHost, runTask, type Exec } from "./remote.ts";
@@ -665,4 +665,32 @@ test("a slow BMC does not hold up other changes", async () => {
   assert.equal(row?.installed, "yes", "对账期间装完的状态要保留");
   assert.equal(row?.bmcIp, "192.168.77.93");
   assert.equal(row?.power, "on");
+});
+
+test("a BMC that rejects the password is not reported as unreachable", async () => {
+  assert.equal(ipmiFailure("> RAKP 2 HMAC is invalid\nError: Unable to establish IPMI v2 / RMCP+ session"), "denied");
+  assert.equal(ipmiFailure("> RAKP 2 message indicates an error : unauthorized name"), "denied");
+  assert.equal(ipmiFailure("Get Auth Capabilities error\nError issuing Get Channel Authentication Capabilities request\nError: Unable to establish IPMI v2 / RMCP+ session"), "down");
+
+  const project = await createProject({ name: "机房 密码" });
+  const parsed = parseServerTable([
+    ["序列号", "IPMI MAC", "原用户", "原密码", "目标用户", "目标密码", "安装系统"],
+    ["sn-pw 1", "aa:bb:cc:dd:ee:c1", "admin", "old-pass", "admin", "new-pass", "机房 Ubuntu"],
+    ["sn-pw 2", "aa:bb:cc:dd:ee:c2", "admin", "old-pass", "admin", "new-pass", "机房 Ubuntu"],
+  ]);
+  await importServerSheet(project.id, parsed.records);
+  const leases = "9999999999 aa:bb:cc:dd:ee:c1 192.168.77.201 * *\n9999999999 aa:bb:cc:dd:ee:c2 192.168.77.202 * *\n";
+  const exec = async (host: string) =>
+    host.endsWith(".201")
+      ? { code: 1, stdout: "", stderr: "> RAKP 2 HMAC is invalid\nError: Unable to establish IPMI v2 / RMCP+ session" }
+      : { code: 1, stdout: "", stderr: "Get Auth Capabilities error\nError: Unable to establish IPMI v2 / RMCP+ session" };
+  await reconcileServers(project.id, { exec, leasesText: leases });
+  const rows = listServers().filter((row) => row.projectId === project.id);
+  const denied = rows.find((row) => row.sn === "SN-PW1");
+  const down = rows.find((row) => row.sn === "SN-PW2");
+  assert.equal(denied?.ipmiLink, "denied");
+  assert.match(denied?.detail || "", /有回应，但不接受表里的原账号 admin 和原密码/);
+  assert.equal(down?.ipmiLink, "down");
+  assert.match(down?.detail || "", /BMC 没有回应/);
+  await deleteProject(project.id);
 });

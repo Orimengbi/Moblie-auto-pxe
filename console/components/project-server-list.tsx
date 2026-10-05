@@ -19,6 +19,7 @@ const LINK: Record<IpmiLink, string> = {
   unknown: "未探测",
   up: "通",
   down: "不通",
+  denied: "密码不对",
 };
 
 const SOURCE: Record<IpSource, string> = {

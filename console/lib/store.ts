@@ -1389,13 +1389,17 @@ async function reconcileOnce(projectId: string, options?: { exec?: IpmiExec; lea
     if (!row.canApply) {
       row.stage = "error";
     } else if (row.installed === "yes") {
-      row.detail = `系统已安装。IPMI ${row.ipmiLink === "up" ? "通" : row.ipmiLink === "down" ? "不通" : "还没探测"}`;
+      row.detail = `系统已安装。IPMI ${row.ipmiLink === "up" ? "通" : row.ipmiLink === "down" ? "不通" : row.ipmiLink === "denied" ? "账号或密码不对" : "还没探测"}`;
     } else if (!row.bmcIp) {
       row.stage = row.stage === "installing" ? "installing" : "waiting";
       row.detail = "已列入。DHCP 里还没有这个 IPMI MAC";
     } else if (row.ipmiLink === "down") {
       row.stage = "error";
-      row.detail = `IPMI 不通，当前地址 ${row.bmcIp}`;
+      row.detail = `IPMI 不通，当前地址 ${row.bmcIp}。BMC 没有回应，查网线和 BMC 是否开启 IPMI over LAN`;
+    } else if (row.ipmiLink === "denied") {
+      const which = row.passwordChanged ? "目标" : "原";
+      row.stage = "error";
+      row.detail = `BMC ${row.bmcIp} 有回应，但不接受表里的${which}账号 ${row.passwordChanged ? row.targetUser : row.originalUser} 和${which}密码。确认 BMC 现在的密码`;
     } else if (!project.enabled) {
       if (row.stage !== "installing") row.stage = "waiting";
       row.detail = `已列入，IPMI 地址 ${row.bmcIp}。打开项目开关后才会改账号并安装`;
