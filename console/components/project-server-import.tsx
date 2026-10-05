@@ -1,36 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
-export function ProjectServerImport({ projectId, enabled }: { projectId: string; enabled: boolean }) {
+export function ProjectServerImport({ projectId }: { projectId: string }) {
   const router = useRouter();
   const [error, setError] = useState("");
   const [summary, setSummary] = useState("");
   const [pending, setPending] = useState(false);
-
-  useEffect(() => {
-    if (!enabled) return;
-    let cancel = false;
-    fetch(`/api/projects/${projectId}/reconcile`, { method: "POST" })
-      .then(async (response) => {
-        const body = await response.json();
-        if (cancel) return;
-        if (!response.ok) {
-          setError(body.error || "按 MAC 查找 BMC 失败");
-          return;
-        }
-        if (body.changed) router.refresh();
-      })
-      .catch(() => {
-        if (!cancel) setError("按 MAC 查找 BMC 没有连上控制台");
-      });
-    return () => {
-      cancel = true;
-    };
-  }, [enabled, projectId, router]);
 
   async function upload(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();

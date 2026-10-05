@@ -1293,6 +1293,9 @@ export async function importServerSheet(projectId: string, records: { row: numbe
       }
       const existing = listServers().find((item) => item.projectId === project.id && item.sn === sn);
       const sameMac = existing?.ipmiMac === ipmiMac;
+      // 原账号改了（比如 BMC 恢复过出厂设置），就当还没改过密码，重新用原账号登录。
+      const sameAccount = sameMac && existing?.originalUser === originalUser && existing?.originalPassword === originalPassword;
+      const keepStage = sameAccount || existing?.stage === "installing";
       const sameNetwork = Boolean(
         existing && existing.ipmiAddress === ipmiAddress && existing.ipmiNetmask === ipmiNetmask && existing.ipmiGateway === ipmiGateway && existing.ipmiVlan === ipmiVlan,
       );
@@ -1316,14 +1319,20 @@ export async function importServerSheet(projectId: string, records: { row: numbe
         bmcIp: sameMac ? existing?.bmcIp : undefined,
         bootMac: sameMac ? existing?.bootMac : undefined,
         osAddress: osAddress || undefined,
-        passwordChanged: sameMac ? Boolean(existing?.passwordChanged) : false,
+        passwordChanged: sameAccount ? Boolean(existing?.passwordChanged) : false,
         canApply,
-        ipmiLink: sameMac ? existing?.ipmiLink || "unknown" : "unknown",
+        ipmiLink: sameAccount ? existing?.ipmiLink || "unknown" : "unknown",
         ipSource: sameMac ? existing?.ipSource || "unknown" : "unknown",
         power: sameMac ? existing?.power || "unknown" : "unknown",
         installed: sameMac ? existing?.installed || "no" : "no",
-        stage: canApply ? (sameMac ? existing?.stage || "waiting" : "waiting") : "error",
-        detail: canApply ? (sameMac ? existing?.detail || "已列入，等待查看 IPMI" : "已列入，等待查看 IPMI") : problems.join("；"),
+        stage: canApply ? (sameMac && keepStage ? existing?.stage || "waiting" : "waiting") : "error",
+        detail: canApply
+          ? sameMac && keepStage
+            ? existing?.detail || "已列入，等待查看 IPMI"
+            : sameMac
+              ? "原账号已更新，等待重新登录 BMC"
+              : "已列入，等待查看 IPMI"
+          : problems.join("；"),
         createdAt: existing?.createdAt || now,
         updatedAt: now,
       };
@@ -1346,18 +1355,26 @@ export async function importServerSheet(projectId: string, records: { row: numbe
 const reconciling = new Map<string, Promise<{ changed: boolean }>>();
 
 /**
- * 按租约找 BMC、改账号、拉起安装。BMC 不通时 ipmitool 一次要等 20 秒，
+ * 按租约找 BMC、改账号、拉起安装。上次密码不对的机器只在 force 时重试。BMC 不通时 ipmitool 一次要等 20 秒，
  * 所以连 BMC 时不占数据锁，只在写回每一行时加锁。同一个项目同时只跑一个。
  */
-export function reconcileServers(projectId: string, options?: { exec?: IpmiExec; leasesText?: string }): Promise<{ changed: boolean }> {
+export function reconcileServers(projectId: string, options?: ReconcileOptions): Promise<{ changed: boolean }> {
   const running = reconciling.get(projectId);
-  if (running) return running;
+  // 手动检查要把密码不对的机器也试一遍，正在跑的自动检查会跳过它们，所以排在后面再跑一次。
+  if (running) return options?.force ? running.then(() => reconcileServers(projectId, options)) : running;
   const job = reconcileOnce(projectId, options).finally(() => reconciling.delete(projectId));
   reconciling.set(projectId, job);
   return job;
 }
 
-async function reconcileOnce(projectId: string, options?: { exec?: IpmiExec; leasesText?: string }): Promise<{ changed: boolean }> {
+export interface ReconcileOptions {
+  exec?: IpmiExec;
+  leasesText?: string;
+  /** 连上次密码不对的机器也重新登录。自动检查不带它，免得 BMC 因为反复登录失败锁住账号。 */
+  force?: boolean;
+}
+
+async function reconcileOnce(projectId: string, options?: ReconcileOptions): Promise<{ changed: boolean }> {
   const exec = options?.exec || defaultIpmiExec;
   const leases = parseLeases(options?.leasesText ?? readLeasesText());
   const project = getProject(projectId);
@@ -1373,7 +1390,7 @@ async function reconcileOnce(projectId: string, options?: { exec?: IpmiExec; lea
     const before = snapshot();
     const lease = leases.find((item) => item.active && item.mac === row.ipmiMac);
     if (lease) row.bmcIp = lease.ip;
-    if (row.canApply && row.bmcIp && row.originalUser && row.originalPassword) {
+    if (row.canApply && row.bmcIp && row.originalUser && row.originalPassword && (row.ipmiLink !== "denied" || options?.force)) {
       const username = row.passwordChanged ? row.targetUser : row.originalUser;
       const password = row.passwordChanged ? row.targetPassword : row.originalPassword;
       try {
@@ -1399,7 +1416,7 @@ async function reconcileOnce(projectId: string, options?: { exec?: IpmiExec; lea
     } else if (row.ipmiLink === "denied") {
       const which = row.passwordChanged ? "目标" : "原";
       row.stage = "error";
-      row.detail = `BMC ${row.bmcIp} 有回应，但不接受表里的${which}账号 ${row.passwordChanged ? row.targetUser : row.originalUser} 和${which}密码。确认 BMC 现在的密码`;
+      row.detail = `BMC ${row.bmcIp} 有回应，但不接受表里的${which}账号 ${row.passwordChanged ? row.targetUser : row.originalUser} 和${which}密码。确认 BMC 现在的密码，改表重传，或点「立即检查」再试`;
     } else if (!project.enabled) {
       if (row.stage !== "installing") row.stage = "waiting";
       row.detail = `已列入，IPMI 地址 ${row.bmcIp}。打开项目开关后才会改账号并安装`;

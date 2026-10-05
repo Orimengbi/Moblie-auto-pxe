@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { HOST_SOURCE, ProjectTaskRunner } from "@/components/project-task-runner";
 import { Badge } from "@/components/ui/badge";
@@ -40,16 +40,20 @@ const INSTALLED: Record<InstallState, string> = {
   yes: "已安装",
 };
 
+const AUTO_CHECK_MS = 30000;
+
 export type ServerListRow = Omit<ServerRow, "originalPassword" | "targetPassword"> & { host: string; hostSource: TaskHostSource };
 
 export function ProjectServerList({
   projectId,
+  enabled,
   rows,
   report,
   files,
   tasks,
 }: {
   projectId: string;
+  enabled: boolean;
   rows: ServerListRow[];
   report: ServerImportReport | null;
   files: RemoteFile[];
@@ -60,6 +64,43 @@ export function ProjectServerList({
   const [error, setError] = useState("");
   const installed = rows.filter((row) => row.installed === "yes").map((row) => row.id);
   const allPicked = rows.length > 0 && picked.length === rows.length;
+  const [checking, setChecking] = useState(false);
+  const [checkedAt, setCheckedAt] = useState<Date | null>(null);
+  const [checkError, setCheckError] = useState("");
+  const busy = useRef(false);
+
+  /** 按租约找 BMC 并推进每台机器。force 时连上次密码不对的机器也重新登录。 */
+  const check = useCallback(
+    async (force: boolean) => {
+      if (busy.current) return;
+      busy.current = true;
+      setChecking(true);
+      try {
+        const response = await fetch(`/api/projects/${projectId}/reconcile${force ? "?force=1" : ""}`, { method: "POST" });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          setCheckError(body.error || "检查 IPMI 失败");
+          return;
+        }
+        setCheckError("");
+        setCheckedAt(new Date());
+        if (body.changed || force) router.refresh();
+      } catch {
+        setCheckError("检查 IPMI 时没有连上控制台");
+      } finally {
+        busy.current = false;
+        setChecking(false);
+      }
+    },
+    [projectId, router],
+  );
+
+  useEffect(() => {
+    if (!enabled) return;
+    void check(false);
+    const timer = setInterval(() => void check(false), AUTO_CHECK_MS);
+    return () => clearInterval(timer);
+  }, [enabled, check]);
 
   function toggle(id: string) {
     setPicked((list) => (list.includes(id) ? list.filter((item) => item !== id) : [...list, id]));
@@ -74,8 +115,8 @@ export function ProjectServerList({
       setError(body.error || "没能标记重装");
       return;
     }
-    await fetch(`/api/projects/${projectId}/reconcile`, { method: "POST" }).catch(() => undefined);
     router.refresh();
+    await check(false);
   }
 
   return (
@@ -83,6 +124,13 @@ export function ProjectServerList({
       <div className="grid gap-3">
         <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
           <span>已列入 {rows.length} 台，已安装 {installed.length} 台。</span>
+          <Button type="button" size="xs" variant="outline" disabled={checking || rows.length === 0} onClick={() => void check(true)}>
+            {checking ? "检查中" : "立即检查"}
+          </Button>
+          <span className="text-xs">
+            {enabled ? "项目开着，每 30 秒自动检查一次，密码不对的机器不自动重试。" : "项目关着，不自动检查；立即检查只读取状态，不改 BMC。"}
+            {checkedAt ? ` 上次检查 ${checkedAt.toLocaleTimeString("zh-CN")}` : ""}
+          </span>
           {rows.length ? (
             <>
               <Button type="button" size="xs" variant="outline" onClick={() => setPicked(installed)}>
@@ -103,6 +151,7 @@ export function ProjectServerList({
           </p>
         ) : null}
         {error ? <p className="text-sm text-destructive">{error}</p> : null}
+        {checkError ? <p className="text-sm text-destructive">{checkError}</p> : null}
         {rows.length === 0 ? (
           <p className="text-sm text-muted-foreground">上传后每一行会出现在下面。表头要能认出序列号和 IPMI MAC，原用户和原密码可以分成两列，也可以写成「用户/密码」。</p>
         ) : (

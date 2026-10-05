@@ -59,9 +59,10 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
           <CardTitle>服务器列表</CardTitle>
         </CardHeader>
         <CardContent className="grid gap-4">
-          <ProjectServerImport projectId={project.id} enabled={project.enabled} />
+          <ProjectServerImport projectId={project.id} />
           <ProjectServerList
             projectId={project.id}
+            enabled={project.enabled}
             rows={servers}
             report={getServerImportReport(project.id)}
             files={listFiles()}

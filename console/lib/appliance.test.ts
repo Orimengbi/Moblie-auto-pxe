@@ -694,3 +694,42 @@ test("a BMC that rejects the password is not reported as unreachable", async () 
   assert.match(down?.detail || "", /BMC 没有回应/);
   await deleteProject(project.id);
 });
+
+test("a refused password waits for a new sheet or a manual check", async () => {
+  const project = await createProject({ name: "机房 重试" });
+  const sheet = (password: string) =>
+    parseServerTable([
+      ["序列号", "IPMI MAC", "原用户", "原密码", "目标用户", "目标密码", "安装系统"],
+      ["sn-retry", "aa:bb:cc:dd:ee:d1", "admin", password, "admin", "new-pass", "机房 Ubuntu"],
+    ]).records;
+  await importServerSheet(project.id, sheet("factory"));
+  const leases = "9999999999 aa:bb:cc:dd:ee:d1 192.168.77.211 * *\n";
+  const tried: string[] = [];
+  let bmcPassword = "something-else";
+  const exec = async (_host: string, _user: string, password: string, args: string[]) => {
+    tried.push(password);
+    if (password !== bmcPassword) return { code: 1, stdout: "", stderr: "> RAKP 2 HMAC is invalid" };
+    return { code: 0, stdout: args[0] === "lan" ? "IP Address : 192.168.77.211\n" : "Chassis Power is on\n", stderr: "" };
+  };
+  const row = () => listServers().find((item) => item.projectId === project.id && item.sn === "SN-RETRY");
+  await reconcileServers(project.id, { exec, leasesText: leases });
+  assert.equal(row()?.ipmiLink, "denied");
+  assert.equal(tried.length, 1);
+  await reconcileServers(project.id, { exec, leasesText: leases });
+  assert.equal(tried.length, 1, "自动检查跳过密码不对的机器");
+  await reconcileServers(project.id, { exec, leasesText: leases, force: true });
+  assert.equal(tried.length, 2, "立即检查会再试一次");
+
+  const saved = JSON.parse(fs.readFileSync(path.join(temp, "servers", `${row()!.id}.json`), "utf8"));
+  fs.writeFileSync(path.join(temp, "servers", `${saved.id}.json`), JSON.stringify({ ...saved, passwordChanged: true }));
+  bmcPassword = "reset-pass";
+  await importServerSheet(project.id, sheet("reset-pass"));
+  assert.equal(row()?.passwordChanged, false, "原密码改了就重新用原账号登录");
+  assert.equal(row()?.ipmiLink, "unknown");
+  assert.equal(row()?.stage, "waiting");
+  assert.match(row()?.detail || "", /原账号已更新/);
+  await reconcileServers(project.id, { exec, leasesText: leases });
+  assert.equal(tried.at(-1), "reset-pass");
+  assert.equal(row()?.ipmiLink, "up");
+  await deleteProject(project.id);
+});
