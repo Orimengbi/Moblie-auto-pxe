@@ -1443,7 +1443,15 @@ async function reconcileOnce(projectId: string, options?: ReconcileOptions): Pro
       const username = row.passwordChanged ? row.targetUser : row.originalUser;
       const password = row.passwordChanged ? row.targetPassword : row.originalPassword;
       try {
-        const probed = await probeIpmi(row.bmcIp, username, password, exec);
+        let probed = await probeIpmi(row.bmcIp, username, password, exec);
+        if (probed.link === "denied" && row.passwordChanged) {
+          // 目标密码不认、原密码又能登录，多半是 BMC 恢复过出厂设置。重新改一遍账号。
+          const original = await probeIpmi(row.bmcIp, row.originalUser, row.originalPassword, exec);
+          if (original.link === "up") {
+            probed = original;
+            row.passwordChanged = false;
+          }
+        }
         row.ipmiLink = probed.link;
         if (probed.ip) row.bmcIp = probed.ip;
         row.ipSource = probed.source;

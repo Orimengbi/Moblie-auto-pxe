@@ -778,3 +778,27 @@ test("one server can be added, fixed and removed without a new sheet", async () 
   assert.equal(listServers().some((row) => row.id === created.id), false);
   await deleteProject(project.id);
 });
+
+test("a BMC reset to factory settings is set up again with the original account", async () => {
+  const project = await createProject({ name: "机房 恢复出厂" });
+  await importServerSheet(project.id, parseServerTable([
+    ["序列号", "IPMI MAC", "原用户", "原密码", "目标用户", "目标密码", "安装系统"],
+    ["sn-reset", "aa:bb:cc:dd:ee:f9", "admin", "factory", "admin", "new-pass", "机房 Ubuntu"],
+  ]).records);
+  const row = () => listServers().find((item) => item.projectId === project.id && item.sn === "SN-RESET");
+  const file = path.join(temp, "servers", `${row()!.id}.json`);
+  fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, "utf8")), passwordChanged: true }));
+  let bmcPassword = "factory";
+  const exec = async (_host: string, _user: string, password: string, args: string[]) => {
+    if (password !== bmcPassword) return { code: 1, stdout: "", stderr: "> RAKP 2 HMAC is invalid" };
+    if (args[0] === "user" && args[1] === "list") return { code: 0, stdout: "ID  Name\n2   admin            true\n", stderr: "" };
+    if (args[0] === "user" && args[1] === "set" && args[2] === "password") bmcPassword = args[4];
+    return { code: 0, stdout: args[0] === "lan" ? "IP Address : 192.168.77.219\n" : "Chassis Power is on\n", stderr: "" };
+  };
+  await reconcileServers(project.id, { exec, leasesText: "9999999999 aa:bb:cc:dd:ee:f9 192.168.77.219 * *\n" });
+  assert.equal(row()?.ipmiLink, "up", "目标密码不认时改用原密码登录");
+  assert.equal(row()?.passwordChanged, false, "原密码能登录就重新走改账号");
+  assert.equal(bmcPassword, "factory", "项目关着时只读不改");
+  assert.match(row()?.detail || "", /打开项目开关后才会改账号/);
+  await deleteProject(project.id);
+});
