@@ -26,7 +26,7 @@ import {
   renderNicScript,
   renderUbuntuAutoinstall,
 } from "./render.ts";
-import { bindServerBoot, createIpmi, deleteProject, getTask, listMachines, listServers, markServerInstalled, requestReinstall, saveFile, createNic, createProfile, createProject, createReport, customizationForMac, getIpmiBySn, getMachine, getProject, getState, importProjectPlan, importServerSheet, listImages, listNicsBySn, listProjects, publicServer, reconcileServers, saveMachine, saveMachineFact, saveNetwork, setProjectEnabled, updateProjectNetwork } from "./store.ts";
+import { bindServerBoot, createIpmi, deleteProject, getTask, listMachines, listServers, markServerInstalled, requestReinstall, saveFile, createNic, createProfile, createProject, createReport, customizationForMac, getIpmiBySn, getMachine, getProject, getState, importProjectPlan, importServerSheet, listImages, listNicsBySn, listProjects, publicServer, reconcileServers, renameProject, saveMachine, saveMachineFact, saveNetwork, setProjectEnabled, updateProjectNetwork } from "./store.ts";
 import { DEFAULT_STATE, type ImageRecord, type Profile } from "./types.ts";
 
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pxe-test-"));
@@ -641,4 +641,28 @@ test("the server sheet can give each system address for batch tasks", async () =
   await deleteProject(project.id);
   assert.equal(listMachines().some((item) => item.projectId === project.id), false);
   assert.equal(getTask(task.id), null);
+});
+
+test("a slow BMC does not hold up other changes", async () => {
+  const projectId = listProjects().find((item) => item.name === "机房A")?.id || "";
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const exec = async (_host: string, _user: string, _password: string, args: string[]) => {
+    await gate;
+    return { code: 0, stdout: args[0] === "lan" ? "IP Address Source : Static Address\nIP Address : 192.168.77.93\n" : "Chassis Power is on\n", stderr: "" };
+  };
+  const leases = "9999999999 aa:bb:cc:dd:ee:91 192.168.77.91 * *\n";
+  const first = reconcileServers(projectId, { exec, leasesText: leases });
+  assert.equal(reconcileServers(projectId, { exec, leasesText: leases }), first, "同一个项目只跑一个对账");
+  const renamed = await Promise.race([renameProject(projectId, { name: "机房A" }), new Promise((resolve) => setTimeout(() => resolve("blocked"), 1000))]);
+  assert.notEqual(renamed, "blocked", "等 BMC 的时候不能挡住别的修改");
+  await markServerInstalled("SN-SRV9");
+  release();
+  await first;
+  const row = listServers().find((item) => item.projectId === projectId && item.sn === "SN-SRV9");
+  assert.equal(row?.installed, "yes", "对账期间装完的状态要保留");
+  assert.equal(row?.bmcIp, "192.168.77.93");
+  assert.equal(row?.power, "on");
 });

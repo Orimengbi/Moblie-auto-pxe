@@ -1343,103 +1343,137 @@ export async function importServerSheet(projectId: string, records: { row: numbe
   });
 }
 
-export async function reconcileServers(projectId: string, options?: { exec?: IpmiExec; leasesText?: string }): Promise<{ changed: boolean }> {
+const reconciling = new Map<string, Promise<{ changed: boolean }>>();
+
+/**
+ * 按租约找 BMC、改账号、拉起安装。BMC 不通时 ipmitool 一次要等 20 秒，
+ * 所以连 BMC 时不占数据锁，只在写回每一行时加锁。同一个项目同时只跑一个。
+ */
+export function reconcileServers(projectId: string, options?: { exec?: IpmiExec; leasesText?: string }): Promise<{ changed: boolean }> {
+  const running = reconciling.get(projectId);
+  if (running) return running;
+  const job = reconcileOnce(projectId, options).finally(() => reconciling.delete(projectId));
+  reconciling.set(projectId, job);
+  return job;
+}
+
+async function reconcileOnce(projectId: string, options?: { exec?: IpmiExec; leasesText?: string }): Promise<{ changed: boolean }> {
   const exec = options?.exec || defaultIpmiExec;
   const leases = parseLeases(options?.leasesText ?? readLeasesText());
-  return withLock(async () => {
-    const project = getProject(projectId);
-    if (!project) throw new Error("项目不存在");
-    let changed = false;
-    for (const row of listServers()) {
-      if (row.projectId !== project.id) continue;
-      const snapshot = () => {
-        const { updatedAt, originalPassword, targetPassword, ...rest } = row;
-        return JSON.stringify(rest);
-      };
-      const before = snapshot();
-      const lease = leases.find((item) => item.active && item.mac === row.ipmiMac);
-      if (lease) row.bmcIp = lease.ip;
-      if (row.canApply && row.bmcIp && row.originalUser && row.originalPassword) {
-        const username = row.passwordChanged ? row.targetUser : row.originalUser;
-        const password = row.passwordChanged ? row.targetPassword : row.originalPassword;
-        try {
-          const probed = await probeIpmi(row.bmcIp, username, password, exec);
-          row.ipmiLink = probed.link;
-          if (probed.ip) row.bmcIp = probed.ip;
-          row.ipSource = probed.source;
-          row.power = probed.power;
-        } catch {
-          row.ipmiLink = "down";
-        }
-      }
-      if (!row.canApply) {
-        row.stage = "error";
-      } else if (row.installed === "yes") {
-        row.detail = `系统已安装。IPMI ${row.ipmiLink === "up" ? "通" : row.ipmiLink === "down" ? "不通" : "还没探测"}`;
-      } else if (!row.bmcIp) {
-        row.stage = row.stage === "installing" ? "installing" : "waiting";
-        row.detail = "已列入。DHCP 里还没有这个 IPMI MAC";
-      } else if (row.ipmiLink === "down") {
-        row.stage = "error";
-        row.detail = `IPMI 不通，当前地址 ${row.bmcIp}`;
-      } else if (!project.enabled) {
-        if (row.stage !== "installing") row.stage = "waiting";
-        row.detail = `已列入，IPMI 地址 ${row.bmcIp}。打开项目开关后才会改账号并安装`;
-      } else if (row.stage !== "installing") {
-        const profile = profilesForProject(project.id).find((item) => item.name === row.osName);
-        try {
-          if (row.ipmiAddress && !row.networkApplied) {
-            const username = row.passwordChanged ? row.targetUser : row.originalUser;
-            const password = row.passwordChanged ? row.targetPassword : row.originalPassword;
-            await setIpmiLan(
-              {
-                host: row.bmcIp,
-                username,
-                password,
-                address: row.ipmiAddress,
-                netmask: row.ipmiNetmask,
-                gateway: row.ipmiGateway,
-                vlan: row.ipmiVlan,
-              },
-              exec,
-            );
-            row.networkApplied = true;
-            row.bmcIp = row.ipmiAddress;
-            row.ipSource = "static";
-          }
-          if (!row.passwordChanged) {
-            await changeIpmiAccount(
-              {
-                host: row.bmcIp,
-                originalUser: row.originalUser,
-                originalPassword: row.originalPassword,
-                targetUser: row.targetUser,
-                targetPassword: row.targetPassword,
-              },
-              exec,
-            );
-            row.passwordChanged = true;
-          }
-          if (!profile) {
-            row.stage = "error";
-            row.detail = `IPMI 已连通。项目里没有名为「${row.osName}」的安装设置，还不能开始安装`;
-          } else if (row.stage !== "ready") {
-            await bootFromPxe(row.bmcIp, row.targetUser, row.targetPassword, exec);
-            row.stage = "ready";
-            row.detail = `已把 IPMI 账号改成 ${row.targetUser}，并让 ${row.bmcIp} 从网卡启动`;
-          }
-        } catch (error) {
-          row.stage = "error";
-          row.detail = error instanceof Error ? error.message : "处理这台 BMC 失败";
-        }
-      }
-      if (snapshot() !== before) {
-        row.updatedAt = new Date().toISOString();
-        changed = true;
-        writeJson(serverPath(row.id), row);
+  const project = getProject(projectId);
+  if (!project) throw new Error("项目不存在");
+  let changed = false;
+  for (const row of listServers()) {
+    if (row.projectId !== project.id) continue;
+    const base = row.updatedAt;
+    const snapshot = () => {
+      const { updatedAt, originalPassword, targetPassword, ...rest } = row;
+      return JSON.stringify(rest);
+    };
+    const before = snapshot();
+    const lease = leases.find((item) => item.active && item.mac === row.ipmiMac);
+    if (lease) row.bmcIp = lease.ip;
+    if (row.canApply && row.bmcIp && row.originalUser && row.originalPassword) {
+      const username = row.passwordChanged ? row.targetUser : row.originalUser;
+      const password = row.passwordChanged ? row.targetPassword : row.originalPassword;
+      try {
+        const probed = await probeIpmi(row.bmcIp, username, password, exec);
+        row.ipmiLink = probed.link;
+        if (probed.ip) row.bmcIp = probed.ip;
+        row.ipSource = probed.source;
+        row.power = probed.power;
+      } catch {
+        row.ipmiLink = "down";
       }
     }
-    return { changed };
+    if (!row.canApply) {
+      row.stage = "error";
+    } else if (row.installed === "yes") {
+      row.detail = `系统已安装。IPMI ${row.ipmiLink === "up" ? "通" : row.ipmiLink === "down" ? "不通" : "还没探测"}`;
+    } else if (!row.bmcIp) {
+      row.stage = row.stage === "installing" ? "installing" : "waiting";
+      row.detail = "已列入。DHCP 里还没有这个 IPMI MAC";
+    } else if (row.ipmiLink === "down") {
+      row.stage = "error";
+      row.detail = `IPMI 不通，当前地址 ${row.bmcIp}`;
+    } else if (!project.enabled) {
+      if (row.stage !== "installing") row.stage = "waiting";
+      row.detail = `已列入，IPMI 地址 ${row.bmcIp}。打开项目开关后才会改账号并安装`;
+    } else if (row.stage !== "installing") {
+      const profile = profilesForProject(project.id).find((item) => item.name === row.osName);
+      try {
+        if (row.ipmiAddress && !row.networkApplied) {
+          const username = row.passwordChanged ? row.targetUser : row.originalUser;
+          const password = row.passwordChanged ? row.targetPassword : row.originalPassword;
+          await setIpmiLan(
+            {
+              host: row.bmcIp,
+              username,
+              password,
+              address: row.ipmiAddress,
+              netmask: row.ipmiNetmask,
+              gateway: row.ipmiGateway,
+              vlan: row.ipmiVlan,
+            },
+            exec,
+          );
+          row.networkApplied = true;
+          row.bmcIp = row.ipmiAddress;
+          row.ipSource = "static";
+        }
+        if (!row.passwordChanged) {
+          await changeIpmiAccount(
+            {
+              host: row.bmcIp,
+              originalUser: row.originalUser,
+              originalPassword: row.originalPassword,
+              targetUser: row.targetUser,
+              targetPassword: row.targetPassword,
+            },
+            exec,
+          );
+          row.passwordChanged = true;
+        }
+        if (!profile) {
+          row.stage = "error";
+          row.detail = `IPMI 已连通。项目里没有名为「${row.osName}」的安装设置，还不能开始安装`;
+        } else if (row.stage !== "ready") {
+          await bootFromPxe(row.bmcIp, row.targetUser, row.targetPassword, exec);
+          row.stage = "ready";
+          row.detail = `已把 IPMI 账号改成 ${row.targetUser}，并让 ${row.bmcIp} 从网卡启动`;
+        }
+      } catch (error) {
+        row.stage = "error";
+        row.detail = error instanceof Error ? error.message : "处理这台 BMC 失败";
+      }
+    }
+    if (snapshot() !== before && (await saveReconciled(row, base))) changed = true;
+  }
+  return { changed };
+}
+
+/** 这一行在对账期间被别处改过时，保留那边的状态，只补上对 BMC 做过的事和探测结果。 */
+function saveReconciled(row: ServerRow, base: string): Promise<boolean> {
+  return withLock(() => {
+    const current = listServers().find((item) => item.id === row.id);
+    if (!current) return false;
+    const now = new Date().toISOString();
+    if (current.updatedAt === base) {
+      writeJson(serverPath(row.id), { ...row, updatedAt: now });
+      return true;
+    }
+    if (current.ipmiMac !== row.ipmiMac) return false;
+    writeJson(serverPath(row.id), {
+      ...current,
+      bmcIp: row.bmcIp,
+      ipmiLink: row.ipmiLink,
+      ipSource: row.ipSource,
+      power: row.power,
+      networkApplied: row.networkApplied,
+      passwordChanged: row.passwordChanged,
+      updatedAt: now,
+    });
+    return true;
   });
 }
 

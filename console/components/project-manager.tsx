@@ -15,6 +15,7 @@ export function ProjectManager({ projects }: { projects: Project[] }) {
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
+  const [switching, setSwitching] = useState("");
 
   async function create(event: React.FormEvent) {
     event.preventDefault();
@@ -39,18 +40,26 @@ export function ProjectManager({ projects }: { projects: Project[] }) {
   }
 
   async function toggle(project: Project) {
+    if (switching) return;
     setError("");
-    const response = await fetch(`/api/projects/${project.id}/enable`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ enabled: !project.enabled }),
-    });
-    const body = await response.json();
-    if (!response.ok) {
-      setError(body.error || "无法切换项目");
-      return;
+    setSwitching(project.id);
+    try {
+      const response = await fetch(`/api/projects/${project.id}/enable`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ enabled: !project.enabled }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setError(body.error || "无法切换项目");
+        return;
+      }
+      router.refresh();
+    } catch {
+      setError("没有连上控制台，开关没有切换");
+    } finally {
+      setSwitching("");
     }
-    router.refresh();
   }
 
   async function remove(id: string) {
@@ -85,10 +94,11 @@ export function ProjectManager({ projects }: { projects: Project[] }) {
                   role="switch"
                   aria-checked={project.enabled}
                   onClick={() => toggle(project)}
-                  className={`inline-flex h-8 items-center gap-2 rounded-full px-3 text-sm ${project.enabled ? "bg-primary text-primary-foreground" : "bg-muted text-foreground"}`}
+                  disabled={Boolean(switching)}
+                  className={`inline-flex h-8 items-center gap-2 rounded-full px-3 text-sm disabled:opacity-60 ${project.enabled ? "bg-primary text-primary-foreground" : "bg-muted text-foreground"}`}
                 >
                   <span className={`inline-block size-3 rounded-full ${project.enabled ? "bg-primary-foreground" : "bg-foreground/40"}`} />
-                  {project.enabled ? "已启用" : "未启用"}
+                  {switching === project.id ? "切换中" : project.enabled ? "已启用" : "未启用"}
                 </button>
               </div>
               <p className="mt-3 text-sm text-muted-foreground">
