@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { HOST_SOURCE, ProjectTaskRunner } from "@/components/project-task-runner";
 import { ServerEditDialog } from "@/components/server-edit-dialog";
+import { ServerPowerDialog } from "@/components/server-power-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -73,6 +74,7 @@ export function ProjectServerList({
   const busy = useRef(false);
   const [editing, setEditing] = useState<ServerListRow | null>(null);
   const [adding, setAdding] = useState(false);
+  const [powerTargets, setPowerTargets] = useState<ServerListRow[]>([]);
 
   async function remove(row: ServerListRow) {
     if (!window.confirm(`从列表里删掉 ${row.sn}？不会动这台机器的 BMC 和系统。`)) return;
@@ -158,6 +160,11 @@ export function ProjectServerList({
                 选中已安装的
               </Button>
               {picked.length ? (
+                <Button type="button" size="xs" variant="outline" onClick={() => setPowerTargets(rows.filter((row) => picked.includes(row.id)))}>
+                  电源和引导（{picked.length}）
+                </Button>
+              ) : null}
+              {picked.length ? (
                 <Button type="button" size="xs" variant="ghost" onClick={() => setPicked([])}>
                   取消选择（{picked.length}）
                 </Button>
@@ -224,6 +231,9 @@ export function ProjectServerList({
                       {row.hostSource ? <span className="mt-1 block font-sans text-muted-foreground">{HOST_SOURCE[row.hostSource]}</span> : null}
                     </TableCell>
                     <TableCell className="text-right whitespace-nowrap">
+                      <Button type="button" size="xs" variant="ghost" disabled={!row.bmcIp} onClick={() => setPowerTargets([row])}>
+                        电源
+                      </Button>
                       <Button type="button" size="xs" variant="ghost" onClick={() => setEditing(row)}>
                         编辑
                       </Button>
@@ -253,6 +263,7 @@ export function ProjectServerList({
           setAdding(false);
         }}
       />
+      <ServerPowerDialog projectId={projectId} targets={powerTargets} onClose={() => setPowerTargets([])} />
       <div className="grid gap-3 border-t pt-4">
         <h3 className="font-medium">批量任务</h3>
         <ProjectTaskRunner projectId={projectId} picked={picked} installed={installed} onPick={setPicked} files={files} tasks={tasks} />

@@ -135,6 +135,59 @@ export async function bootFromPxe(host: string, username: string, password: stri
   if (on.code !== 0) fail(on, "无法开机");
 }
 
+/** 服务器列表里的电源按钮对应的 ipmitool chassis power 子命令。 */
+export const POWER_ACTIONS = {
+  on: { args: ["on"], label: "开机" },
+  soft: { args: ["soft"], label: "关机" },
+  off: { args: ["off"], label: "强制关机" },
+  reset: { args: ["reset"], label: "重启" },
+  cycle: { args: ["cycle"], label: "断电重启" },
+} as const;
+
+export type PowerAction = keyof typeof POWER_ACTIONS;
+
+/**
+ * 引导设备。IPMI 没有单独的 U 盘选项，U 盘属于「可移动介质」，ipmitool 里叫 floppy；
+ * 大多数 BMC（Supermicro、Dell、浪潮等）按 U 盘处理，个别机型要在 BIOS 里把 U 盘排进可移动设备。
+ */
+export const BOOT_DEVICES = {
+  pxe: { arg: "pxe", label: "网卡 PXE" },
+  usb: { arg: "floppy", label: "U 盘" },
+  cdrom: { arg: "cdrom", label: "光驱 CDROM" },
+  disk: { arg: "disk", label: "硬盘" },
+  bios: { arg: "bios", label: "进 BIOS 设置" },
+} as const;
+
+export type BootDevice = keyof typeof BOOT_DEVICES;
+
+export async function powerControl(host: string, username: string, password: string, action: PowerAction, exec: IpmiExec): Promise<void> {
+  const spec = POWER_ACTIONS[action];
+  if (!spec) throw new Error("不支持的电源操作");
+  const result = await exec(host, username, password, ["chassis", "power", ...spec.args]);
+  if (result.code !== 0) fail(result, `${spec.label}失败`);
+}
+
+/** persistent 时每次开机都走这个设备，否则只管下一次。legacy 时按传统 BIOS 引导，默认 UEFI。 */
+export async function setBootDevice(
+  host: string,
+  username: string,
+  password: string,
+  input: { device: BootDevice; persistent?: boolean; legacy?: boolean },
+  exec: IpmiExec,
+): Promise<void> {
+  const spec = BOOT_DEVICES[input.device];
+  if (!spec) throw new Error("不支持的引导设备");
+  const options = [...(input.legacy ? [] : ["efiboot"]), ...(input.persistent ? ["persistent"] : [])];
+  const args = ["chassis", "bootdev", spec.arg, ...(options.length ? [`options=${options.join(",")}`] : [])];
+  const result = await exec(host, username, password, args);
+  if (result.code !== 0) fail(result, `设置从${spec.label}启动失败`);
+}
+
+export async function powerStatus(host: string, username: string, password: string, exec: IpmiExec): Promise<"on" | "off" | "unknown"> {
+  const result = await exec(host, username, password, ["chassis", "power", "status"]);
+  return parsePowerStatus(result.stdout);
+}
+
 export async function defaultIpmiExec(host: string, username: string, password: string, args: string[]): Promise<IpmiExecResult> {
   const file = path.join(os.tmpdir(), `pxe-ipmi-${process.pid}-${Date.now()}.pw`);
   fs.writeFileSync(file, password, { mode: 0o600 });

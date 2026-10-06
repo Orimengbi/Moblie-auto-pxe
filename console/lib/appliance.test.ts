@@ -9,7 +9,7 @@ import { parseLeases, renderDnsmasq } from "./dnsmasq.ts";
 import { detectFromListing, inspectIso } from "./iso.ts";
 import { mergeMachineRows } from "./machine-rows.ts";
 import { parsePlanTable } from "./plan-sheet.ts";
-import { ipmiFailure, parseIpmiUserList } from "./ipmi-remote.ts";
+import { ipmiFailure, parseIpmiUserList, setBootDevice } from "./ipmi-remote.ts";
 import { parseServerTable } from "./server-sheet.ts";
 import { menuFor, serialProbe } from "./boot.ts";
 import { createTask, resolveHost, runTask, type Exec } from "./remote.ts";
@@ -26,7 +26,7 @@ import {
   renderNicScript,
   renderUbuntuAutoinstall,
 } from "./render.ts";
-import { bindServerBoot, createIpmi, deleteProject, deleteServer, saveServer, getTask, listMachines, listServers, markServerInstalled, requestReinstall, saveFile, createNic, createProfile, createProject, createReport, customizationForMac, getIpmiBySn, getMachine, getProject, getState, importProjectPlan, importServerSheet, listImages, listNicsBySn, listProjects, publicServer, reconcileServers, renameProject, saveMachine, saveMachineFact, saveNetwork, setProjectEnabled, updateProjectNetwork } from "./store.ts";
+import { bindServerBoot, controlServer, createIpmi, deleteProject, deleteServer, saveServer, getTask, listMachines, listServers, markServerInstalled, requestReinstall, saveFile, createNic, createProfile, createProject, createReport, customizationForMac, getIpmiBySn, getMachine, getProject, getState, importProjectPlan, importServerSheet, listImages, listNicsBySn, listProjects, publicServer, reconcileServers, renameProject, saveMachine, saveMachineFact, saveNetwork, setProjectEnabled, updateProjectNetwork } from "./store.ts";
 import { DEFAULT_STATE, type ImageRecord, type Profile } from "./types.ts";
 
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pxe-test-"));
@@ -809,5 +809,62 @@ test("a BMC reset to factory settings is set up again with the original account"
   assert.equal(row()?.passwordChanged, false, "原密码能登录就重新走改账号");
   assert.equal(bmcPassword, "factory", "项目关着时只读不改");
   assert.match(row()?.detail || "", /打开项目开关后才会改账号/);
+  await deleteProject(project.id);
+});
+
+test("power and boot device go to the BMC with the account it accepts now", async () => {
+  const project = await createProject({ name: "机房 电源" });
+  const parsed = parseServerTable([
+    ["序列号", "IPMI MAC", "原用户", "原密码", "目标用户", "目标密码", "安装系统"],
+    ["sn-power", "aa:bb:cc:dd:ee:f1", "admin", "old-pass", "ops", "new-pass", "机房 Ubuntu"],
+    ["sn-nolease", "aa:bb:cc:dd:ee:f2", "admin", "old-pass", "ops", "new-pass", "机房 Ubuntu"],
+  ]);
+  await importServerSheet(project.id, parsed.records);
+  const leases = "9999999999 aa:bb:cc:dd:ee:f1 192.168.77.221 * *\n";
+  let on = false;
+  const calls: string[] = [];
+  const exec = async (_host: string, user: string, password: string, args: string[]) => {
+    if (password !== "old-pass") return { code: 1, stdout: "", stderr: "> RAKP 2 HMAC is invalid" };
+    calls.push(`${user} ${args.join(" ")}`);
+    if (args[0] === "lan") return { code: 0, stdout: "IP Address : 192.168.77.221\n", stderr: "" };
+    if (args.join(" ") === "chassis power on" || args.join(" ") === "chassis power cycle") on = true;
+    if (args.join(" ") === "chassis power off") on = false;
+    return { code: 0, stdout: args[1] === "power" ? `Chassis Power is ${on ? "on" : "off"}\n` : "", stderr: "" };
+  };
+  await reconcileServers(project.id, { exec, leasesText: leases });
+  const rows = listServers().filter((row) => row.projectId === project.id);
+  const row = rows.find((item) => item.sn === "SN-POWER")!;
+  const saved = JSON.parse(fs.readFileSync(path.join(temp, "servers", `${row.id}.json`), "utf8"));
+  // 表里说已经改成目标账号，但 BMC 只认原密码：先试目标账号，被拒后用原账号。
+  fs.writeFileSync(path.join(temp, "servers", `${row.id}.json`), JSON.stringify({ ...saved, passwordChanged: true }));
+
+  calls.length = 0;
+  const result = await controlServer(project.id, row.id, { boot: "usb", power: "cycle" }, exec);
+  assert.deepEqual(calls, [
+    "admin chassis power status",
+    "admin chassis bootdev floppy options=efiboot",
+    "admin chassis power on",
+    "admin chassis power status",
+  ], "关着的机器重启变成开机");
+  assert.equal(result.row.power, "on");
+  assert.match(result.message, /下次从U 盘启动，开机/);
+
+  calls.length = 0;
+  await controlServer(project.id, row.id, { boot: "cdrom", persistent: true, legacy: true }, exec);
+  assert.ok(calls.includes("admin chassis bootdev cdrom options=persistent"));
+  assert.ok(!calls.some((call) => call.startsWith("admin chassis power cycle")));
+  await controlServer(project.id, row.id, { power: "off" }, exec);
+  assert.equal(listServers().find((item) => item.id === row.id)?.power, "off");
+
+  await assert.rejects(controlServer(project.id, row.id, { power: "explode" as never }, exec), /不支持的电源操作/);
+  await assert.rejects(controlServer(project.id, row.id, {}, exec), /没有要执行的操作/);
+  const noLease = rows.find((item) => item.sn === "SN-NOLEASE")!;
+  await assert.rejects(controlServer(project.id, noLease.id, { power: "on" }, exec), /还没有 IPMI 地址/);
+  const deny = async () => ({ code: 1, stdout: "", stderr: "> RAKP 2 HMAC is invalid" });
+  await assert.rejects(controlServer(project.id, row.id, { power: "on" }, deny), /不接受表里的账号密码/);
+
+  const args: string[][] = [];
+  await setBootDevice("h", "u", "p", { device: "pxe", persistent: true }, async (_h, _u, _p, a) => (args.push(a), { code: 0, stdout: "", stderr: "" }));
+  assert.deepEqual(args[0], ["chassis", "bootdev", "pxe", "options=efiboot,persistent"]);
   await deleteProject(project.id);
 });

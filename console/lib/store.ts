@@ -3,7 +3,22 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { parseLeases, renderBootIpxe, renderDnsmasq } from "./dnsmasq.ts";
-import { bootFromPxe, changeIpmiAccount, defaultIpmiExec, probeIpmi, setIpmiLan, type IpmiExec } from "./ipmi-remote.ts";
+import {
+  BOOT_DEVICES,
+  POWER_ACTIONS,
+  bootFromPxe,
+  changeIpmiAccount,
+  defaultIpmiExec,
+  ipmiFailure,
+  powerControl,
+  powerStatus,
+  probeIpmi,
+  setBootDevice,
+  setIpmiLan,
+  type BootDevice,
+  type IpmiExec,
+  type PowerAction,
+} from "./ipmi-remote.ts";
 import type { PlanCells } from "./plan-sheet.ts";
 import type { ServerCells } from "./server-sheet.ts";
 import {
@@ -1553,6 +1568,71 @@ function saveReconciled(row: ServerRow, base: string): Promise<boolean> {
     });
     return true;
   });
+}
+
+export interface ServerControl {
+  /** 先设引导设备，再做电源操作；两个都可以单独给。 */
+  boot?: BootDevice;
+  persistent?: boolean;
+  legacy?: boolean;
+  power?: PowerAction;
+}
+
+/**
+ * 服务器列表里的电源和引导按钮。用 BMC 现在的账号登录：改过账号用目标账号，目标账号被拒再试原账号。
+ * 和对账一样不在连 BMC 时占数据锁，只在写回开关机状态时加锁。
+ */
+export async function controlServer(
+  projectId: string,
+  serverId: string,
+  input: ServerControl,
+  exec: IpmiExec = defaultIpmiExec,
+): Promise<{ row: ServerRow; message: string }> {
+  const row = listServers().find((item) => item.projectId === projectId && item.id === serverId);
+  if (!row) throw new Error("这台机器不在这个项目里");
+  if (input.boot !== undefined && !Object.hasOwn(BOOT_DEVICES, input.boot)) throw new Error("不支持的引导设备");
+  if (input.power !== undefined && !Object.hasOwn(POWER_ACTIONS, input.power)) throw new Error("不支持的电源操作");
+  if (!input.boot && !input.power) throw new Error("没有要执行的操作");
+  if (!row.bmcIp) throw new Error(`${row.sn} 还没有 IPMI 地址，等 DHCP 发现它或在表里填 IPMI 地址`);
+
+  const accounts = [
+    ...(row.passwordChanged ? [{ user: row.targetUser, password: row.targetPassword }] : []),
+    { user: row.originalUser, password: row.originalPassword },
+  ].filter((item) => item.user && item.password);
+  if (!accounts.length) throw new Error(`${row.sn} 没有 IPMI 账号密码`);
+  let account = accounts[0];
+  let power = await exec(row.bmcIp, account.user, account.password, ["chassis", "power", "status"]);
+  if (power.code !== 0 && accounts[1] && ipmiFailure(power.stderr) === "denied") {
+    account = accounts[1];
+    power = await exec(row.bmcIp, account.user, account.password, ["chassis", "power", "status"]);
+  }
+  if (power.code !== 0) {
+    throw new Error(
+      ipmiFailure(power.stderr) === "denied" ? `${row.sn} 的 BMC ${row.bmcIp} 不接受表里的账号密码` : `${row.sn} 的 BMC ${row.bmcIp} 没有回应`,
+    );
+  }
+
+  const done: string[] = [];
+  if (input.boot) {
+    await setBootDevice(row.bmcIp, account.user, account.password, { device: input.boot, persistent: input.persistent, legacy: input.legacy }, exec);
+    done.push(`${input.persistent ? "以后都" : "下次"}从${BOOT_DEVICES[input.boot].label}启动`);
+  }
+  let action = input.power;
+  // 关着的机器「重启」没有意义，ipmitool 也会报错，直接开机。
+  if ((action === "reset" || action === "cycle") && /power is off/i.test(power.stdout)) action = "on";
+  if (action) {
+    await powerControl(row.bmcIp, account.user, account.password, action, exec);
+    done.push(POWER_ACTIONS[action].label);
+  }
+  const state = await powerStatus(row.bmcIp, account.user, account.password, exec).catch(() => "unknown" as const);
+  const saved = await withLock(() => {
+    const current = listServers().find((item) => item.id === row.id);
+    if (!current) return row;
+    const next = { ...current, power: state, ipmiLink: "up" as const, updatedAt: new Date().toISOString() };
+    writeJson(serverPath(row.id), next);
+    return next;
+  });
+  return { row: saved, message: `${row.sn}：${done.join("，")}` };
 }
 
 export async function bindServerBoot(snRaw: string, macRaw: string): Promise<ServerRow | null> {
