@@ -19,9 +19,10 @@ export function middleware(request: NextRequest) {
   if (authenticate(request.headers)) return NextResponse.next();
 
   if (api) return NextResponse.json({ error: "需要登录" }, { status: 401 });
-  // 用相对地址跳转：经 nginx 转发时 request.url 里的端口不可靠。
-  const next = pathname === "/" ? "" : `?next=${encodeURIComponent(`${pathname}${search}`)}`;
-  return new NextResponse(null, { status: 307, headers: { location: `/login${next}` } });
+  // 按浏览器发来的 Host 拼地址：request.url 是控制台自己监听的 127.0.0.1:3000。
+  const login = new URL("/login", `${request.nextUrl.protocol}//${request.headers.get("host") || request.nextUrl.host}`);
+  if (pathname !== "/") login.searchParams.set("next", `${pathname}${search}`);
+  return NextResponse.redirect(login);
 }
 
 export const config = {
