@@ -41,6 +41,57 @@ const EMPTY = {
   timezone: "Asia/Shanghai",
 };
 
+const LOCALES: [string, string][] = [
+  ["zh_CN.UTF-8", "简体中文"],
+  ["zh_TW.UTF-8", "繁體中文（台湾）"],
+  ["zh_HK.UTF-8", "繁體中文（香港）"],
+  ["en_US.UTF-8", "English (US)"],
+  ["en_GB.UTF-8", "English (UK)"],
+  ["ja_JP.UTF-8", "日本語"],
+  ["ko_KR.UTF-8", "한국어"],
+  ["de_DE.UTF-8", "Deutsch"],
+  ["fr_FR.UTF-8", "Français"],
+  ["es_ES.UTF-8", "Español"],
+  ["pt_BR.UTF-8", "Português (Brasil)"],
+  ["ru_RU.UTF-8", "Русский"],
+  ["it_IT.UTF-8", "Italiano"],
+  ["vi_VN.UTF-8", "Tiếng Việt"],
+  ["th_TH.UTF-8", "ไทย"],
+  ["id_ID.UTF-8", "Bahasa Indonesia"],
+  ["ar_SA.UTF-8", "العربية"],
+  ["C.UTF-8", "C（不本地化）"],
+];
+
+const TIMEZONES: [string, string][] = [
+  ["Asia/Shanghai", "北京 / 上海 UTC+8"],
+  ["Asia/Hong_Kong", "香港 UTC+8"],
+  ["Asia/Taipei", "台北 UTC+8"],
+  ["Asia/Singapore", "新加坡 UTC+8"],
+  ["Asia/Tokyo", "东京 UTC+9"],
+  ["Asia/Seoul", "首尔 UTC+9"],
+  ["Asia/Bangkok", "曼谷 UTC+7"],
+  ["Asia/Ho_Chi_Minh", "胡志明市 UTC+7"],
+  ["Asia/Jakarta", "雅加达 UTC+7"],
+  ["Asia/Kolkata", "印度 UTC+5:30"],
+  ["Asia/Dubai", "迪拜 UTC+4"],
+  ["Europe/Moscow", "莫斯科 UTC+3"],
+  ["Europe/Berlin", "柏林 / 中欧"],
+  ["Europe/Paris", "巴黎"],
+  ["Europe/London", "伦敦"],
+  ["America/New_York", "纽约 / 美东"],
+  ["America/Chicago", "芝加哥 / 美中"],
+  ["America/Denver", "丹佛 / 美山地"],
+  ["America/Los_Angeles", "洛杉矶 / 美西"],
+  ["America/Sao_Paulo", "圣保罗"],
+  ["Australia/Sydney", "悉尼"],
+  ["UTC", "UTC"],
+];
+
+// Keeps a value saved before these lists existed selectable instead of silently replacing it.
+function withCurrent(options: [string, string][], current: string): [string, string][] {
+  return !current || options.some(([value]) => value === current) ? options : [[current, "当前值"], ...options];
+}
+
 export function ProfileManager({
   projectId,
   profiles,
@@ -280,14 +331,30 @@ export function ProfileManager({
               <Input value={form.packages} onChange={(event) => setForm({ ...form, packages: event.target.value })} />
             </Field>
             <Field label="语言">
-              <Input list="profile-locales" value={form.locale} onChange={(event) => setForm({ ...form, locale: event.target.value })} />
-              <datalist id="profile-locales">
-                <option value="zh_CN.UTF-8">简体中文</option>
-                <option value="en_US.UTF-8">English (US)</option>
-              </datalist>
+              <select
+                className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm"
+                value={form.locale}
+                onChange={(event) => setForm({ ...form, locale: event.target.value })}
+              >
+                {withCurrent(LOCALES, form.locale).map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label} · {value}
+                  </option>
+                ))}
+              </select>
             </Field>
             <Field label="时区">
-              <Input value={form.timezone} onChange={(event) => setForm({ ...form, timezone: event.target.value })} />
+              <select
+                className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm"
+                value={form.timezone}
+                onChange={(event) => setForm({ ...form, timezone: event.target.value })}
+              >
+                {withCurrent(TIMEZONES, form.timezone).map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label} · {value}
+                  </option>
+                ))}
+              </select>
             </Field>
             <Field label="安装后脚本">
               <Textarea value={form.postScript} onChange={(event) => setForm({ ...form, postScript: event.target.value })} rows={4} placeholder="可选。在装好的系统里以 root 执行。" />
