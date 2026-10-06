@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -31,15 +31,30 @@ function percent(offset: number, size: number): number {
   return size ? Math.floor((offset / size) * 100) : 0;
 }
 
+class Paused extends Error {}
+
+function without(map: Record<string, string>, key: string): Record<string, string> {
+  const next = { ...map };
+  delete next[key];
+  return next;
+}
+
 export function ImageManager({ images, uploads }: { images: ImageRecord[]; uploads: PendingUpload[] }) {
   const router = useRouter();
   const [uploadName, setUploadName] = useState("");
   const [file, setFile] = useState<File | null>(null);
-  const [progress, setProgress] = useState<{ offset: number; size: number } | null>(null);
+  const [pickerKey, setPickerKey] = useState(0);
+  const [active, setActive] = useState<PendingUpload | null>(null);
+  const [taskErrors, setTaskErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
-  const [pending, setPending] = useState(false);
+  // 这一页里选过的文件。断了以后点继续不用重新选；刷新页面后才需要再选一次。
+  const files = useRef(new Map<string, File>());
+  const abort = useRef<AbortController | null>(null);
+  const resumePicker = useRef<HTMLInputElement>(null);
+  const [resumeTarget, setResumeTarget] = useState<PendingUpload | null>(null);
   const extracting = images.some((image) => image.status === "extracting");
   const resumable = file ? uploads.find((item) => item.fingerprint === fingerprintOf(file) && item.size === file.size) : undefined;
+  const tasks = active && !uploads.some((item) => item.id === active.id) ? [active, ...uploads] : uploads;
 
   useEffect(() => {
     if (!extracting) return;
@@ -48,24 +63,27 @@ export function ImageManager({ images, uploads }: { images: ImageRecord[]; uploa
   }, [extracting, router]);
 
   useEffect(() => {
-    if (!pending) return;
+    if (!active) return;
     const warn = (event: BeforeUnloadEvent) => event.preventDefault();
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
-  }, [pending]);
+  }, [active]);
 
   /** 发一段。网络断开或控制台 5xx 时等一会再试；服务器说位置不对时按它的位置继续。 */
-  async function sendChunk(id: string, selected: File, offset: number): Promise<{ offset: number; done: boolean }> {
+  async function sendChunk(id: string, selected: File, offset: number, signal: AbortSignal): Promise<{ offset: number; done: boolean }> {
     for (let attempt = 0; attempt < RETRIES; attempt += 1) {
       if (attempt) await new Promise((resolve) => setTimeout(resolve, attempt * 2000));
+      if (signal.aborted) throw new Paused();
       let response: Response;
       try {
         response = await fetch(`/api/images/uploads/${id}`, {
           method: "PATCH",
           headers: { "upload-offset": String(offset), "content-type": "application/octet-stream" },
           body: selected.slice(offset, Math.min(offset + CHUNK, selected.size)),
+          signal,
         });
       } catch {
+        if (signal.aborted) throw new Paused();
         continue;
       }
       const body = await response.json().catch(() => ({}));
@@ -77,49 +95,86 @@ export function ImageManager({ images, uploads }: { images: ImageRecord[]; uploa
     throw new Error(`网络断开，重试 ${RETRIES} 次都没成功`);
   }
 
-  async function uploadSelected() {
-    if (!file) return;
-    const selected = file;
-    setPending(true);
+  /** 打开（或接上）一个上传会话，然后一段一段传完。断开、暂停都会留在下面的任务列表里。 */
+  async function run(selected: File, name: string) {
+    const controller = new AbortController();
+    abort.current = controller;
     setError("");
-    setProgress({ offset: resumable?.offset || 0, size: selected.size });
+    let task: PendingUpload | null = null;
     try {
       const opened = await fetch("/api/images/uploads", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ filename: selected.name, size: selected.size, name: uploadName, fingerprint: fingerprintOf(selected) }),
+        body: JSON.stringify({ filename: selected.name, size: selected.size, name, fingerprint: fingerprintOf(selected) }),
       });
       const session = await opened.json();
       if (!opened.ok) throw new Error(session.error || "无法开始上传");
-      let offset = Number(session.offset) || 0;
-      setProgress({ offset, size: selected.size });
+      task = session as PendingUpload;
+      files.current.set(task.id, selected);
+      setTaskErrors((current) => without(current, task!.id));
+      let offset = Number(task.offset) || 0;
+      setActive({ ...task, offset });
       while (offset < selected.size) {
-        const sent = await sendChunk(session.id, selected, offset);
+        const sent = await sendChunk(task.id, selected, offset, controller.signal);
         offset = sent.offset;
-        setProgress({ offset, size: selected.size });
+        setActive({ ...task, offset, updatedAt: new Date().toISOString() });
         if (sent.done) break;
       }
-      setFile(null);
-      setUploadName("");
-      setProgress(null);
-      router.refresh();
+      files.current.delete(task.id);
     } catch (uploadError) {
-      const message = uploadError instanceof Error ? uploadError.message : "上传中断";
-      setError(`${message}。已经传上去的部分会保留，重新选择同一个 ISO 会从断开的位置继续。`);
-      router.refresh();
+      if (!(uploadError instanceof Paused)) {
+        const message = uploadError instanceof Error ? uploadError.message : "上传中断";
+        if (task) setTaskErrors((current) => ({ ...current, [task!.id]: message }));
+        else setError(message);
+      }
     } finally {
-      setPending(false);
+      abort.current = null;
+      setActive(null);
+      router.refresh();
     }
   }
 
-  async function discard(id: string) {
-    if (!window.confirm("放弃这个没传完的 ISO？已经传上去的部分会删除。")) return;
-    const response = await fetch(`/api/images/uploads/${id}`, { method: "DELETE" });
-    const body = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      setError(body.error || "删除失败");
+  function startSelected() {
+    if (!file) return;
+    const selected = file;
+    setFile(null);
+    setUploadName("");
+    setPickerKey((key) => key + 1);
+    void run(selected, uploadName);
+  }
+
+  function resume(item: PendingUpload) {
+    const known = files.current.get(item.id);
+    if (known) {
+      void run(known, item.name);
       return;
     }
+    setResumeTarget(item);
+    resumePicker.current?.click();
+  }
+
+  function resumeWith(picked: File | undefined) {
+    const item = resumeTarget;
+    setResumeTarget(null);
+    if (!item || !picked) return;
+    if (fingerprintOf(picked) !== item.fingerprint || picked.size !== item.size) {
+      setTaskErrors((current) => ({ ...current, [item.id]: `选的不是原来的文件，请选 ${item.fingerprint.split(":")[0]}（${formatBytes(item.size)}）` }));
+      return;
+    }
+    void run(picked, item.name);
+  }
+
+  async function cancel(item: PendingUpload) {
+    if (!window.confirm(`取消上传 ${item.name || item.filename}？已经传上去的部分会删除。`)) return;
+    if (active?.id === item.id) abort.current?.abort();
+    const response = await fetch(`/api/images/uploads/${item.id}`, { method: "DELETE" });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok && response.status !== 404) {
+      setTaskErrors((current) => ({ ...current, [item.id]: body.error || "取消失败" }));
+      return;
+    }
+    files.current.delete(item.id);
+    setTaskErrors((current) => without(current, item.id));
     router.refresh();
   }
 
@@ -139,7 +194,7 @@ export function ImageManager({ images, uploads }: { images: ImageRecord[]; uploa
       <section className="grid gap-3 rounded-xl bg-card p-4 ring-1 ring-foreground/10">
         <h2 className="font-medium">上传 ISO</h2>
         <p className="text-sm text-muted-foreground">
-          支持 Ubuntu、Debian、Rocky Linux、AlmaLinux 的 x86_64 安装 ISO，也可以直接传压缩过的 ISO（{ISO_FORMATS_LABEL}），导入后自动解压。按 4MB 一段上传，网络抖动会自动重试；断开后重新选择同一个文件，会从断开的位置接着传，传完自动识别抽取。
+          支持 Ubuntu、Debian、Rocky Linux、AlmaLinux 的 x86_64 安装 ISO，也可以直接传压缩过的 ISO（{ISO_FORMATS_LABEL}），导入后自动解压。按 4MB 一段上传，网络抖动会自动重试；断开的上传会留在下面的任务里，可以继续或取消，传完自动识别抽取。
         </p>
         <div className="grid gap-3 sm:max-w-md">
           <div className="grid gap-1.5">
@@ -147,53 +202,78 @@ export function ImageManager({ images, uploads }: { images: ImageRecord[]; uploa
             <Input id="upload-name" value={uploadName} placeholder="可留空，默认用文件名" onChange={(event) => setUploadName(event.target.value)} />
           </div>
           <Input
+            key={pickerKey}
             type="file"
             accept={ISO_ACCEPT}
-            disabled={pending}
             onChange={(event) => {
               setFile(event.target.files?.[0] || null);
-              setProgress(null);
               setError("");
             }}
           />
-          {resumable && !pending ? (
+          {resumable ? (
             <p className="text-sm text-muted-foreground">
               这个文件上次传到 {formatBytes(resumable.offset)}（{percent(resumable.offset, resumable.size)}%），会从这里继续。
             </p>
           ) : null}
-          {progress ? (
-            <div className="grid gap-1">
-              <div className="h-2 overflow-hidden rounded-full bg-muted">
-                <div className="h-full bg-primary transition-all" style={{ width: `${percent(progress.offset, progress.size)}%` }} />
-              </div>
-              <p className="text-sm text-muted-foreground">
-                已上传 {formatBytes(progress.offset)} / {formatBytes(progress.size)}（{percent(progress.offset, progress.size)}%）
-              </p>
-            </div>
-          ) : null}
-          <Button type="button" className="w-fit" disabled={pending || !file} onClick={uploadSelected}>
-            {pending ? "上传中，不要关闭页面" : resumable ? `从 ${percent(resumable.offset, resumable.size)}% 继续上传` : "上传并抽取"}
+          <Button type="button" className="w-fit" disabled={Boolean(active) || !file} onClick={startSelected}>
+            {resumable ? `从 ${percent(resumable.offset, resumable.size)}% 继续上传` : "上传并抽取"}
           </Button>
+          {active ? <p className="text-sm text-muted-foreground">一次传一个。正在上传时不要关闭页面，下面可以暂停。</p> : null}
         </div>
         {error ? <p className="text-sm text-destructive">{error}</p> : null}
       </section>
 
-      {uploads.length ? (
-        <section className="grid gap-2 rounded-xl bg-card p-4 ring-1 ring-foreground/10">
-          <h2 className="font-medium">没传完的上传</h2>
-          <p className="text-sm text-muted-foreground">在上面重新选择同一个文件就会接着传。</p>
-          {uploads.map((item) => (
-            <div key={item.id} className="flex flex-wrap items-center gap-3 text-sm">
-              <span className="font-medium">{item.name || item.filename}</span>
-              <span className="text-muted-foreground">
-                {formatBytes(item.offset)} / {formatBytes(item.size)}（{percent(item.offset, item.size)}%）
-              </span>
-              <span className="text-xs text-muted-foreground">最后更新 {new Date(item.updatedAt).toLocaleString("zh-CN")}</span>
-              <Button type="button" variant="ghost" size="sm" disabled={pending} onClick={() => discard(item.id)}>
-                放弃
-              </Button>
-            </div>
-          ))}
+      <input
+        ref={resumePicker}
+        type="file"
+        accept={ISO_ACCEPT}
+        className="hidden"
+        onChange={(event) => {
+          resumeWith(event.target.files?.[0]);
+          event.target.value = "";
+        }}
+      />
+
+      {tasks.length ? (
+        <section className="grid gap-3 rounded-xl bg-card p-4 ring-1 ring-foreground/10">
+          <h2 className="font-medium">上传任务</h2>
+          {tasks.map((item) => {
+            const running = active?.id === item.id;
+            const shown = running ? active : item;
+            const taskError = taskErrors[item.id];
+            return (
+              <div key={item.id} className="grid gap-1.5 border-t pt-3 text-sm first-of-type:border-t-0 first-of-type:pt-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-medium">{item.name || item.filename}</span>
+                  {item.name ? <span className="text-xs text-muted-foreground">{item.filename}</span> : null}
+                  <Badge variant={running ? "secondary" : taskError ? "destructive" : "outline"}>{running ? "上传中" : taskError ? "已中断" : "已暂停"}</Badge>
+                  <div className="ml-auto flex gap-1">
+                    {running ? (
+                      <Button type="button" variant="secondary" size="sm" onClick={() => abort.current?.abort()}>
+                        暂停
+                      </Button>
+                    ) : (
+                      <Button type="button" variant="secondary" size="sm" disabled={Boolean(active)} onClick={() => resume(item)}>
+                        继续
+                      </Button>
+                    )}
+                    <Button type="button" variant="ghost" size="sm" onClick={() => cancel(item)}>
+                      取消
+                    </Button>
+                  </div>
+                </div>
+                <div className="h-2 overflow-hidden rounded-full bg-muted">
+                  <div className={`h-full transition-all ${running ? "bg-primary" : "bg-muted-foreground/40"}`} style={{ width: `${percent(shown.offset, shown.size)}%` }} />
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {formatBytes(shown.offset)} / {formatBytes(shown.size)}（{percent(shown.offset, shown.size)}%）
+                  {running ? "" : ` · 最后更新 ${new Date(item.updatedAt).toLocaleString("zh-CN")}`}
+                  {!running && !files.current.has(item.id) ? " · 继续时需要重新选择这个文件" : ""}
+                </p>
+                {taskError ? <p className="text-xs text-destructive">{taskError}</p> : null}
+              </div>
+            );
+          })}
         </section>
       ) : null}
 

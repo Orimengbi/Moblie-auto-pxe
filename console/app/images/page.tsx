@@ -10,7 +10,7 @@ export default function ImagesPage() {
     <div>
       <PageHeader
         title="安装镜像"
-        description="上传 ISO 后控制台识别系统并抽出内核。上传中断后，重新选择同一个文件会从断开的位置接着传。"
+        description="上传 ISO 后控制台识别系统并抽出内核。上传断开后会留在任务列表里，可以从断开的位置继续，也可以取消。"
       />
       <ImageManager
         images={listImages()}
