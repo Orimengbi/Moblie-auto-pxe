@@ -333,3 +333,25 @@ export interface RemoteFile {
   size: number;
   createdAt: string;
 }
+
+/** 右上角任务列表里的一条批量任务，只带进度不带输出。 */
+export interface TaskSummary {
+  id: string;
+  projectId: string;
+  projectName: string;
+  kind: TaskKind;
+  name: string;
+  status: TaskStatus;
+  total: number;
+  ok: number;
+  failed: number;
+  createdAt: string;
+  finishedAt?: string;
+}
+
+export interface TaskFeed {
+  tasks: TaskSummary[];
+  extracting: { id: string; name: string }[];
+  /** 服务器上没传完的镜像上传会话。 */
+  uploads: { id: string; filename: string; name: string; size: number; offset: number; fingerprint: string; updatedAt: string }[];
+}

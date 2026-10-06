@@ -1,9 +1,7 @@
 "use client";
 
-import Link from "next/link";
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
-import { usePathname, useRouter } from "next/navigation";
-import { Button } from "@/components/ui/button";
+import { useRouter } from "next/navigation";
 
 export interface PendingUpload {
   id: string;
@@ -39,7 +37,6 @@ const UploadContext = createContext<UploadApi | null>(null);
 
 const CHUNK = 4 * 1024 * 1024;
 const RETRIES = 5;
-const FLOAT_KEY = "pxe-upload-float";
 
 class Paused extends Error {}
 
@@ -193,131 +190,6 @@ export function UploadProvider({ children }: { children: React.ReactNode }) {
   return (
     <UploadContext.Provider value={api}>
       {children}
-      <UploadFloat />
     </UploadContext.Provider>
-  );
-}
-
-/** 离开镜像页时，把这次经手的上传缩成一个能拖动的小窗。 */
-function UploadFloat() {
-  const pathname = usePathname();
-  const uploads = useUploads();
-  const box = useRef<HTMLDivElement>(null);
-  const drag = useRef<{ dx: number; dy: number } | null>(null);
-  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
-  const tasks = Object.values(uploads.live);
-  const visible = !pathname.startsWith("/images") && tasks.length > 0;
-
-  const clamp = useCallback((x: number, y: number) => {
-    const width = box.current?.offsetWidth || 288;
-    const height = box.current?.offsetHeight || 120;
-    return {
-      x: Math.min(Math.max(8, x), Math.max(8, window.innerWidth - width - 8)),
-      y: Math.min(Math.max(8, y), Math.max(8, window.innerHeight - height - 8)),
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!visible) return;
-    let saved: { x: number; y: number } | null = null;
-    try {
-      saved = JSON.parse(localStorage.getItem(FLOAT_KEY) || "null");
-    } catch {
-      saved = null;
-    }
-    const width = box.current?.offsetWidth || 288;
-    const height = box.current?.offsetHeight || 120;
-    setPos(clamp(saved?.x ?? window.innerWidth - width - 16, saved?.y ?? window.innerHeight - height - 16));
-    const onResize = () => setPos((current) => (current ? clamp(current.x, current.y) : current));
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, [visible, clamp]);
-
-  if (!visible) return null;
-
-  return (
-    <div
-      ref={box}
-      className="fixed z-50 grid w-72 gap-2 rounded-xl bg-card p-3 text-sm shadow-lg ring-1 ring-foreground/10"
-      style={pos ? { left: pos.x, top: pos.y } : { right: 16, bottom: 16 }}
-    >
-      <div
-        className="-m-3 mb-0 flex cursor-move touch-none items-center justify-between rounded-t-xl bg-muted/60 px-3 py-1.5 select-none"
-        onPointerDown={(event) => {
-          if ((event.target as HTMLElement).closest("a,button")) return;
-          const rect = box.current!.getBoundingClientRect();
-          drag.current = { dx: event.clientX - rect.left, dy: event.clientY - rect.top };
-          event.currentTarget.setPointerCapture(event.pointerId);
-        }}
-        onPointerMove={(event) => {
-          if (!drag.current) return;
-          setPos(clamp(event.clientX - drag.current.dx, event.clientY - drag.current.dy));
-        }}
-        onPointerUp={() => {
-          drag.current = null;
-          try {
-            if (pos) localStorage.setItem(FLOAT_KEY, JSON.stringify(pos));
-          } catch {
-            // 存不了位置也照样能用，只是下次回到默认位置。
-          }
-        }}
-      >
-        <span className="text-xs font-medium">镜像上传</span>
-        <Link href="/images" className="text-xs text-muted-foreground underline-offset-4 hover:underline">
-          打开镜像页
-        </Link>
-      </div>
-      {tasks.map((item) => (
-        <div key={item.id} className="grid gap-1 pt-1">
-          <div className="flex items-center gap-2">
-            <span className="min-w-0 flex-1 truncate font-medium" title={item.filename}>
-              {item.name || item.filename}
-            </span>
-            <span className={`shrink-0 text-xs ${item.state === "error" ? "text-destructive" : "text-muted-foreground"}`}>
-              {item.state === "running" ? `${percent(item.offset, item.size)}%` : item.state === "done" ? "已传完" : item.state === "error" ? "已中断" : "已暂停"}
-            </span>
-          </div>
-          <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-            <div
-              className={`h-full transition-all ${item.state === "running" || item.state === "done" ? "bg-primary" : "bg-muted-foreground/40"}`}
-              style={{ width: `${percent(item.offset, item.size)}%` }}
-            />
-          </div>
-          <p className="text-xs text-muted-foreground">
-            {item.state === "done" ? "后台正在识别和抽取" : `${formatBytes(item.offset)} / ${formatBytes(item.size)}`}
-          </p>
-          {item.error ? <p className="text-xs text-destructive">{item.error}</p> : null}
-          <div className="flex justify-end gap-1">
-            {item.state === "running" ? (
-              <Button type="button" variant="secondary" size="sm" onClick={uploads.pause}>
-                暂停
-              </Button>
-            ) : item.state !== "done" && uploads.hasFile(item.id) ? (
-              <Button type="button" variant="secondary" size="sm" disabled={uploads.running} onClick={() => uploads.resume(item.id)}>
-                继续
-              </Button>
-            ) : null}
-            {item.state === "done" ? (
-              <Button type="button" variant="ghost" size="sm" onClick={() => uploads.dismiss(item.id)}>
-                关闭
-              </Button>
-            ) : (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={async () => {
-                  if (!window.confirm(`取消上传 ${item.name || item.filename}？已经传上去的部分会删除。`)) return;
-                  const failed = await uploads.cancel(item);
-                  if (failed) window.alert(failed);
-                }}
-              >
-                取消
-              </Button>
-            )}
-          </div>
-        </div>
-      ))}
-    </div>
   );
 }

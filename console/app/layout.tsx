@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { headers } from "next/headers";
 import { Nav } from "@/components/nav";
+import { TaskCenter } from "@/components/task-center";
 import { UploadProvider } from "@/components/upload-provider";
 import { authenticate } from "@/lib/auth";
 import "./globals.css";
@@ -39,7 +40,12 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
                 </div>
                 <Nav user={{ username: identity.user.username, role: identity.user.role }} />
               </aside>
-              <main className="px-4 py-6 md:px-8 md:py-8">{children}</main>
+              <main className="relative px-4 py-6 md:px-8 md:py-8">
+                <div className="mb-4 flex justify-end xl:absolute xl:top-8 xl:right-8 xl:mb-0">
+                  <TaskCenter />
+                </div>
+                {children}
+              </main>
             </div>
           </UploadProvider>
         ) : (

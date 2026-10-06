@@ -1761,9 +1761,13 @@ export function publicProfile(profile: Profile): Omit<Profile, "passwordHash"> &
 }
 
 export function listTasks(projectId: string): RemoteTask[] {
+  return listAllTasks().filter((task) => task.projectId === projectId);
+}
+
+/** 所有项目的任务，新的在前。 */
+export function listAllTasks(): RemoteTask[] {
   ensureDataDirs();
   return listJson<RemoteTask>(path.join(dataDir(), "tasks"))
-    .filter((task) => task.projectId === projectId)
     .map(hydrateTask)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
