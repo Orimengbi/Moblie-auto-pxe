@@ -20,6 +20,28 @@
 
 IPMI 通道按通道 1 处理。BMC 要能从装机网拿到小主机发出的地址，小主机才能按 MAC 找到它。
 
+## 登录
+
+控制台要先登录。目标机取启动文件用的 `/boot/` 不需要登录。
+
+第一次启动时自动建一个管理员 `admin`，随机密码写在 `data/auth/initial-admin-password`。登录后在「我的账号」里改掉密码，然后删除这个文件。
+
+三种登录方式，权限相同：
+
+- **密码**：用户名加密码。
+- **访问密钥**：在「我的账号」里生成，形如 `pxe_...`，只显示一次。可以贴在登录页登录，也可以给脚本用：`curl -H "Authorization: Bearer pxe_..." http://控制台/api/projects`。
+- **SSH 公钥**：在「我的账号」里添加 `~/.ssh/id_ed25519.pub`。登录页填用户名，点「获取挑战码」，在自己电脑上执行页面给出的 `ssh-keygen -Y sign` 命令，把输出的签名贴回去。需要 OpenSSH 8.2 以上，Windows 10 自带的也可以。
+
+角色分两种。管理员可以在「用户」页新建、停用、删除用户，重设密码，管理所有人的密钥。普通用户能用装机、项目和批量任务，只能管理自己的密码和密钥。改密码、停用、改角色或删掉某把密钥后，相关的登录立即失效。
+
+忘记密码时在小主机上执行，会打印新的随机密码，并把这个用户设为启用的管理员：
+
+```bash
+docker compose exec console node --experimental-strip-types scripts/auth-admin.ts reset-password admin
+```
+
+账号存在 `data/auth/users.json`，密码用 scrypt 存哈希，访问密钥只存哈希。会话签名用的密钥是 `data/auth/secret`，删掉它所有人都要重新登录。
+
 ## 接线
 
 1. 小主机装 Ubuntu 或 Debian，安装 Docker 和 Compose 插件。

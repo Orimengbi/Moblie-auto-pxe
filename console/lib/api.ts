@@ -1,6 +1,8 @@
+import { AuthError } from "./auth.ts";
+
 export function jsonError(error: unknown, status = 400): Response {
   const message = error instanceof Error ? error.message : "请求失败";
-  return Response.json({ error: message }, { status });
+  return Response.json({ error: message }, { status: error instanceof AuthError ? error.status : status });
 }
 
 export async function readJson<T>(request: Request): Promise<T> {

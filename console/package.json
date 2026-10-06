@@ -7,7 +7,7 @@
     "build": "next build --turbopack",
     "start": "next start -p 43123",
     "lint": "eslint",
-    "test": "node --experimental-strip-types --test lib/appliance.test.ts"
+    "test": "node --experimental-strip-types --test lib/appliance.test.ts lib/auth.test.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",
