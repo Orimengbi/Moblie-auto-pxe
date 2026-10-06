@@ -1,190 +1,28 @@
-import crypto from "node:crypto";
 import http from "node:http";
 import https from "node:https";
 import type { Duplex } from "node:stream";
 import zlib from "node:zlib";
-import { getUser, signPayload, verifyPayload } from "./auth.ts";
+import { authenticate, sameOrigin } from "./auth.ts";
 import { bmcAccounts, getServer } from "./store.ts";
 
 /**
- * 远程控制台：把某台服务器 BMC 的网页、KVM 和虚拟介质 WebSocket 原样转发给浏览器。
- * nginx 在 HTTPS 443 上终结 TLS 后转到这里（BMC 的网页和 H5Viewer 只在 HTTPS 下正常工作）。
- * 浏览器只拿到一张签名 cookie 说明要看哪台机器；BMC 账号密码留在小主机上：
- * 登录请求经过这里时把表单里的用户名密码换成服务器表里的账号。
+ * 远程控制台：在控制台页面里嵌入某台服务器 BMC 的 KVM 画面（AMI H5Viewer）。
+ *
+ * nginx 把 /__bmc/<项目>/<服务器>/... 转到这里，这里再转给那台 BMC 的 https://<bmcIp>/...。
+ * 和控制台同源，所以不用另开端口和窗口，控制台登录 cookie 直接拿来鉴权。
+ * BMC 的会话（QSESSIONID 和 CSRF token）只留在小主机上，每次转发时补上，浏览器拿不到 BMC 账号密码。
+ * BMC 的页面写死了从根路径加载资源和连 WebSocket，由注入的 shim.js 在浏览器里改成带前缀的路径。
  */
 
-export const KVM_COOKIE = "pxe_kvm";
-const TICKET_SECONDS = 60;
-const COOKIE_SECONDS = 12 * 3600;
+const PREFIX_RE = /^\/__bmc\/([0-9a-f-]{36})\/([0-9a-f-]{36})(\/.*)?$/;
 
-interface KvmClaims {
-  t: "kvm-open" | "kvm";
-  p: string;
-  s: string;
-  u: string;
-  v: number;
-  n: string;
-  e: number;
+export function bmcPrefix(projectId: string, serverId: string): string {
+  return `/__bmc/${projectId}/${serverId}`;
 }
 
-export interface KvmTarget {
-  host: string;
-  sn: string;
-  accounts: { user: string; password: string }[];
-}
-
-/** 控制台按钮换来的一次性票据，60 秒内有效，打开后换成 cookie。 */
-export function kvmTicket(projectId: string, serverId: string, user: { id: string; version: number }): string {
-  return signPayload({
-    t: "kvm-open",
-    p: projectId,
-    s: serverId,
-    u: user.id,
-    v: user.version,
-    n: crypto.randomBytes(8).toString("base64url"),
-    e: Math.floor(Date.now() / 1000) + TICKET_SECONDS,
-  } satisfies KvmClaims);
-}
-
-const usedTickets = new Map<string, number>();
-
-/** 票据或 cookie 有效、用户仍然启用且没改过密码，才给出要转发的 BMC。 */
-export function resolveClaims(token: string, type: KvmClaims["t"]): { claims: KvmClaims; target: KvmTarget } | null {
-  const claims = verifyPayload<KvmClaims>(token);
-  if (!claims || claims.t !== type || claims.e < Date.now() / 1000) return null;
-  const user = getUser(claims.u);
-  if (!user || user.disabled || user.version !== claims.v) return null;
-  const row = getServer(claims.p, claims.s);
-  if (!row?.bmcIp) return null;
-  const accounts = bmcAccounts(row);
-  if (!accounts.length) return null;
-  return { claims, target: { host: row.bmcIp, sn: row.sn, accounts } };
-}
-
-export function consumeTicket(token: string): { cookie: string; target: KvmTarget } | null {
-  const resolved = resolveClaims(token, "kvm-open");
-  if (!resolved) return null;
-  const now = Date.now() / 1000;
-  for (const [nonce, expires] of usedTickets) if (expires < now) usedTickets.delete(nonce);
-  if (usedTickets.has(resolved.claims.n)) return null;
-  usedTickets.set(resolved.claims.n, resolved.claims.e);
-  const cookie = signPayload({ ...resolved.claims, t: "kvm", e: Math.floor(now) + COOKIE_SECONDS } satisfies KvmClaims);
-  return { cookie, target: resolved.target };
-}
-
-export function parseCookies(header: string | undefined): Map<string, string> {
-  const cookies = new Map<string, string>();
-  for (const part of (header || "").split(";")) {
-    const at = part.indexOf("=");
-    if (at > 0) cookies.set(part.slice(0, at).trim(), part.slice(at + 1).trim());
-  }
-  return cookies;
-}
-
-/** 转给 BMC 的 cookie 去掉控制台自己的（pxe_ 开头），不把会话交给 BMC。 */
-export function bmcCookieHeader(header: string | undefined): string {
-  return [...parseCookies(header)]
-    .filter(([name]) => !name.startsWith("pxe_"))
-    .map(([name, value]) => `${name}=${value}`)
-    .join("; ");
-}
-
-/** 登录表单里的用户名密码换成服务器表里的账号，其他字段原样保留。 */
-export function substituteLogin(body: string, account: { user: string; password: string }): string {
-  const form = new URLSearchParams(body);
-  form.set("username", account.user);
-  form.set("password", account.password);
-  return form.toString();
-}
-
-export function injectAutologin(html: string): string {
-  const tag = '<script src="/__pxe/autologin.js"></script>';
-  return /<\/body>/i.test(html) ? html.replace(/<\/body>/i, `${tag}</body>`) : `${html}${tag}`;
-}
-
-/** 在 BMC 登录页自动填用户名并点登录。密码随便填，经过代理时会被换掉。最多试两次，免得来回跳。 */
-export function autologinScript(user: string): string {
-  return `(function () {
-  var user = ${JSON.stringify(user)};
-  var key = "pxe_autologin";
-  var tries = 0;
-  function visible(el) { return el && el.offsetParent !== null; }
-  function attempt() {
-    var id = document.getElementById("userid");
-    var pw = document.getElementById("password");
-    var btn = document.getElementById("btn-login");
-    if (visible(id) && visible(pw) && visible(btn)) {
-      var n = Number(sessionStorage.getItem(key) || 0);
-      if (n >= 2) return;
-      sessionStorage.setItem(key, String(n + 1));
-      id.value = user;
-      pw.value = "pxe-proxy";
-      ["input", "change", "keyup"].forEach(function (type) {
-        id.dispatchEvent(new Event(type, { bubbles: true }));
-        pw.dispatchEvent(new Event(type, { bubbles: true }));
-      });
-      btn.click();
-      return;
-    }
-    if (++tries < 80) setTimeout(attempt, 250);
-    else sessionStorage.removeItem(key);
-  }
-  attempt();
-})();
-`;
-}
-
-const HOP = new Set(["connection", "keep-alive", "proxy-connection", "transfer-encoding", "upgrade", "te", "trailer", "x-real-ip", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto"]);
-
-/** 发给 BMC 的请求头：Host、Origin、Referer 都改成 BMC 自己的地址，否则 BMC 的 CSRF 检查会拒绝。 */
-export function bmcRequestHeaders(headers: http.IncomingHttpHeaders, host: string, keepUpgrade = false): http.OutgoingHttpHeaders {
-  const out: http.OutgoingHttpHeaders = {};
-  for (const [name, value] of Object.entries(headers)) {
-    if (value === undefined || (HOP.has(name) && !(keepUpgrade && (name === "connection" || name === "upgrade")))) continue;
-    out[name] = value;
-  }
-  out.host = host;
-  const cookie = bmcCookieHeader(headers.cookie);
-  if (cookie) out.cookie = cookie;
-  else delete out.cookie;
-  if (headers.origin) out.origin = `https://${host}`;
-  if (typeof headers.referer === "string") {
-    try {
-      const referer = new URL(headers.referer);
-      out.referer = `https://${host}${referer.pathname}${referer.search}`;
-    } catch {
-      delete out.referer;
-    }
-  }
-  return out;
-}
-
-const CANONICAL: Record<string, string> = {
-  "sec-websocket-key": "Sec-WebSocket-Key",
-  "sec-websocket-version": "Sec-WebSocket-Version",
-  "sec-websocket-protocol": "Sec-WebSocket-Protocol",
-  "sec-websocket-extensions": "Sec-WebSocket-Extensions",
-};
-
-/**
- * AMI 的 KVM 服务按大小写比对握手头，Node 发出的小写 upgrade/connection 会被回 404。
- * WebSocket 握手按浏览器的写法发：Host、Upgrade、Sec-WebSocket-Key……
- */
-export function canonicalHeaders(headers: http.OutgoingHttpHeaders): http.OutgoingHttpHeaders {
-  const out: http.OutgoingHttpHeaders = {};
-  for (const [name, value] of Object.entries(headers)) {
-    const lower = name.toLowerCase();
-    out[CANONICAL[lower] || lower.replace(/(^|-)([a-z])/g, (_, dash: string, letter: string) => `${dash}${letter.toUpperCase()}`)] = value;
-  }
-  return out;
-}
-
-function page(res: http.ServerResponse, status: number, message: string): void {
-  res.writeHead(status, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
-  res.end(
-    `<!doctype html><meta charset="utf-8"><title>远程控制台</title><body style="font-family:sans-serif;padding:2rem;max-width:40rem">` +
-      `<h1 style="font-size:1.25rem">远程控制台</h1><p>${message}</p><p>请回到 PXE 控制台，在项目的服务器列表里点「远程控制台」重新打开。</p></body>`,
-  );
+export function parseBmcPath(pathname: string): { projectId: string; serverId: string; rest: string } | null {
+  const match = PREFIX_RE.exec(pathname);
+  return match ? { projectId: match[1], serverId: match[2], rest: match[3] || "/" } : null;
 }
 
 /** BMC 的网页端口。只有测试会改它。 */
@@ -194,7 +32,253 @@ function bmcPort(): number {
 
 const agent = new https.Agent({ keepAlive: true, rejectUnauthorized: false, maxSockets: 16 });
 
-function readBody(req: http.IncomingMessage, limit = 64 * 1024): Promise<Buffer> {
+interface BmcSession {
+  host: string;
+  sid: string;
+  csrf: string;
+  user: string;
+  privilege: number;
+  extendedpriv: number;
+}
+
+const sessions = new Map<string, Promise<BmcSession>>();
+
+function call(host: string, options: https.RequestOptions, body?: Buffer): Promise<{ response: http.IncomingMessage; body: Buffer }> {
+  return new Promise((resolve, reject) => {
+    const upstream = https.request({ host, port: bmcPort(), agent, timeout: 30_000, ...options }, (response) => {
+      const chunks: Buffer[] = [];
+      response.on("data", (chunk: Buffer) => chunks.push(chunk));
+      response.on("end", () => resolve({ response, body: Buffer.concat(chunks) }));
+      response.on("error", reject);
+    });
+    upstream.on("timeout", () => upstream.destroy(new Error("BMC 超时")));
+    upstream.on("error", reject);
+    upstream.end(body);
+  });
+}
+
+/** 用服务器表里的账号登录 BMC 网页，改过账号的先用目标账号。 */
+async function login(host: string, accounts: { user: string; password: string }[]): Promise<BmcSession> {
+  for (const account of accounts) {
+    const form = Buffer.from(new URLSearchParams({ username: account.user, password: account.password }).toString());
+    const { response, body } = await call(host, {
+      method: "POST",
+      path: "/api/session",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", "Content-Length": form.length },
+    }, form);
+    const sid = /QSESSIONID=([^;]+)/.exec([response.headers["set-cookie"] || []].flat().join(";"))?.[1];
+    if (response.statusCode !== 200 || !sid) continue;
+    const data = JSON.parse(body.toString("utf8")) as { CSRFToken?: string; privilege?: number; extendedpriv?: number };
+    return { host, sid, csrf: data.CSRFToken || "", user: account.user, privilege: data.privilege ?? 4, extendedpriv: data.extendedpriv ?? 3 };
+  }
+  throw new Error("BMC 不接受服务器表里的账号密码");
+}
+
+/** 每个控制台用户、每台服务器共用一个 BMC 会话；BMC 回 401 时重新登录。 */
+function session(key: string, host: string, accounts: { user: string; password: string }[], fresh = false): Promise<BmcSession> {
+  const cached = sessions.get(key);
+  if (cached && !fresh) {
+    return cached.then((value) => (value.host === host ? value : session(key, host, accounts, true)));
+  }
+  const created = login(host, accounts);
+  sessions.set(key, created);
+  created.catch(() => sessions.delete(key));
+  return created;
+}
+
+const HOP = new Set(["connection", "keep-alive", "proxy-connection", "transfer-encoding", "upgrade", "te", "trailer", "x-real-ip", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "cookie", "x-csrftoken", "authorization"]);
+
+const CANONICAL: Record<string, string> = {
+  "sec-websocket-key": "Sec-WebSocket-Key",
+  "sec-websocket-version": "Sec-WebSocket-Version",
+  "sec-websocket-protocol": "Sec-WebSocket-Protocol",
+  "sec-websocket-extensions": "Sec-WebSocket-Extensions",
+  "x-csrftoken": "X-CSRFTOKEN",
+};
+
+/** AMI 的 KVM 服务按大小写比对握手头，统一按浏览器的写法发：Host、Upgrade、Sec-WebSocket-Key…… */
+export function canonicalHeaders(headers: http.OutgoingHttpHeaders): http.OutgoingHttpHeaders {
+  const out: http.OutgoingHttpHeaders = {};
+  for (const [name, value] of Object.entries(headers)) {
+    const lower = name.toLowerCase();
+    out[CANONICAL[lower] || lower.replace(/(^|-)([a-z])/g, (_, dash: string, letter: string) => `${dash}${letter.toUpperCase()}`)] = value;
+  }
+  return out;
+}
+
+/**
+ * 发给 BMC 的请求头：浏览器的 cookie（控制台会话）不转发，换成小主机保存的 BMC 会话；
+ * Host、Origin、Referer 改成 BMC 自己的地址，否则 BMC 的 CSRF 检查会拒绝。
+ */
+export function bmcRequestHeaders(
+  headers: http.IncomingHttpHeaders,
+  bmc: { host: string; sid: string; csrf: string },
+  prefix: string,
+  upgrade = false,
+): http.OutgoingHttpHeaders {
+  const out: http.OutgoingHttpHeaders = {};
+  for (const [name, value] of Object.entries(headers)) {
+    if (value === undefined || (HOP.has(name) && !(upgrade && (name === "connection" || name === "upgrade")))) continue;
+    out[name] = value;
+  }
+  out.host = bmc.host;
+  out.cookie = `QSESSIONID=${bmc.sid}`;
+  if (bmc.csrf) out["x-csrftoken"] = bmc.csrf;
+  if (headers.origin) out.origin = `https://${bmc.host}`;
+  if (typeof headers.referer === "string") {
+    try {
+      const referer = new URL(headers.referer);
+      const path = referer.pathname.startsWith(`${prefix}/`) ? referer.pathname.slice(prefix.length) : referer.pathname;
+      out.referer = `https://${bmc.host}${path}${referer.search}`;
+    } catch {
+      delete out.referer;
+    }
+  }
+  return canonicalHeaders(out);
+}
+
+/** HTML 里写死的根路径（src="/..."、data-main="/app/main"）加上前缀，最前面插入 shim.js。 */
+export function rewriteHtml(html: string, prefix: string): string {
+  const fixed = html.replace(/(\s(?:src|href|action|data-main)\s*=\s*["'])\/(?!\/)/gi, `$1${prefix}/`);
+  const shim = `<script src="${prefix}/__pxe/shim.js"></script>`;
+  return /<head[^>]*>/i.test(fixed) ? fixed.replace(/<head[^>]*>/i, (head) => `${head}${shim}`) : `${shim}${fixed}`;
+}
+
+export function rewriteCss(css: string, prefix: string): string {
+  return css.replace(/url\(\s*(["']?)\/(?!\/)/gi, `url($1${prefix}/`);
+}
+
+/**
+ * 在 BMC 页面里最先运行：
+ * - XHR、fetch、WebSocket、动态 <script>/<img>/<link> 的根路径和本机地址都加上前缀；
+ * - document.cookie 换成内存里的一份（真正的 BMC 会话在小主机上），H5Viewer 在 HTTP 页面里写不了 __Host- cookie；
+ * - H5Viewer 本来由 BMC 首页 window.open 打开，会读 window.opener 上的权限和开关，这里补一个替身。
+ */
+export function shimScript(input: { prefix: string; csrf: string; user: string; privilege: number; extendedpriv: number; features: string[] }): string {
+  const has = (name: string) => input.features.includes(name);
+  const constants = {
+    CD_SERVER_APP_FLAG: has("CD_SERVER_APP"),
+    HOST_CURSOR_ENABLED_FLAG: has("HOST_CURSOR_ENABLED_DEFAULT"),
+    KVM_SESS_RECON_FLG: has("KVM_SESSION_RECONNECT"),
+    VMEDIA_MAX_COUNT_FLAG: has("VMEDIA_MAX_COUNT_FOR_KVM"),
+  };
+  const kvm = input.extendedpriv & 1 ? 1 : 0;
+  const vmedia = input.extendedpriv & 2 ? 1 : 0;
+  return `(function () {
+  var P = ${JSON.stringify(input.prefix)};
+  function fix(u) {
+    if (u == null) return u;
+    var s = String(u);
+    if (/^(data|blob|javascript|about):/i.test(s) || s.charAt(0) === "#") return u;
+    if (s.charAt(0) === "/" && s.charAt(1) !== "/") return s === P || s.indexOf(P + "/") === 0 ? s : P + s;
+    try {
+      var x = new URL(s, location.href);
+      if (x.hostname !== location.hostname) return u;
+      if (x.pathname !== P && x.pathname.indexOf(P + "/") !== 0) x.pathname = P + x.pathname;
+      x.host = location.host;
+      if (location.protocol === "http:") x.protocol = x.protocol === "wss:" ? "ws:" : x.protocol === "https:" ? "http:" : x.protocol;
+      else x.protocol = x.protocol === "ws:" ? "wss:" : x.protocol === "http:" ? "https:" : x.protocol;
+      return x.toString();
+    } catch (e) {
+      return u;
+    }
+  }
+
+  var open = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function (method, url) {
+    var args = Array.prototype.slice.call(arguments);
+    args[1] = fix(url);
+    return open.apply(this, args);
+  };
+  if (window.fetch) {
+    var nativeFetch = window.fetch;
+    window.fetch = function (input, init) {
+      return nativeFetch.call(this, typeof input === "string" || input instanceof URL ? fix(input) : input, init);
+    };
+  }
+  var NativeWebSocket = window.WebSocket;
+  var PatchedWebSocket = function (url, protocols) {
+    return protocols === undefined ? new NativeWebSocket(fix(url)) : new NativeWebSocket(fix(url), protocols);
+  };
+  PatchedWebSocket.prototype = NativeWebSocket.prototype;
+  ["CONNECTING", "OPEN", "CLOSING", "CLOSED"].forEach(function (k) { PatchedWebSocket[k] = NativeWebSocket[k]; });
+  window.WebSocket = PatchedWebSocket;
+  var nativeOpen = window.open;
+  window.open = function (url) {
+    var args = Array.prototype.slice.call(arguments);
+    args[0] = fix(url);
+    return nativeOpen.apply(window, args);
+  };
+  [[HTMLScriptElement, "src"], [HTMLImageElement, "src"], [HTMLLinkElement, "href"], [HTMLIFrameElement, "src"], [HTMLAnchorElement, "href"]].forEach(function (pair) {
+    var desc = Object.getOwnPropertyDescriptor(pair[0].prototype, pair[1]);
+    if (!desc || !desc.set) return;
+    Object.defineProperty(pair[0].prototype, pair[1], {
+      configurable: true,
+      enumerable: desc.enumerable,
+      get: desc.get,
+      set: function (v) { desc.set.call(this, fix(v)); }
+    });
+  });
+  var setAttribute = Element.prototype.setAttribute;
+  Element.prototype.setAttribute = function (name, value) {
+    var lower = String(name).toLowerCase();
+    return setAttribute.call(this, name, lower === "src" || lower === "href" || lower === "data-main" ? fix(value) : value);
+  };
+
+  var csrf = ${JSON.stringify(input.csrf)};
+  var jar = { QSESSIONID: "pxe", garc: csrf, "__Host-garc": csrf };
+  Object.defineProperty(document, "cookie", {
+    configurable: true,
+    get: function () { return Object.keys(jar).map(function (k) { return k + "=" + jar[k]; }).join("; "); },
+    set: function (v) {
+      var text = String(v), part = text.split(";")[0], at = part.indexOf("=");
+      if (at < 1) return;
+      var key = part.slice(0, at).trim();
+      if (/expires=Thu, 01 Jan 1970|max-age=0/i.test(text)) {
+        if (key !== "QSESSIONID" && !/garc$/.test(key)) delete jar[key];
+      } else {
+        jar[key] = part.slice(at + 1).trim();
+      }
+    }
+  });
+
+  window.privilege_id = ${input.privilege};
+  window.kvm_access = ${kvm};
+  window.vmedia_access = ${vmedia};
+  var noop = { removeAttr: function () { return noop; }, attr: function () { return noop; } };
+  try {
+    window.opener = {
+      CONSTANTS: ${JSON.stringify(constants)},
+      privilege_id: ${input.privilege},
+      kvm_access: ${kvm},
+      vmedia_access: ${vmedia},
+      $: function () { return noop; }
+    };
+  } catch (e) {}
+  try {
+    var seed = { privilege_id: "${input.privilege}", username: ${JSON.stringify(input.user)}, kvm_access: "${kvm}", vmedia_access: "${vmedia}" };
+    Object.keys(seed).forEach(function (k) { sessionStorage.setItem(k, seed[k]); });
+  } catch (e) {}
+})();
+`;
+}
+
+function page(res: http.ServerResponse, status: number, message: string): void {
+  res.writeHead(status, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+  res.end(
+    `<!doctype html><meta charset="utf-8"><title>远程控制台</title>` +
+      `<body style="font-family:sans-serif;padding:2rem;max-width:40rem;color:#444"><p>${message}</p></body>`,
+  );
+}
+
+function decode(body: Buffer, encoding: string | undefined): Buffer {
+  if (encoding === "gzip") return zlib.gunzipSync(body);
+  if (encoding === "deflate") return zlib.inflateSync(body);
+  if (encoding === "br") return zlib.brotliDecompressSync(body);
+  return body;
+}
+
+function readBody(req: http.IncomingMessage, limit: number): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
@@ -212,162 +296,155 @@ function readBody(req: http.IncomingMessage, limit = 64 * 1024): Promise<Buffer>
   });
 }
 
-function request(target: KvmTarget, options: https.RequestOptions, body?: Buffer): Promise<{ response: http.IncomingMessage }> {
-  return new Promise((resolve, reject) => {
-    const upstream = https.request({ host: target.host, port: bmcPort(), agent, timeout: 60_000, ...options }, (response) => resolve({ response }));
-    upstream.on("timeout", () => upstream.destroy(new Error("BMC 超时")));
-    upstream.on("error", reject);
-    upstream.end(body);
-  });
+interface Resolved {
+  prefix: string;
+  rest: string;
+  key: string;
+  host: string;
+  accounts: { user: string; password: string }[];
 }
 
-function collect(response: http.IncomingMessage): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    response.on("data", (chunk: Buffer) => chunks.push(chunk));
-    response.on("end", () => resolve(Buffer.concat(chunks)));
-    response.on("error", reject);
-  });
+/** 控制台登录有效、写请求来自本站页面、服务器有 IPMI 地址和账号，才转发。 */
+function resolve(req: http.IncomingMessage): Resolved | { status: number; message: string } {
+  const url = new URL(req.url || "/", "http://x");
+  const parsed = parseBmcPath(url.pathname);
+  if (!parsed) return { status: 404, message: "地址不对。" };
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(req.headers)) if (typeof value === "string") headers.set(name, value);
+  const identity = authenticate(headers);
+  if (!identity) return { status: 401, message: "需要先登录 PXE 控制台。" };
+  if (!["GET", "HEAD", "OPTIONS"].includes(req.method || "GET") && !sameOrigin(headers)) return { status: 403, message: "跨站请求被拒绝。" };
+  const row = getServer(parsed.projectId, parsed.serverId);
+  if (!row?.bmcIp) return { status: 404, message: "这台服务器还没有 IPMI 地址。" };
+  const accounts = bmcAccounts(row);
+  if (!accounts.length) return { status: 404, message: "服务器表里没有这台的 IPMI 账号密码。" };
+  return {
+    prefix: bmcPrefix(parsed.projectId, parsed.serverId),
+    rest: `${parsed.rest}${url.search}`,
+    key: `${identity.user.id}:${row.id}`,
+    host: row.bmcIp,
+    accounts,
+  };
 }
 
-function decode(body: Buffer, encoding: string | undefined): Buffer {
-  if (encoding === "gzip") return zlib.gunzipSync(body);
-  if (encoding === "deflate") return zlib.inflateSync(body);
-  if (encoding === "br") return zlib.brotliDecompressSync(body);
-  return body;
-}
-
-/** BMC 的 Location 如果写了自己的地址，改成相对地址，留在代理里。 */
-function responseHeaders(headers: http.IncomingHttpHeaders, host: string): http.OutgoingHttpHeaders {
-  const out: http.OutgoingHttpHeaders = {};
-  for (const [name, value] of Object.entries(headers)) {
-    if (value === undefined || name === "connection" || name === "keep-alive" || name === "transfer-encoding") continue;
-    out[name] = value;
+async function features(bmc: BmcSession): Promise<string[]> {
+  try {
+    const { response, body } = await call(bmc.host, {
+      method: "GET",
+      path: "/api/configuration/project",
+      headers: { Cookie: `QSESSIONID=${bmc.sid}`, "X-CSRFTOKEN": bmc.csrf },
+    });
+    if (response.statusCode !== 200) return [];
+    const list = JSON.parse(decode(body, response.headers["content-encoding"]).toString("utf8")) as { feature?: string }[];
+    return Array.isArray(list) ? list.map((item) => String(item.feature || "")) : [];
+  } catch {
+    return [];
   }
-  if (typeof headers.location === "string") out.location = headers.location.replace(new RegExp(`^https?://${host.replace(/\./g, "\\.")}(:\\d+)?`), "");
-  return out;
 }
-
-function currentTarget(req: http.IncomingMessage): KvmTarget | null {
-  const token = parseCookies(req.headers.cookie).get(KVM_COOKIE);
-  return token ? resolveClaims(token, "kvm")?.target || null : null;
-}
-
-/** 本次 BMC 登录实际用的账号，自动登录脚本按它填用户名。 */
-const lastAccount = new Map<string, string>();
 
 async function handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-  const url = new URL(req.url || "/", "https://kvm.invalid");
+  const target = resolve(req);
+  if ("status" in target) {
+    page(res, target.status, target.message);
+    return;
+  }
+  const method = req.method || "GET";
+  const path = target.rest.split("?")[0];
 
-  if (url.pathname === "/__pxe/open") {
-    const opened = consumeTicket(url.searchParams.get("t") || "");
-    if (!opened) {
-      page(res, 403, "链接已失效或已经用过。");
-      return;
-    }
-    // 换一台机器时清掉上一台 BMC 留下的 cookie，否则新 BMC 会拿到旧会话。
-    const clear = [...parseCookies(req.headers.cookie).keys()]
-      .filter((name) => !name.startsWith("pxe_"))
-      .map((name) => `${name}=; Path=/; Max-Age=0${name.startsWith("__Host-") || name.startsWith("__Secure-") ? "; Secure" : ""}`);
-    res.writeHead(302, {
-      location: "/",
-      "cache-control": "no-store",
-      "set-cookie": [`${KVM_COOKIE}=${opened.cookie}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${COOKIE_SECONDS}`, ...clear],
-    });
+  if (path === "/") {
+    res.writeHead(302, { Location: `${target.prefix}/viewer.html`, "Cache-Control": "no-store" });
     res.end();
     return;
   }
 
-  const target = currentTarget(req);
-  if (!target) {
-    page(res, 401, "没有打开任何服务器，或者打开的链接已过期。");
+  let bmc = await session(target.key, target.host, target.accounts);
+
+  if (path === "/__pxe/shim.js") {
+    res.writeHead(200, { "Content-Type": "application/javascript; charset=utf-8", "Cache-Control": "no-store" });
+    res.end(shimScript({ prefix: target.prefix, csrf: bmc.csrf, user: bmc.user, privilege: bmc.privilege, extendedpriv: bmc.extendedpriv, features: await features(bmc) }));
+    return;
+  }
+  // 会话留给同一用户的其他窗口；BMC 那边过期后下次请求会自动重新登录。
+  if (method === "DELETE" && path === "/api/session") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end('{ "ok": 0 }');
     return;
   }
 
-  if (url.pathname === "/__pxe/autologin.js") {
-    res.writeHead(200, { "content-type": "application/javascript; charset=utf-8", "cache-control": "no-store" });
-    res.end(autologinScript(lastAccount.get(target.host) || target.accounts[0].user));
-    return;
+  const body = method === "GET" || method === "HEAD" ? undefined : await readBody(req, 64 * 1024 * 1024);
+  const send = (current: BmcSession) => {
+    const headers = bmcRequestHeaders(req.headers, current, target.prefix);
+    if (body) headers["Content-Length"] = body.length;
+    return call(current.host, { method, path: target.rest, headers }, body);
+  };
+  let answer = await send(bmc);
+  if (answer.response.statusCode === 401) {
+    bmc = await session(target.key, target.host, target.accounts, true);
+    answer = await send(bmc);
   }
 
-  const headers = bmcRequestHeaders(req.headers, target.host);
-  const method = req.method || "GET";
-
-  if (method === "POST" && url.pathname === "/api/session") {
-    const original = (await readBody(req)).toString("utf8");
-    let answer: http.IncomingMessage | null = null;
-    let body: Buffer = Buffer.alloc(0);
-    for (const account of target.accounts) {
-      const form = Buffer.from(substituteLogin(original, account));
-      answer = (await request(target, { method, path: req.url, headers: { ...headers, "content-length": form.length } }, form)).response;
-      body = await collect(answer);
-      if (answer.statusCode === 200) {
-        lastAccount.set(target.host, account.user);
-        break;
-      }
-    }
-    if (!answer) throw new Error("没有可用的 BMC 账号");
-    console.log(`[kvm] 登录 ${target.sn} 的 BMC ${target.host}：${answer.statusCode}`);
-    res.writeHead(answer.statusCode || 502, responseHeaders(answer.headers, target.host));
-    res.end(body);
-    return;
+  const { response } = answer;
+  const out: http.OutgoingHttpHeaders = {};
+  for (const [name, value] of Object.entries(response.headers)) {
+    if (value === undefined || ["connection", "keep-alive", "transfer-encoding", "set-cookie", "content-length"].includes(name)) continue;
+    out[name] = value;
   }
-
-  const isIndex = method === "GET" && (url.pathname === "/" || url.pathname === "/index.html");
-  if (isIndex) headers["accept-encoding"] = "gzip";
-  const body = method === "GET" || method === "HEAD" ? undefined : await readBody(req, 256 * 1024 * 1024);
-  if (body) headers["content-length"] = body.length;
-  const { response } = await request(target, { method, path: req.url, headers }, body);
-  const outHeaders = responseHeaders(response.headers, target.host);
-
-  if (isIndex && response.statusCode === 200 && String(response.headers["content-type"] || "text/html").includes("html")) {
-    const html = injectAutologin(decode(await collect(response), response.headers["content-encoding"]).toString("utf8"));
-    delete outHeaders["content-encoding"];
-    delete outHeaders.etag;
-    outHeaders["content-length"] = Buffer.byteLength(html);
-    outHeaders["cache-control"] = "no-store";
-    res.writeHead(200, outHeaders);
-    res.end(html);
-    return;
+  if (typeof response.headers.location === "string") {
+    const location = response.headers.location.replace(new RegExp(`^https?://${target.host.replace(/\./g, "\\.")}(:\\d+)?`), "");
+    out.location = location.startsWith("/") ? `${target.prefix}${location}` : location;
   }
-  res.writeHead(response.statusCode || 502, outHeaders);
-  response.pipe(res);
+  let payload = answer.body;
+  const type = String(response.headers["content-type"] || "");
+  if (/text\/html|text\/css/.test(type) && payload.length) {
+    const text = decode(payload, response.headers["content-encoding"]).toString("utf8");
+    payload = Buffer.from(type.includes("css") ? rewriteCss(text, target.prefix) : rewriteHtml(text, target.prefix));
+    delete out["content-encoding"];
+    delete out.etag;
+  }
+  out["content-length"] = payload.length;
+  res.writeHead(response.statusCode || 502, out);
+  res.end(method === "HEAD" ? undefined : payload);
 }
 
 /** KVM 画面（/kvm）和虚拟光驱（/cd-server）走 WebSocket，握手后两边直接对接。 */
 function handleUpgrade(req: http.IncomingMessage, socket: Duplex, head: Buffer): void {
-  const target = currentTarget(req);
   socket.on("error", () => socket.destroy());
-  if (!target) {
-    socket.end("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
+  const target = resolve(req);
+  if ("status" in target) {
+    socket.end(`HTTP/1.1 ${target.status} Refused\r\nConnection: close\r\n\r\n`);
     return;
   }
-  const upstream = https.request({
-    host: target.host,
-    port: bmcPort(),
-    method: req.method,
-    path: req.url,
-    headers: canonicalHeaders(bmcRequestHeaders(req.headers, target.host, true)),
-    rejectUnauthorized: false,
-    agent: false,
-  });
-  upstream.on("upgrade", (response, bmcSocket, bmcHead) => {
-    const lines = [`HTTP/1.1 ${response.statusCode} ${response.statusMessage}`];
-    for (let i = 0; i < response.rawHeaders.length; i += 2) lines.push(`${response.rawHeaders[i]}: ${response.rawHeaders[i + 1]}`);
-    socket.write(`${lines.join("\r\n")}\r\n\r\n`);
-    if (bmcHead.length) socket.write(bmcHead);
-    if (head.length) bmcSocket.write(head);
-    bmcSocket.on("error", () => socket.destroy());
-    socket.on("close", () => bmcSocket.destroy());
-    bmcSocket.on("close", () => socket.destroy());
-    bmcSocket.pipe(socket).pipe(bmcSocket);
-  });
-  upstream.on("response", (response) => {
-    socket.end(`HTTP/1.1 ${response.statusCode} ${response.statusMessage}\r\nConnection: close\r\n\r\n`);
-    response.resume();
-  });
-  upstream.on("error", () => socket.destroy());
-  upstream.end();
+  session(target.key, target.host, target.accounts)
+    .then((bmc) => {
+      const upstream = https.request({
+        host: target.host,
+        port: bmcPort(),
+        method: req.method,
+        path: target.rest,
+        headers: bmcRequestHeaders(req.headers, bmc, target.prefix, true),
+        rejectUnauthorized: false,
+        agent: false,
+      });
+      upstream.on("upgrade", (response, bmcSocket, bmcHead) => {
+        const lines = [`HTTP/1.1 ${response.statusCode} ${response.statusMessage}`];
+        for (let i = 0; i < response.rawHeaders.length; i += 2) lines.push(`${response.rawHeaders[i]}: ${response.rawHeaders[i + 1]}`);
+        socket.write(`${lines.join("\r\n")}\r\n\r\n`);
+        if (bmcHead.length) socket.write(bmcHead);
+        if (head.length) bmcSocket.write(head);
+        bmcSocket.on("error", () => socket.destroy());
+        socket.on("close", () => bmcSocket.destroy());
+        bmcSocket.on("close", () => socket.destroy());
+        bmcSocket.pipe(socket).pipe(bmcSocket);
+      });
+      upstream.on("response", (response) => {
+        if (response.statusCode === 401) sessions.delete(target.key);
+        socket.end(`HTTP/1.1 ${response.statusCode} ${response.statusMessage}\r\nConnection: close\r\n\r\n`);
+        response.resume();
+      });
+      upstream.on("error", () => socket.destroy());
+      upstream.end();
+    })
+    .catch(() => socket.end("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n"));
 }
 
 export function createKvmProxy(): http.Server {
@@ -390,7 +467,7 @@ declare global {
   var pxeKvmProxy: http.Server | undefined;
 }
 
-/** 由 instrumentation.ts 在控制台启动时调用一次。 */
+/** 由 instrumentation.ts 在控制台启动时调用一次。nginx 把 /__bmc/ 转到这里。 */
 export function startKvmProxy(): void {
   if (globalThis.pxeKvmProxy) return;
   const port = Number(process.env.PXE_KVM_PROXY_PORT || 3001);

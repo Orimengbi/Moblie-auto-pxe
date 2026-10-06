@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { HOST_SOURCE, ProjectTaskRunner } from "@/components/project-task-runner";
 import { ServerEditDialog } from "@/components/server-edit-dialog";
+import { RemoteConsole } from "@/components/remote-console";
 import { ServerPowerDialog } from "@/components/server-power-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -54,6 +55,7 @@ export function ProjectServerList({
   report,
   files,
   tasks,
+  bmcPort,
 }: {
   projectId: string;
   enabled: boolean;
@@ -62,6 +64,8 @@ export function ProjectServerList({
   report: ServerImportReport | null;
   files: RemoteFile[];
   tasks: RemoteTask[];
+  /** 远程控制台不和控制台同端口时（main 分支的 compose）填 nginx 的端口。 */
+  bmcPort: string;
 }) {
   const router = useRouter();
   const [picked, setPicked] = useState<string[]>([]);
@@ -75,6 +79,7 @@ export function ProjectServerList({
   const [editing, setEditing] = useState<ServerListRow | null>(null);
   const [adding, setAdding] = useState(false);
   const [powerTargets, setPowerTargets] = useState<ServerListRow[]>([]);
+  const [consoleRow, setConsoleRow] = useState<ServerListRow | null>(null);
 
   async function remove(row: ServerListRow) {
     if (!window.confirm(`从列表里删掉 ${row.sn}？不会动这台机器的 BMC 和系统。`)) return;
@@ -124,24 +129,6 @@ export function ProjectServerList({
 
   function toggle(id: string) {
     setPicked((list) => (list.includes(id) ? list.filter((item) => item !== id) : [...list, id]));
-  }
-
-  async function openConsole(row: ServerListRow) {
-    setError("");
-    // 先开窗口再取地址，避免浏览器把异步打开的窗口当成弹窗拦掉。
-    const popup = window.open("about:blank", "_blank");
-    const response = await fetch(`/api/projects/${projectId}/servers/${row.id}/kvm`, { method: "POST" });
-    const body = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      popup?.close();
-      setError(body.error || "打不开远程控制台");
-      return;
-    }
-    if (popup) {
-      popup.opener = null;
-      popup.location.href = body.url;
-    }
-    else window.location.href = body.url;
   }
 
   async function reinstall(row: ServerListRow) {
@@ -249,7 +236,7 @@ export function ProjectServerList({
                       {row.hostSource ? <span className="mt-1 block font-sans text-muted-foreground">{HOST_SOURCE[row.hostSource]}</span> : null}
                     </TableCell>
                     <TableCell className="text-right whitespace-nowrap">
-                      <Button type="button" size="xs" variant="ghost" disabled={!row.bmcIp} onClick={() => openConsole(row)}>
+                      <Button type="button" size="xs" variant="ghost" disabled={!row.bmcIp} onClick={() => setConsoleRow(row)}>
                         远程控制台
                       </Button>
                       <Button type="button" size="xs" variant="ghost" disabled={!row.bmcIp} onClick={() => setPowerTargets([row])}>
@@ -285,6 +272,7 @@ export function ProjectServerList({
         }}
       />
       <ServerPowerDialog projectId={projectId} targets={powerTargets} onClose={() => setPowerTargets([])} />
+      {consoleRow ? <RemoteConsole projectId={projectId} row={consoleRow} port={bmcPort} onClose={() => setConsoleRow(null)} /> : null}
       <div className="grid gap-3 border-t pt-4">
         <h3 className="font-medium">批量任务</h3>
         <ProjectTaskRunner projectId={projectId} picked={picked} installed={installed} onPick={setPicked} files={files} tasks={tasks} />

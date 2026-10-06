@@ -68,6 +68,7 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
             report={getServerImportReport(project.id)}
             files={listFiles()}
             tasks={listTasks(project.id).slice(0, 10)}
+            bmcPort={process.env.PXE_BMC_PORT || ""}
           />
         </CardContent>
       </Card>

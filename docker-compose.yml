@@ -12,7 +12,6 @@ services:
     build: ./deploy/nginx
     ports:
       - "80:80"
-      - "443:443"
     volumes:
       - ./data:/data:ro
     depends_on:
@@ -26,6 +25,8 @@ services:
     environment:
       PXE_DATA_DIR: /data
       PORT: "3000"
+      # 控制台在 43123，远程控制台经 nginx 的 80 端口转发。
+      PXE_BMC_PORT: "80"
     volumes:
       - ./data:/data
     restart: unless-stopped
