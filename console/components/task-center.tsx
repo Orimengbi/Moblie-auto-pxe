@@ -13,8 +13,8 @@ type FloatPrefs = Record<FloatKind, boolean>;
 
 const FLOAT_KEY = "pxe-upload-float";
 const PREFS_KEY = "pxe-task-float-kinds";
-// 原来只有上传有小浮窗，默认照旧；批量任务要自己打开。
-const DEFAULT_PREFS: FloatPrefs = { upload: true, batch: false };
+// 小浮窗默认都关着，要的话在任务列表里勾上。
+const DEFAULT_PREFS: FloatPrefs = { upload: false, batch: false };
 const EMPTY: TaskFeed = { tasks: [], extracting: [], uploads: [] };
 
 function loadPrefs(): FloatPrefs {
