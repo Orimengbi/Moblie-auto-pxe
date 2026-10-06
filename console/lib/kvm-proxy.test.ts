@@ -30,6 +30,7 @@ test("cookies and form fields are rewritten before reaching the BMC", () => {
   assert.equal(headers["x-real-ip"], undefined);
   assert.match(kvm.injectAutologin("<html><body>x</body></html>"), /autologin\.js"><\/script><\/body>/);
   assert.match(kvm.autologinScript('a"b'), /var user = "a\\"b";/);
+  assert.deepEqual(Object.keys(kvm.canonicalHeaders({ host: "h", upgrade: "websocket", "sec-websocket-key": "k", "x-csrftoken": "t" })), ["Host", "Upgrade", "Sec-WebSocket-Key", "X-Csrftoken"]);
 });
 
 test("the proxy logs in with the stored account and relays pages and the KVM socket", { skip: spawnSync("openssl", ["version"]).error ? "no openssl" : false }, async () => {
@@ -63,6 +64,12 @@ test("the proxy logs in with the stored account and relays pages and the KVM soc
   });
   bmc.on("upgrade", (req, socket) => {
     seen.push({ path: req.url || "", headers: req.headers, body: "" });
+    // 和 AMI 一样只认首字母大写的握手头。
+    const names = req.rawHeaders.filter((_, i) => i % 2 === 0);
+    if (!names.includes("Upgrade") || !names.includes("Connection") || !names.includes("Sec-WebSocket-Key")) {
+      socket.end("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
+      return;
+    }
     socket.write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n");
     socket.on("data", (chunk) => socket.write(Buffer.concat([Buffer.from("echo:"), chunk])));
   });
@@ -129,7 +136,7 @@ test("the proxy logs in with the stored account and relays pages and the KVM soc
       if (data.includes("\r\n\r\n") && !data.includes("echo:")) socket.write("frame");
       if (data.includes("echo:frame")) resolve(data);
     });
-    socket.write(`GET /kvm HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nCookie: ${cookie}; QSESSIONID=s1\r\nSec-WebSocket-Protocol: binary\r\n\r\n`);
+    socket.write(`GET /kvm HTTP/1.1\r\nhost: x\r\nupgrade: websocket\r\nconnection: Upgrade\r\ncookie: ${cookie}; QSESSIONID=s1\r\nsec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\nsec-websocket-protocol: binary\r\n\r\n`);
   });
   assert.match(reply, /^HTTP\/1\.1 101/);
   assert.equal(seen.find((item) => item.path === "/kvm")?.headers.cookie, "QSESSIONID=s1");

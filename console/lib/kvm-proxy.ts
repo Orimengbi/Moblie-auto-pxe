@@ -159,6 +159,26 @@ export function bmcRequestHeaders(headers: http.IncomingHttpHeaders, host: strin
   return out;
 }
 
+const CANONICAL: Record<string, string> = {
+  "sec-websocket-key": "Sec-WebSocket-Key",
+  "sec-websocket-version": "Sec-WebSocket-Version",
+  "sec-websocket-protocol": "Sec-WebSocket-Protocol",
+  "sec-websocket-extensions": "Sec-WebSocket-Extensions",
+};
+
+/**
+ * AMI 的 KVM 服务按大小写比对握手头，Node 发出的小写 upgrade/connection 会被回 404。
+ * WebSocket 握手按浏览器的写法发：Host、Upgrade、Sec-WebSocket-Key……
+ */
+export function canonicalHeaders(headers: http.OutgoingHttpHeaders): http.OutgoingHttpHeaders {
+  const out: http.OutgoingHttpHeaders = {};
+  for (const [name, value] of Object.entries(headers)) {
+    const lower = name.toLowerCase();
+    out[CANONICAL[lower] || lower.replace(/(^|-)([a-z])/g, (_, dash: string, letter: string) => `${dash}${letter.toUpperCase()}`)] = value;
+  }
+  return out;
+}
+
 function page(res: http.ServerResponse, status: number, message: string): void {
   res.writeHead(status, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
   res.end(
@@ -327,7 +347,7 @@ function handleUpgrade(req: http.IncomingMessage, socket: Duplex, head: Buffer):
     port: bmcPort(),
     method: req.method,
     path: req.url,
-    headers: bmcRequestHeaders(req.headers, target.host, true),
+    headers: canonicalHeaders(bmcRequestHeaders(req.headers, target.host, true)),
     rejectUnauthorized: false,
     agent: false,
   });
