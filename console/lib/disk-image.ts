@@ -59,7 +59,7 @@ export function parseGpt(header: Buffer, readEntries: (offset: number, length: n
       type: guid(entry.subarray(0, 16)),
       first: Number(entry.readBigUInt64LE(32)),
       last: Number(entry.readBigUInt64LE(40)),
-      name: entry.subarray(56, 128).toString("utf16le").replace(/\0.*$/s, ""),
+      name: entry.subarray(56, 128).toString("utf16le").split("\0")[0],
     });
   }
   return partitions;
