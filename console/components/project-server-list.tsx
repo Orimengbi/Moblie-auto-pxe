@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { ColumnHead, type ColumnFilter, type SortState } from "@/components/column-head";
 import { HOST_SOURCE, ProjectTaskRunner } from "@/components/project-task-runner";
 import { ServerEditDialog } from "@/components/server-edit-dialog";
 import { RemoteConsole } from "@/components/remote-console";
@@ -47,6 +48,42 @@ const AUTO_CHECK_MS = 30000;
 
 export type ServerListRow = Omit<ServerRow, "originalPassword" | "targetPassword"> & { host: string; hostSource: TaskHostSource };
 
+function stageLabel(row: ServerListRow): string {
+  return row.installed === "yes" ? "已安装" : STAGE[row.stage];
+}
+
+/** IP 按每段数字比，不按字符串比。 */
+function ipKey(ip: string | undefined): string {
+  return ip && /^\d+(\.\d+){3}$/.test(ip) ? ip.split(".").map((part) => part.padStart(3, "0")).join(".") : ip || "";
+}
+
+interface Column {
+  key: string;
+  label: string;
+  /** 排序用的值；空值总排在最后。 */
+  sortValue: (row: ServerListRow) => string;
+  /** 有就是勾选筛选（按显示的文字），没有就按 text 做关键字筛选。 */
+  pick?: (row: ServerListRow) => string;
+  text?: (row: ServerListRow) => string;
+}
+
+const COLUMNS: Column[] = [
+  { key: "sn", label: "序列号", sortValue: (row) => row.sn, text: (row) => row.sn },
+  { key: "mac", label: "IPMI MAC", sortValue: (row) => row.ipmiMac || "", text: (row) => row.ipmiMac || "" },
+  { key: "stage", label: "状态", sortValue: stageLabel, pick: stageLabel },
+  { key: "ipmi", label: "IPMI", sortValue: (row) => ipKey(row.bmcIp), pick: (row) => LINK[row.ipmiLink] },
+  { key: "source", label: "地址", sortValue: (row) => SOURCE[row.ipSource], pick: (row) => SOURCE[row.ipSource] },
+  { key: "power", label: "开关机", sortValue: (row) => POWER[row.power], pick: (row) => POWER[row.power] },
+  { key: "installed", label: "系统", sortValue: (row) => INSTALLED[row.installed], pick: (row) => INSTALLED[row.installed] },
+  { key: "host", label: "系统地址", sortValue: (row) => ipKey(row.host), text: (row) => row.host || "" },
+];
+
+function matches(row: ServerListRow, column: Column, filter: ColumnFilter): boolean {
+  if (filter.kind === "pick") return !column.pick || filter.value.includes(column.pick(row));
+  const needle = filter.value.trim().toLowerCase();
+  return !needle || (column.text?.(row) || "").toLowerCase().includes(needle);
+}
+
 export function ProjectServerList({
   projectId,
   enabled,
@@ -71,7 +108,62 @@ export function ProjectServerList({
   const [picked, setPicked] = useState<string[]>([]);
   const [error, setError] = useState("");
   const installed = rows.filter((row) => row.installed === "yes").map((row) => row.id);
-  const allPicked = rows.length > 0 && picked.length === rows.length;
+  const [sort, setSort] = useState<SortState | null>(null);
+  const [filters, setFilters] = useState<Record<string, ColumnFilter>>({});
+  const viewKey = `pxe-server-view:${projectId}`;
+  const shown = useMemo(() => {
+    const kept = rows.filter((row) => COLUMNS.every((column) => !filters[column.key] || matches(row, column, filters[column.key])));
+    const column = sort && COLUMNS.find((item) => item.key === sort.key);
+    if (!column || !sort) return kept;
+    return [...kept].sort((a, b) => {
+      const left = column.sortValue(a);
+      const right = column.sortValue(b);
+      if (!left || !right) return left ? -1 : right ? 1 : 0;
+      const order = left.localeCompare(right, "zh-CN", { numeric: true });
+      return sort.dir === "asc" ? order : -order;
+    });
+  }, [rows, filters, sort]);
+  const filtering = Object.keys(filters).length > 0;
+  const allPicked = shown.length > 0 && shown.every((row) => picked.includes(row.id));
+
+  // 排序和筛选按项目记在这个浏览器里，刷新后还在。
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(viewKey) || "null");
+      if (saved) {
+        setSort(saved.sort || null);
+        setFilters(saved.filters || {});
+      }
+    } catch {
+      // 读不到就用默认顺序。
+    }
+  }, [viewKey]);
+
+  function saveView(nextSort: SortState | null, nextFilters: Record<string, ColumnFilter>) {
+    setSort(nextSort);
+    setFilters(nextFilters);
+    try {
+      localStorage.setItem(viewKey, JSON.stringify({ sort: nextSort, filters: nextFilters }));
+    } catch {
+      // 存不了也照样能筛，只是刷新后要重来。
+    }
+  }
+
+  function setFilter(key: string, next: ColumnFilter | undefined) {
+    const nextFilters = { ...filters };
+    if (next) nextFilters[key] = next;
+    else delete nextFilters[key];
+    saveView(sort, nextFilters);
+  }
+
+  function optionsFor(column: Column): [string, number][] | undefined {
+    if (!column.pick) return undefined;
+    const counts = new Map<string, number>();
+    for (const row of rows) counts.set(column.pick(row), (counts.get(column.pick(row)) || 0) + 1);
+    const current = filters[column.key];
+    if (current?.kind === "pick") for (const value of current.value) if (!counts.has(value)) counts.set(value, 0);
+    return [...counts.entries()];
+  }
   const [checking, setChecking] = useState(false);
   const [checkedAt, setCheckedAt] = useState<Date | null>(null);
   const [checkError, setCheckError] = useState("");
@@ -148,7 +240,14 @@ export function ProjectServerList({
     <div className="grid gap-6">
       <div className="grid gap-3">
         <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-          <span>已列入 {rows.length} 台，已安装 {installed.length} 台。</span>
+          <span>
+            已列入 {rows.length} 台，已安装 {installed.length} 台。{filtering ? `筛选后显示 ${shown.length} 台。` : ""}
+          </span>
+          {filtering ? (
+            <Button type="button" size="xs" variant="outline" onClick={() => saveView(sort, {})}>
+              清除筛选
+            </Button>
+          ) : null}
           <Button type="button" size="xs" variant="outline" onClick={() => setAdding(true)}>
             新增一台
           </Button>
@@ -193,22 +292,41 @@ export function ProjectServerList({
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-8">
-                    <input type="checkbox" aria-label="全选" checked={allPicked} onChange={() => setPicked(allPicked ? [] : rows.map((row) => row.id))} />
+                    <input
+                      type="checkbox"
+                      aria-label="全选当前显示的"
+                      checked={allPicked}
+                      onChange={() => {
+                        const ids = shown.map((row) => row.id);
+                        setPicked((list) => (allPicked ? list.filter((id) => !ids.includes(id)) : [...new Set([...list, ...ids])]));
+                      }}
+                    />
                   </TableHead>
-                  <TableHead>序列号</TableHead>
-                  <TableHead>IPMI MAC</TableHead>
-                  <TableHead>状态</TableHead>
-                  <TableHead>IPMI</TableHead>
-                  <TableHead>IP</TableHead>
-                  <TableHead>地址</TableHead>
-                  <TableHead>开关机</TableHead>
-                  <TableHead>系统</TableHead>
-                  <TableHead>系统地址</TableHead>
+                  {COLUMNS.map((column) => (
+                    <TableHead key={column.key}>
+                      <ColumnHead
+                        label={column.label}
+                        columnKey={column.key}
+                        sort={sort}
+                        onSort={(next) => saveView(next, filters)}
+                        filter={filters[column.key]}
+                        onFilter={(next) => setFilter(column.key, next)}
+                        options={optionsFor(column)}
+                      />
+                    </TableHead>
+                  ))}
                   <TableHead />
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {rows.map((row) => (
+                {shown.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={COLUMNS.length + 2} className="py-6 text-center text-sm text-muted-foreground">
+                      没有符合筛选条件的机器。
+                    </TableCell>
+                  </TableRow>
+                ) : null}
+                {shown.map((row) => (
                   <TableRow key={row.id} data-state={picked.includes(row.id) ? "selected" : undefined}>
                     <TableCell>
                       <input type="checkbox" aria-label={`选择 ${row.sn}`} checked={picked.includes(row.id)} onChange={() => toggle(row.id)} />
@@ -222,9 +340,19 @@ export function ProjectServerList({
                       <span className="mt-1 block max-w-56 text-xs text-muted-foreground">{row.detail}</span>
                       {row.osName ? <span className="mt-1 block text-xs text-muted-foreground">安装系统 {row.osName}</span> : null}
                     </TableCell>
-                    <TableCell>{LINK[row.ipmiLink]}</TableCell>
                     <TableCell>
-                      {row.bmcIp || "—"}
+                      {row.ipmiLink === "down" ? (
+                        <span className="text-destructive">不通</span>
+                      ) : row.ipmiLink === "denied" ? (
+                        <>
+                          <span className="font-mono text-xs">{row.bmcIp || "—"}</span>
+                          <span className="block text-xs text-destructive">密码不对</span>
+                        </>
+                      ) : row.ipmiLink === "up" ? (
+                        <span className="font-mono text-xs">{row.bmcIp || "通"}</span>
+                      ) : (
+                        <span className="text-muted-foreground">{row.bmcIp ? <span className="font-mono text-xs">{row.bmcIp}</span> : "未探测"}</span>
+                      )}
                       {row.ipmiAddress ? <span className="mt-1 block text-xs text-muted-foreground">规划 {row.ipmiAddress} / {row.ipmiNetmask}</span> : null}
                       {row.ipmiGateway ? <span className="block text-xs text-muted-foreground">路由 {row.ipmiGateway}{row.ipmiVlan ? ` · VLAN ${row.ipmiVlan}` : ""}</span> : null}
                     </TableCell>
