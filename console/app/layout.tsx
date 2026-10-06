@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { headers } from "next/headers";
 import { Nav } from "@/components/nav";
+import { UploadProvider } from "@/components/upload-provider";
 import { authenticate } from "@/lib/auth";
 import "./globals.css";
 
@@ -29,16 +30,18 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
     <html lang="zh-CN">
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
         {identity ? (
-          <div className="min-h-screen md:grid md:grid-cols-[220px_1fr]">
-            <aside className="border-b bg-card md:border-r md:border-b-0">
-              <div className="px-5 pt-5 pb-3">
-                <p className="text-xs tracking-[0.16em] text-muted-foreground">移动小主机</p>
-                <p className="text-lg font-semibold">PXE 装机台</p>
-              </div>
-              <Nav user={{ username: identity.user.username, role: identity.user.role }} />
-            </aside>
-            <main className="px-4 py-6 md:px-8 md:py-8">{children}</main>
-          </div>
+          <UploadProvider>
+            <div className="min-h-screen md:grid md:grid-cols-[220px_1fr]">
+              <aside className="border-b bg-card md:border-r md:border-b-0">
+                <div className="px-5 pt-5 pb-3">
+                  <p className="text-xs tracking-[0.16em] text-muted-foreground">移动小主机</p>
+                  <p className="text-lg font-semibold">PXE 装机台</p>
+                </div>
+                <Nav user={{ username: identity.user.username, role: identity.user.role }} />
+              </aside>
+              <main className="px-4 py-6 md:px-8 md:py-8">{children}</main>
+            </div>
+          </UploadProvider>
         ) : (
           children
         )}

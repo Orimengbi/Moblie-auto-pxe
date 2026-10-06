@@ -7,31 +7,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { formatBytes, fingerprintOf, percent, useUploads, type LiveUpload, type PendingUpload } from "@/components/upload-provider";
 import { ISO_ACCEPT, ISO_FORMATS_LABEL } from "@/lib/iso-name";
 import { FAMILY_LABEL, type ImageRecord } from "@/lib/types";
 
-export interface PendingUpload {
-  id: string;
-  filename: string;
-  name: string;
-  size: number;
-  offset: number;
-  fingerprint: string;
-  updatedAt: string;
-}
-
-const CHUNK = 4 * 1024 * 1024;
-const RETRIES = 5;
-
-function fingerprintOf(file: File): string {
-  return `${file.name}:${file.size}:${file.lastModified}`;
-}
-
-function percent(offset: number, size: number): number {
-  return size ? Math.floor((offset / size) * 100) : 0;
-}
-
-class Paused extends Error {}
+export type { PendingUpload } from "@/components/upload-provider";
 
 function without(map: Record<string, string>, key: string): Record<string, string> {
   const next = { ...map };
@@ -41,20 +21,25 @@ function without(map: Record<string, string>, key: string): Record<string, strin
 
 export function ImageManager({ images, uploads }: { images: ImageRecord[]; uploads: PendingUpload[] }) {
   const router = useRouter();
+  const live = useUploads();
   const [uploadName, setUploadName] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [pickerKey, setPickerKey] = useState(0);
-  const [active, setActive] = useState<PendingUpload | null>(null);
-  const [taskErrors, setTaskErrors] = useState<Record<string, string>>({});
+  const [pickErrors, setPickErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
-  // 这一页里选过的文件。断了以后点继续不用重新选；刷新页面后才需要再选一次。
-  const files = useRef(new Map<string, File>());
-  const abort = useRef<AbortController | null>(null);
   const resumePicker = useRef<HTMLInputElement>(null);
   const [resumeTarget, setResumeTarget] = useState<PendingUpload | null>(null);
   const extracting = images.some((image) => image.status === "extracting");
   const resumable = file ? uploads.find((item) => item.fingerprint === fingerprintOf(file) && item.size === file.size) : undefined;
-  const tasks = active && !uploads.some((item) => item.id === active.id) ? [active, ...uploads] : uploads;
+  // 服务器记着的没传完的会话，叠上这个页面里正在跑或刚断开的状态。
+  const tasks: LiveUpload[] = [
+    ...Object.values(live.live).filter((item) => item.state !== "done" && !uploads.some((upload) => upload.id === item.id)),
+    ...uploads.map((item) => {
+      const current = live.live[item.id];
+      return current ? { ...item, ...current, offset: Math.max(item.offset, current.offset) } : { ...item, state: "paused" as const };
+    }),
+  ];
+  const doneIds = Object.values(live.live).filter((item) => item.state === "done").map((item) => item.id).join(",");
 
   useEffect(() => {
     if (!extracting) return;
@@ -62,77 +47,10 @@ export function ImageManager({ images, uploads }: { images: ImageRecord[]; uploa
     return () => clearInterval(timer);
   }, [extracting, router]);
 
+  // 传完的已经在下面的镜像表里了，不用再挂着。
   useEffect(() => {
-    if (!active) return;
-    const warn = (event: BeforeUnloadEvent) => event.preventDefault();
-    window.addEventListener("beforeunload", warn);
-    return () => window.removeEventListener("beforeunload", warn);
-  }, [active]);
-
-  /** 发一段。网络断开或控制台 5xx 时等一会再试；服务器说位置不对时按它的位置继续。 */
-  async function sendChunk(id: string, selected: File, offset: number, signal: AbortSignal): Promise<{ offset: number; done: boolean }> {
-    for (let attempt = 0; attempt < RETRIES; attempt += 1) {
-      if (attempt) await new Promise((resolve) => setTimeout(resolve, attempt * 2000));
-      if (signal.aborted) throw new Paused();
-      let response: Response;
-      try {
-        response = await fetch(`/api/images/uploads/${id}`, {
-          method: "PATCH",
-          headers: { "upload-offset": String(offset), "content-type": "application/octet-stream" },
-          body: selected.slice(offset, Math.min(offset + CHUNK, selected.size)),
-          signal,
-        });
-      } catch {
-        if (signal.aborted) throw new Paused();
-        continue;
-      }
-      const body = await response.json().catch(() => ({}));
-      if (response.status === 409 && Number.isInteger(body.offset)) return { offset: body.offset, done: false };
-      if (response.status >= 500) continue;
-      if (!response.ok) throw new Error(body.error || "上传中断");
-      return { offset: body.offset, done: Boolean(body.image) };
-    }
-    throw new Error(`网络断开，重试 ${RETRIES} 次都没成功`);
-  }
-
-  /** 打开（或接上）一个上传会话，然后一段一段传完。断开、暂停都会留在下面的任务列表里。 */
-  async function run(selected: File, name: string) {
-    const controller = new AbortController();
-    abort.current = controller;
-    setError("");
-    let task: PendingUpload | null = null;
-    try {
-      const opened = await fetch("/api/images/uploads", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ filename: selected.name, size: selected.size, name, fingerprint: fingerprintOf(selected) }),
-      });
-      const session = await opened.json();
-      if (!opened.ok) throw new Error(session.error || "无法开始上传");
-      task = session as PendingUpload;
-      files.current.set(task.id, selected);
-      setTaskErrors((current) => without(current, task!.id));
-      let offset = Number(task.offset) || 0;
-      setActive({ ...task, offset });
-      while (offset < selected.size) {
-        const sent = await sendChunk(task.id, selected, offset, controller.signal);
-        offset = sent.offset;
-        setActive({ ...task, offset, updatedAt: new Date().toISOString() });
-        if (sent.done) break;
-      }
-      files.current.delete(task.id);
-    } catch (uploadError) {
-      if (!(uploadError instanceof Paused)) {
-        const message = uploadError instanceof Error ? uploadError.message : "上传中断";
-        if (task) setTaskErrors((current) => ({ ...current, [task!.id]: message }));
-        else setError(message);
-      }
-    } finally {
-      abort.current = null;
-      setActive(null);
-      router.refresh();
-    }
-  }
+    if (doneIds) doneIds.split(",").forEach((id) => live.dismiss(id));
+  }, [doneIds, live]);
 
   function startSelected() {
     if (!file) return;
@@ -140,15 +58,13 @@ export function ImageManager({ images, uploads }: { images: ImageRecord[]; uploa
     setFile(null);
     setUploadName("");
     setPickerKey((key) => key + 1);
-    void run(selected, uploadName);
+    setError("");
+    live.run(selected, uploadName);
   }
 
   function resume(item: PendingUpload) {
-    const known = files.current.get(item.id);
-    if (known) {
-      void run(known, item.name);
-      return;
-    }
+    setPickErrors((current) => without(current, item.id));
+    if (live.resume(item.id)) return;
     setResumeTarget(item);
     resumePicker.current?.click();
   }
@@ -158,24 +74,16 @@ export function ImageManager({ images, uploads }: { images: ImageRecord[]; uploa
     setResumeTarget(null);
     if (!item || !picked) return;
     if (fingerprintOf(picked) !== item.fingerprint || picked.size !== item.size) {
-      setTaskErrors((current) => ({ ...current, [item.id]: `选的不是原来的文件，请选 ${item.fingerprint.split(":")[0]}（${formatBytes(item.size)}）` }));
+      setPickErrors((current) => ({ ...current, [item.id]: `选的不是原来的文件，请选 ${item.fingerprint.split(":")[0]}（${formatBytes(item.size)}）` }));
       return;
     }
-    void run(picked, item.name);
+    live.run(picked, item.name);
   }
 
   async function cancel(item: PendingUpload) {
     if (!window.confirm(`取消上传 ${item.name || item.filename}？已经传上去的部分会删除。`)) return;
-    if (active?.id === item.id) abort.current?.abort();
-    const response = await fetch(`/api/images/uploads/${item.id}`, { method: "DELETE" });
-    const body = await response.json().catch(() => ({}));
-    if (!response.ok && response.status !== 404) {
-      setTaskErrors((current) => ({ ...current, [item.id]: body.error || "取消失败" }));
-      return;
-    }
-    files.current.delete(item.id);
-    setTaskErrors((current) => without(current, item.id));
-    router.refresh();
+    const failed = await live.cancel(item);
+    if (failed) setPickErrors((current) => ({ ...current, [item.id]: failed }));
   }
 
   async function remove(id: string) {
@@ -215,10 +123,10 @@ export function ImageManager({ images, uploads }: { images: ImageRecord[]; uploa
               这个文件上次传到 {formatBytes(resumable.offset)}（{percent(resumable.offset, resumable.size)}%），会从这里继续。
             </p>
           ) : null}
-          <Button type="button" className="w-fit" disabled={Boolean(active) || !file} onClick={startSelected}>
+          <Button type="button" className="w-fit" disabled={live.running || !file} onClick={startSelected}>
             {resumable ? `从 ${percent(resumable.offset, resumable.size)}% 继续上传` : "上传并抽取"}
           </Button>
-          {active ? <p className="text-sm text-muted-foreground">一次传一个。正在上传时不要关闭页面，下面可以暂停。</p> : null}
+          {live.running ? <p className="text-sm text-muted-foreground">一次传一个。切到别的页面会继续传，进度在右下角的小窗里；只是不要刷新或关闭页面。</p> : null}
         </div>
         {error ? <p className="text-sm text-destructive">{error}</p> : null}
       </section>
@@ -238,37 +146,36 @@ export function ImageManager({ images, uploads }: { images: ImageRecord[]; uploa
         <section className="grid gap-3 rounded-xl bg-card p-4 ring-1 ring-foreground/10">
           <h2 className="font-medium">上传任务</h2>
           {tasks.map((item) => {
-            const running = active?.id === item.id;
-            const shown = running ? active : item;
-            const taskError = taskErrors[item.id];
+            const running = item.state === "running";
+            const taskError = pickErrors[item.id] || item.error;
             return (
               <div key={item.id} className="grid gap-1.5 border-t pt-3 text-sm first-of-type:border-t-0 first-of-type:pt-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-medium">{item.name || item.filename}</span>
                   {item.name ? <span className="text-xs text-muted-foreground">{item.filename}</span> : null}
-                  <Badge variant={running ? "secondary" : taskError ? "destructive" : "outline"}>{running ? "上传中" : taskError ? "已中断" : "已暂停"}</Badge>
+                  <Badge variant={running ? "secondary" : item.state === "error" ? "destructive" : "outline"}>{running ? "上传中" : item.state === "error" ? "已中断" : "已暂停"}</Badge>
                   <div className="ml-auto flex gap-1">
                     {running ? (
-                      <Button type="button" variant="secondary" size="sm" onClick={() => abort.current?.abort()}>
+                      <Button type="button" variant="secondary" size="sm" onClick={live.pause}>
                         暂停
                       </Button>
-                    ) : (
-                      <Button type="button" variant="secondary" size="sm" disabled={Boolean(active)} onClick={() => resume(item)}>
+                    ) : item.id.startsWith("failed-") ? null : (
+                      <Button type="button" variant="secondary" size="sm" disabled={live.running} onClick={() => resume(item)}>
                         继续
                       </Button>
                     )}
                     <Button type="button" variant="ghost" size="sm" onClick={() => cancel(item)}>
-                      取消
+                      {item.id.startsWith("failed-") ? "关闭" : "取消"}
                     </Button>
                   </div>
                 </div>
                 <div className="h-2 overflow-hidden rounded-full bg-muted">
-                  <div className={`h-full transition-all ${running ? "bg-primary" : "bg-muted-foreground/40"}`} style={{ width: `${percent(shown.offset, shown.size)}%` }} />
+                  <div className={`h-full transition-all ${running ? "bg-primary" : "bg-muted-foreground/40"}`} style={{ width: `${percent(item.offset, item.size)}%` }} />
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  {formatBytes(shown.offset)} / {formatBytes(shown.size)}（{percent(shown.offset, shown.size)}%）
+                  {formatBytes(item.offset)} / {formatBytes(item.size)}（{percent(item.offset, item.size)}%）
                   {running ? "" : ` · 最后更新 ${new Date(item.updatedAt).toLocaleString("zh-CN")}`}
-                  {!running && !files.current.has(item.id) ? " · 继续时需要重新选择这个文件" : ""}
+                  {!running && !live.hasFile(item.id) && !item.id.startsWith("failed-") ? " · 继续时需要重新选择这个文件" : ""}
                 </p>
                 {taskError ? <p className="text-xs text-destructive">{taskError}</p> : null}
               </div>
@@ -330,10 +237,4 @@ export function ImageManager({ images, uploads }: { images: ImageRecord[]; uploa
       )}
     </div>
   );
-}
-
-function formatBytes(value: number): string {
-  if (value >= 1024 * 1024 * 1024) return `${(value / 1024 / 1024 / 1024).toFixed(2)} GB`;
-  if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} MB`;
-  return `${Math.max(1, Math.round(value / 1024))} KB`;
 }
