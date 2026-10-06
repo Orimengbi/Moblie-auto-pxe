@@ -98,7 +98,8 @@ test("menu defaults to the local disk unless a machine is bound", () => {
   assert.match(menu, /erases the selected disk/);
   assert.doesNotMatch(menu, /[^\x00-\x7f]/, "iPXE 显示不了中文");
   assert.match(menu, /item install-\S+ Ubuntu 24\.04$/m, "名字全是中文时只显示系统和版本");
-  assert.match(menu, /ds=nocloud-net\\;s=/);
+  assert.match(menu, /ds=nocloud;s=/);
+  assert.doesNotMatch(menu, /\\;/, "iPXE 不处理反斜杠转义，\\; 会原样传给内核");
 
   const bound = renderIpxeMenu({
     serverIp: "192.168.77.1",

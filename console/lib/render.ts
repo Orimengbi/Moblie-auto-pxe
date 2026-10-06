@@ -561,7 +561,7 @@ function kernelLine(server: string, image: ImageRecord, profile: Profile, family
   if (family === "ubuntu") {
     const seed = `${server}/boot/autoinstall/${profile.id}/${mac}/`;
     return [
-      `kernel ${kernel} initrd=initrd ip=dhcp url=${server}/images/${image.id}/source.iso autoinstall cloud-config-url=/dev/null ds=nocloud-net\\;s=${seed}`,
+      `kernel ${kernel} initrd=initrd ip=dhcp url=${server}/images/${image.id}/source.iso autoinstall cloud-config-url=/dev/null ds=nocloud;s=${seed}`,
       `initrd ${initrd}`,
       "boot",
     ];
