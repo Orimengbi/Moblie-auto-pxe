@@ -126,6 +126,24 @@ export function ProjectServerList({
     setPicked((list) => (list.includes(id) ? list.filter((item) => item !== id) : [...list, id]));
   }
 
+  async function openConsole(row: ServerListRow) {
+    setError("");
+    // 先开窗口再取地址，避免浏览器把异步打开的窗口当成弹窗拦掉。
+    const popup = window.open("about:blank", "_blank");
+    const response = await fetch(`/api/projects/${projectId}/servers/${row.id}/kvm`, { method: "POST" });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      popup?.close();
+      setError(body.error || "打不开远程控制台");
+      return;
+    }
+    if (popup) {
+      popup.opener = null;
+      popup.location.href = body.url;
+    }
+    else window.location.href = body.url;
+  }
+
   async function reinstall(row: ServerListRow) {
     if (!window.confirm(`重装 ${row.sn}？会让它从网卡启动，按「${row.osName}」重新安装并清空磁盘。`)) return;
     setError("");
@@ -231,6 +249,9 @@ export function ProjectServerList({
                       {row.hostSource ? <span className="mt-1 block font-sans text-muted-foreground">{HOST_SOURCE[row.hostSource]}</span> : null}
                     </TableCell>
                     <TableCell className="text-right whitespace-nowrap">
+                      <Button type="button" size="xs" variant="ghost" disabled={!row.bmcIp} onClick={() => openConsole(row)}>
+                        远程控制台
+                      </Button>
                       <Button type="button" size="xs" variant="ghost" disabled={!row.bmcIp} onClick={() => setPowerTargets([row])}>
                         电源
                       </Button>

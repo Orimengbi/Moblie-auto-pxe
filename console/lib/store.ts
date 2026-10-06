@@ -1570,6 +1570,18 @@ function saveReconciled(row: ServerRow, base: string): Promise<boolean> {
   });
 }
 
+/** BMC 现在最可能接受的账号在前：改过账号用目标账号，原账号兜底。 */
+export function bmcAccounts(row: ServerRow): { user: string; password: string }[] {
+  return [
+    ...(row.passwordChanged ? [{ user: row.targetUser, password: row.targetPassword }] : []),
+    { user: row.originalUser, password: row.originalPassword },
+  ].filter((item) => item.user && item.password);
+}
+
+export function getServer(projectId: string, serverId: string): ServerRow | null {
+  return listServers().find((item) => item.projectId === projectId && item.id === serverId) || null;
+}
+
 export interface ServerControl {
   /** 先设引导设备，再做电源操作；两个都可以单独给。 */
   boot?: BootDevice;
@@ -1595,10 +1607,7 @@ export async function controlServer(
   if (!input.boot && !input.power) throw new Error("没有要执行的操作");
   if (!row.bmcIp) throw new Error(`${row.sn} 还没有 IPMI 地址，等 DHCP 发现它或在表里填 IPMI 地址`);
 
-  const accounts = [
-    ...(row.passwordChanged ? [{ user: row.targetUser, password: row.targetPassword }] : []),
-    { user: row.originalUser, password: row.originalPassword },
-  ].filter((item) => item.user && item.password);
+  const accounts = bmcAccounts(row);
   if (!accounts.length) throw new Error(`${row.sn} 没有 IPMI 账号密码`);
   let account = accounts[0];
   let power = await exec(row.bmcIp, account.user, account.password, ["chassis", "power", "status"]);

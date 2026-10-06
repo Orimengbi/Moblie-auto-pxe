@@ -181,6 +181,15 @@ function secret(): Buffer {
   return Buffer.from(fs.readFileSync(file, "utf8").trim(), "base64url");
 }
 
+/** 其他模块（远程控制台票据）也用这把密钥签短期令牌。 */
+export function signPayload(payload: object): string {
+  return sign(payload);
+}
+
+export function verifyPayload<T>(token: string): T | null {
+  return unsign<T>(token);
+}
+
 function sign(payload: object): string {
   const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
   const mac = crypto.createHmac("sha256", secret()).update(body).digest("base64url");
