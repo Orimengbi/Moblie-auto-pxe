@@ -554,7 +554,23 @@ export interface MenuProfile {
   image: ImageRecord;
 }
 
+export type DiskMode = "deploy" | "live";
+
+/** 整盘镜像：镜像自带的内核和 initrd，后面追加 pxeimg.cpio，根分区下载进内存运行。 */
+function diskImageKernel(server: string, image: ImageRecord, profile: Profile, mode: DiskMode): string[] {
+  const base = `${server}/images/${image.id}`;
+  const mac = "${mac:hexhyp}";
+  const hook = `${server}/boot/diskimage/${profile.id}/${mac}/${mode}.sh`;
+  return [
+    `kernel ${base}/${image.kernelFile} initrd=${image.initrdFile} initrd=pxeimg.cpio boot=pxeimg rw ip=dhcp BOOTIF=01-${mac} pxeimg.root=${base}/root.img.zst pxeimg.size=${image.disk?.rootBytes ?? ""} pxeimg.hook=${hook}`,
+    `initrd ${base}/${image.initrdFile}`,
+    `initrd ${base}/pxeimg.cpio`,
+    "boot",
+  ];
+}
+
 function kernelLine(server: string, image: ImageRecord, profile: Profile, family: Family): string[] {
+  if (image.kind === "disk") return diskImageKernel(server, image, profile, "deploy");
   const kernel = `${server}/images/${image.id}/${image.kernelFile}`;
   const initrd = `${server}/images/${image.id}/${image.initrdFile}`;
   const mac = "${mac:hexhyp}";
@@ -621,6 +637,12 @@ export function renderIpxeMenu(input: {
     installIds.add(entry.profile.id);
     lines.push(`item ${id} ${menuLabel(entry)}`);
   }
+  const liveEntries = input.entries.filter((entry) => entry.image.kind === "disk");
+  if (liveEntries.length) {
+    lines.push("item --gap --");
+    lines.push("item --gap -- Run in RAM (disks are not touched)");
+    for (const entry of liveEntries) lines.push(`item live-${entry.profile.id} ${menuLabel(entry)}`);
+  }
   lines.push("item --gap --");
   lines.push("item local Boot from local disk");
 
@@ -645,6 +667,11 @@ export function renderIpxeMenu(input: {
     lines.push(...kernelLine(server, entry.image, entry.profile, entry.image.family));
     lines.push("");
   }
+  for (const entry of liveEntries) {
+    lines.push(`:live-${entry.profile.id}`);
+    lines.push(...diskImageKernel(server, entry.image, entry.profile, "live"));
+    lines.push("");
+  }
 
   if (banner) lines.splice(2, 0, banner);
   return `${lines.join("\n").replace(/\n{3,}/g, "\n\n")}\n`;
@@ -659,6 +686,13 @@ export function renderAnswer(
   httpPort = 80,
 ): { contentType: string; filename: string; body: string }[] {
   const hostname = applyHostname(profile.hostnamePattern, mac);
+  if (image.kind === "disk") {
+    return (["deploy", "live"] as const).map((mode) => ({
+      contentType: "text/plain; charset=utf-8",
+      filename: `${mode}.sh`,
+      body: renderDiskImageScript({ profile, image, hostname, serverIp, httpPort, mode }),
+    }));
+  }
   if (image.family === "ubuntu") {
     const rendered = renderUbuntuAutoinstall(profile, hostname, installed, serverIp, httpPort);
     return [
@@ -712,4 +746,126 @@ export function renderDiagTask(input: {
     lines.push(`PXE_SCRIPT_${n}_TIMEOUT=${script.timeoutSec}`);
   });
   return `${lines.join("\n")}\n`;
+}
+
+/** 在镜像里的系统上设主机名和账号。写盘时在 chroot 里跑，内存运行时直接跑。 */
+function diskIdentityShell(profile: Profile, hostname: string): string {
+  return `printf '%s\\n' ${shq(hostname)} > /etc/hostname
+hostname ${shq(hostname)} 2>/dev/null || true
+if grep -q '^127\\.0\\.1\\.1' /etc/hosts; then sed -i 's/^127\\.0\\.1\\.1.*/127.0.1.1 ${hostname}/' /etc/hosts; else echo '127.0.1.1 ${hostname}' >> /etc/hosts; fi
+id -u ${shq(profile.username)} >/dev/null 2>&1 || useradd -m -s /bin/bash ${shq(profile.username)}
+usermod -p ${shq(profile.passwordHash)} ${shq(profile.username)}
+if getent group sudo >/dev/null; then usermod -aG sudo ${shq(profile.username)}; fi
+`;
+}
+
+/**
+ * 整盘镜像在内存里跑起来以后，开机服务下载执行的脚本。
+ * deploy：按磁盘策略选盘，写分区表和 EFI 分区，再写根分区，扩到整块盘，进 chroot 做装机后的步骤，重启。
+ * live：主机名、账号、控制台公钥，根分区在内存里扩大一些，别的不动。
+ * 输出在机器的屏幕上，只打英文。
+ */
+export function renderDiskImageScript(input: {
+  profile: Profile;
+  image: ImageRecord;
+  hostname: string;
+  serverIp: string;
+  httpPort?: number;
+  mode: DiskMode;
+}): string {
+  const { profile, image, hostname, mode } = input;
+  const origin = bootOrigin(input.serverIp, input.httpPort ?? 80);
+  const disk = image.disk;
+  if (!disk) throw new Error("镜像不是整盘镜像");
+  const b64 = (text: string) => Buffer.from(text, "utf8").toString("base64");
+  const head = `#!/bin/bash
+# Written by the PXE console for ${ipxeText(image.name) || image.id} (${mode}).
+server=${shq(origin)}
+say() { echo "pxeimg: $*"; }
+`;
+  if (mode === "live") {
+    return `${head}set -u
+say "running from RAM, the disks are not touched"
+img=/run/pxeimg/root.img
+dev=$(losetup -j "$img" | cut -d: -f1 | head -n 1)
+if [ -n "$dev" ]; then
+  # Give the RAM root some room: up to 64 GiB more, at most half of the free RAM.
+  free=$(awk '/MemAvailable/ {print $2 * 1024}' /proc/meminfo)
+  grow=$((free / 2))
+  [ "$grow" -le $((64 << 30)) ] || grow=$((64 << 30))
+  if truncate -s "+$grow" "$img" && losetup -c "$dev" && resize2fs "$dev" >/dev/null 2>&1; then
+    say "root file system grown by $((grow >> 30)) GiB"
+  fi
+fi
+echo ${b64(diskIdentityShell(profile, hostname))} | base64 -d | bash || say "could not set hostname or account"
+hostnamectl set-hostname ${shq(hostname)} 2>/dev/null || true
+if curl -fsS "$server/boot/authorized-key.sh" -o /tmp/pxe-key.sh; then sh /tmp/pxe-key.sh; else say "console key not written; batch tasks will not reach this machine"; fi
+say "ready: $(hostname) $(hostname -I)"
+`;
+  }
+
+  const minBytes = disk.headBytes + disk.rootBytes + 1024 * 1024;
+  const pick = profile.diskPolicy === "smallest" || profile.diskPick === "smallest" ? "smallest" : profile.diskPolicy === "named" ? "named" : "largest";
+  const steps = [
+    { name: "hostname and account", script: diskIdentityShell(profile, hostname) },
+    { name: "console key, IPMI and NIC settings", script: ipmiLookupShell(input.serverIp, input.httpPort ?? 80) },
+    { name: "post-install script", script: profile.postScript },
+  ].filter((step) => step.script.trim());
+  return `${head}set -euo pipefail
+fail() { say "FAILED: $*"; say "the machine stays in the RAM system; log in on its console to look"; exit 1; }
+trap 'fail "line $LINENO"' ERR
+min=${minBytes}
+pick=${pick}
+named=${shq(`/dev/${profile.diskName}`)}
+
+# Whole local disks: no USB, no removable, no read-only, big enough for the image.
+candidates=$(lsblk -dbnpo NAME,SIZE,TYPE,RM,RO,TRAN | awk -v min="$min" '$3 == "disk" && $4 == 0 && $5 == 0 && $6 != "usb" && $2 >= min {print $2, $1}')
+case "$pick" in
+  named) disk=$named ;;
+  smallest) disk=$(echo "$candidates" | sort -n | sed -n 1p | cut -d' ' -f2) ;;
+  *) disk=$(echo "$candidates" | sort -n | tail -n 1 | cut -d' ' -f2) ;;
+esac
+[ -n "$disk" ] && [ -b "$disk" ] || fail "no disk found (need at least $((min >> 30)) GiB, policy $pick)"
+[ "$(blockdev --getsize64 "$disk")" -ge "$min" ] || fail "$disk is smaller than the image"
+say "writing to $disk: $(lsblk -dno SIZE,MODEL "$disk" | xargs)"
+
+for part in $(lsblk -lnpo NAME "$disk" | tail -n +2); do umount "$part" 2>/dev/null || true; done
+wipefs -af "$disk" >/dev/null
+curl -fsS "$server/images/${image.id}/head.img.zst" | zstd -dcq | dd of="$disk" bs=4M conv=fsync status=none
+say "partition table and EFI partition written, now the root file system"
+curl -fsS "$server/images/${image.id}/root.img.zst" | zstd -dcq | dd of="$disk" bs=4M seek=${disk.headBytes} oflag=seek_bytes conv=fsync status=progress
+sync
+
+# The image came from a smaller disk: move the backup GPT to the end, then grow the root partition.
+sgdisk -e "$disk" >/dev/null
+partprobe "$disk" || true
+udevadm settle
+case "$disk" in *[0-9]) prefix="\${disk}p" ;; *) prefix="$disk" ;; esac
+root="\${prefix}${disk.rootPartition}"
+growpart "$disk" ${disk.rootPartition} || [ $? -eq 1 ]
+partprobe "$disk" || true
+udevadm settle
+e2fsck -fy "$root" >/dev/null || [ $? -le 1 ]
+resize2fs "$root" >/dev/null
+say "root file system: $(lsblk -dno SIZE "$root" | xargs)"
+
+target=/mnt/pxeimg-target
+mkdir -p "$target"
+mount "$root" "$target"
+${disk.espPartition ? `mount "\${prefix}${disk.espPartition}" "$target/boot/efi" || say "EFI partition not mounted"\n` : ""}for d in dev proc sys run; do mount --bind "/$d" "$target/$d"; done
+step() {
+  say "$1"
+  echo "$2" | base64 -d > "$target/root/pxe-step.sh"
+  if ! chroot "$target" /bin/bash /root/pxe-step.sh < /dev/null; then say "WARNING: $1 failed, see above"; fi
+  rm -f "$target/root/pxe-step.sh"
+}
+${steps.map((item) => `step ${shq(item.name)} ${b64(item.script)}`).join("\n")}
+umount -R "$target"
+sync
+
+sn=$(tr -d '[:space:]' < /sys/class/dmi/id/product_serial 2>/dev/null || true)
+curl -fsS "$server/boot/installed?sn=$sn" >/dev/null || true
+say "done, rebooting into the installed system"
+systemctl --no-block reboot
+`;
 }

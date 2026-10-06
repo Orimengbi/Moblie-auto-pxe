@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { isoSuffix } from "./iso-name.ts";
+import { ISO_FORMATS_LABEL, isoSuffix } from "./iso-name.ts";
 import { createImageFromIncoming } from "./store.ts";
 import type { ImageRecord } from "./types.ts";
 import { ensureDataDirs, incomingDir, uploadDir } from "./paths.ts";
@@ -80,7 +80,7 @@ function safeIsoName(filename: string, id: string): string {
 export function openUpload(input: { filename: string; size: number; name?: string; fingerprint: string }): UploadSession {
   ensureDataDirs();
   const filename = path.basename(input.filename);
-  if (!isoSuffix(filename)) throw new Error("只能上传 .iso 或压缩过的 ISO（.iso.xz、.iso.gz、.iso.zst、.iso.bz2）");
+  if (!isoSuffix(filename)) throw new Error(`只能上传 ${ISO_FORMATS_LABEL}`);
   if (!Number.isFinite(input.size) || input.size <= 0 || input.size > MAX_ISO) throw new Error("ISO 大小不合法");
   const fingerprint = input.fingerprint.trim();
   if (fingerprint.length < 3 || fingerprint.length > 240) throw new Error("上传标识不合法");

@@ -42,7 +42,7 @@ import {
   sameSubnet,
 } from "./net.ts";
 import { hashPassword } from "./password.ts";
-import { isoSuffix, stripIsoSuffix } from "./iso-name.ts";
+import { ISO_FORMATS_LABEL, isoSuffix, storedSuffix, stripIsoSuffix } from "./iso-name.ts";
 import {
   dataDir,
   diagDir,
@@ -245,7 +245,7 @@ export async function createImageFromIncoming(input: NewImageInput): Promise<Ima
   return withLock(() => {
     const filename = path.basename(input.filename);
     const suffix = isoSuffix(filename);
-    if (!suffix) throw new Error("只能导入 .iso 或压缩过的 ISO（.iso.xz、.iso.gz、.iso.zst、.iso.bz2）");
+    if (!suffix) throw new Error(`只能导入 ${ISO_FORMATS_LABEL}`);
     const source = path.join(incomingDir(), filename);
     if (!fs.existsSync(source)) throw new Error("incoming 目录里没有这个 ISO");
     const name = input.name.trim() || stripIsoSuffix(filename);
@@ -254,7 +254,7 @@ export async function createImageFromIncoming(input: NewImageInput): Promise<Ima
     const dir = imageDir(id);
     fs.mkdirSync(dir, { recursive: true });
     // 压缩的先原样放着，抽取任务里再解压成 source.iso，免得导入请求卡住。
-    const stored = path.join(dir, `source${suffix}`);
+    const stored = path.join(dir, `source${storedSuffix(suffix)}`);
     fs.renameSync(source, stored);
     const record: ImageRecord = {
       id,
@@ -274,7 +274,7 @@ export async function createImageFromIncoming(input: NewImageInput): Promise<Ima
 
 export async function saveUploadedIso(filename: string, bytes: Buffer, name: string): Promise<ImageRecord> {
   const safe = path.basename(filename);
-  if (!isoSuffix(safe)) throw new Error("只能上传 .iso 或压缩过的 ISO 文件");
+  if (!isoSuffix(safe)) throw new Error(`只能上传 ${ISO_FORMATS_LABEL}`);
   ensureDataDirs();
   const dest = path.join(incomingDir(), safe);
   fs.writeFileSync(dest, bytes);
@@ -352,6 +352,7 @@ function normalizeProfileInput(input: ProfileInput, existing?: Profile): Omit<Pr
   applyHostname(hostnamePattern, "00:11:22:33:44:55");
   const diskPolicy = input.diskPolicy;
   if (!["largest", "smallest", "named", "custom"].includes(diskPolicy)) throw new Error("磁盘策略不合法");
+  if (image.kind === "disk" && diskPolicy === "custom") throw new Error("整盘镜像自带分区，不能自定义分区");
   const diskPick: DiskPick = input.diskPick === "smallest" || input.diskPick === "named" ? input.diskPick : "largest";
   const diskName = diskPolicy === "named" || (diskPolicy === "custom" && diskPick === "named") ? assertDiskName(input.diskName || "") : input.diskName?.trim() || "sda";
   const partitions = diskPolicy === "custom" ? normalizePartitions(input.partitions || []) : [];

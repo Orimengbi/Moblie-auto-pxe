@@ -108,6 +108,7 @@ export function ProfileManager({
   const [form, setForm] = useState(EMPTY);
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
+  const diskImage = images.find((image) => image.id === form.imageId)?.kind === "disk";
 
   function updatePartition(index: number, patch: Partial<DiskPartition>) {
     setForm({
@@ -225,7 +226,11 @@ export function ProfileManager({
           <form onSubmit={save} className="grid gap-3">
             <DialogHeader>
               <DialogTitle>{editing ? "编辑安装配置" : "新建安装配置"}</DialogTitle>
-              <DialogDescription>安装会按磁盘策略清空目标盘。</DialogDescription>
+              <DialogDescription>
+                {diskImage
+                  ? "整盘镜像：写盘时按磁盘策略选盘，整块盘清空后写入镜像，根分区扩到整块盘。启动菜单里还有一项“内存运行”，不碰硬盘。"
+                  : "安装会按磁盘策略清空目标盘。"}
+              </DialogDescription>
             </DialogHeader>
             <Field label="名称">
               <Input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required />
@@ -239,6 +244,7 @@ export function ProfileManager({
                 {ready.map((image) => (
                   <option key={image.id} value={image.id}>
                     {image.name} · {FAMILY_LABEL[image.family]}
+                    {image.kind === "disk" ? " · 整盘镜像" : ""}
                   </option>
                 ))}
               </select>
@@ -274,14 +280,14 @@ export function ProfileManager({
                   <option value="largest">最大的磁盘</option>
                   <option value="smallest">最小的磁盘</option>
                   <option value="named">指定盘符</option>
-                  <option value="custom">自定义分区</option>
+                  {diskImage ? null : <option value="custom">自定义分区</option>}
                 </select>
               </Field>
               <Field label="盘符">
                 <Input value={form.diskName} disabled={form.diskPolicy !== "named" && !(form.diskPolicy === "custom" && form.diskPick === "named")} onChange={(event) => setForm({ ...form, diskName: event.target.value })} />
               </Field>
             </div>
-            {form.diskPolicy === "custom" ? (
+            {form.diskPolicy === "custom" && !diskImage ? (
               <div className="grid gap-3">
                 <Field label="用哪块盘">
                   <select
@@ -327,37 +333,46 @@ export function ProfileManager({
                 </div>
               </div>
             ) : null}
-            <Field label="软件包，用逗号分隔">
-              <Input value={form.packages} onChange={(event) => setForm({ ...form, packages: event.target.value })} />
-            </Field>
-            <Field label="语言">
-              <select
-                className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm"
-                value={form.locale}
-                onChange={(event) => setForm({ ...form, locale: event.target.value })}
-              >
-                {withCurrent(LOCALES, form.locale).map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label} · {value}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="时区">
-              <select
-                className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm"
-                value={form.timezone}
-                onChange={(event) => setForm({ ...form, timezone: event.target.value })}
-              >
-                {withCurrent(TIMEZONES, form.timezone).map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label} · {value}
-                  </option>
-                ))}
-              </select>
-            </Field>
+            {diskImage ? null : (
+              <>
+                <Field label="软件包，用逗号分隔">
+                  <Input value={form.packages} onChange={(event) => setForm({ ...form, packages: event.target.value })} />
+                </Field>
+                <Field label="语言">
+                  <select
+                    className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm"
+                    value={form.locale}
+                    onChange={(event) => setForm({ ...form, locale: event.target.value })}
+                  >
+                    {withCurrent(LOCALES, form.locale).map(([value, label]) => (
+                      <option key={value} value={value}>
+                        {label} · {value}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="时区">
+                  <select
+                    className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm"
+                    value={form.timezone}
+                    onChange={(event) => setForm({ ...form, timezone: event.target.value })}
+                  >
+                    {withCurrent(TIMEZONES, form.timezone).map(([value, label]) => (
+                      <option key={value} value={value}>
+                        {label} · {value}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              </>
+            )}
             <Field label="安装后脚本">
-              <Textarea value={form.postScript} onChange={(event) => setForm({ ...form, postScript: event.target.value })} rows={4} placeholder="可选。在装好的系统里以 root 执行。" />
+              <Textarea
+                value={form.postScript}
+                onChange={(event) => setForm({ ...form, postScript: event.target.value })}
+                rows={4}
+                placeholder={diskImage ? "可选。写盘后在新系统里以 root 执行（chroot），内存运行时不执行。" : "可选。在装好的系统里以 root 执行。"}
+              />
             </Field>
             {error ? <p className="text-sm text-destructive">{error}</p> : null}
             <Button type="submit" disabled={pending}>

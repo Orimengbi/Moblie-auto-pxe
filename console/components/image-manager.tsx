@@ -102,7 +102,7 @@ export function ImageManager({ images, uploads }: { images: ImageRecord[]; uploa
       <section className="grid gap-3 rounded-xl bg-card p-4 ring-1 ring-foreground/10">
         <h2 className="font-medium">上传 ISO</h2>
         <p className="text-sm text-muted-foreground">
-          支持 Ubuntu、Debian、Rocky Linux、AlmaLinux 的 x86_64 安装 ISO，也可以直接传压缩过的 ISO（{ISO_FORMATS_LABEL}），导入后自动解压。按 4MB 一段上传，网络抖动会自动重试；断开的上传会留在下面的任务里，可以继续或取消，传完自动识别抽取。
+          支持 Ubuntu、Debian、Rocky Linux、AlmaLinux 的 x86_64 安装 ISO，以及用 dd 导出的 Ubuntu / Debian 整盘镜像（GPT，根分区 ext4 且在最后）。格式：{ISO_FORMATS_LABEL}，压缩的导入后自动解压。按 4MB 一段上传，网络抖动会自动重试；断开的上传会留在下面的任务里，可以继续或取消，传完自动识别抽取。
         </p>
         <div className="grid gap-3 sm:max-w-md">
           <div className="grid gap-1.5">
@@ -208,7 +208,10 @@ export function ImageManager({ images, uploads }: { images: ImageRecord[]; uploa
                   <TableCell>
                     {image.status === "ready" ? (
                       <>
-                        <div>{FAMILY_LABEL[image.family]}</div>
+                        <div>
+                          {FAMILY_LABEL[image.family]}
+                          {image.kind === "disk" ? <span className="text-xs text-muted-foreground"> · 整盘镜像，可写盘或内存运行</span> : null}
+                        </div>
                         <div className="max-w-sm text-xs whitespace-normal text-muted-foreground">{image.version}</div>
                       </>
                     ) : image.status === "error" ? (

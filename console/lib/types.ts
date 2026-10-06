@@ -27,7 +27,22 @@ export interface ImageRecord {
   hasTree: boolean;
   /** ISO 的字节数。 */
   size?: number;
+  /** 不填就是安装 ISO。disk 是装好系统的整盘镜像，可以写盘也可以在内存里运行。 */
+  kind?: ImageKind;
+  disk?: DiskImageInfo;
   createdAt: string;
+}
+
+export type ImageKind = "iso" | "disk";
+
+/** 整盘镜像拆开后的布局，写盘脚本按这个写。 */
+export interface DiskImageInfo {
+  /** 根分区之前的字节数：分区表和 EFI 分区，在 head.img.zst 里。 */
+  headBytes: number;
+  rootPartition: number;
+  espPartition?: number;
+  /** 收缩后的根分区字节数，在 root.img.zst 里。 */
+  rootBytes: number;
 }
 
 export interface Profile {

@@ -19,7 +19,8 @@ test("recognizes plain and compressed ISO names", () => {
   assert.equal(isoSuffix("ubuntu.iso"), ".iso");
   assert.equal(isoSuffix("Ubuntu.ISO.XZ"), ".iso.xz");
   assert.equal(isoSuffix("debian.iso.zst"), ".iso.zst");
-  assert.equal(isoSuffix("rocky.img.xz"), null);
+  assert.equal(isoSuffix("rocky.img.xz"), ".img.xz");
+  assert.equal(isoSuffix("disk.raw"), null);
   assert.equal(isoSuffix("notes.txt"), null);
   assert.equal(stripIsoSuffix("ubuntu-24.04.iso.gz"), "ubuntu-24.04");
   assert.equal(stripIsoSuffix("plain.iso"), "plain");

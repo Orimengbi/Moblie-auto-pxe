@@ -1,5 +1,6 @@
 import path from "node:path";
 import fs from "node:fs";
+import { importDiskImage, looksLikeDiskImage } from "../lib/disk-image.ts";
 import { decompressIso, extractFile, extractTree, inspectIso } from "../lib/iso.ts";
 import { ISO_SUFFIXES } from "../lib/iso-name.ts";
 import { imageDir } from "../lib/paths.ts";
@@ -19,6 +20,17 @@ if (!image) {
 
 const isoPath = path.join(imageDir(id), "source.iso");
 
+function readHead(file: string): Buffer {
+  const fd = fs.openSync(file, "r");
+  try {
+    const head = Buffer.alloc(34 * 1024);
+    const read = fs.readSync(fd, head, 0, head.length, 0);
+    return head.subarray(0, read);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 try {
   for (const suffix of ISO_SUFFIXES) {
     const packed = path.join(imageDir(id), `source${suffix}`);
@@ -27,6 +39,23 @@ try {
     decompressIso(packed, suffix, isoPath);
     fs.rmSync(packed);
     writeImage({ ...getImage(id)!, size: fs.statSync(isoPath).size });
+  }
+  if (looksLikeDiskImage(readHead(isoPath))) {
+    const imported = importDiskImage(imageDir(id), isoPath, (line) => console.log(line));
+    writeImage({
+      ...getImage(id)!,
+      kind: "disk",
+      family: imported.family,
+      version: imported.version.slice(0, 160),
+      disk: imported.disk,
+      status: "ready",
+      kernelFile: "vmlinuz",
+      initrdFile: "initrd",
+      hasTree: false,
+      error: undefined,
+    });
+    console.log("抽取完成");
+    process.exit(0);
   }
   const detected = inspectIso(isoPath);
   console.log(`识别为 ${detected.family} ${detected.version}`);
