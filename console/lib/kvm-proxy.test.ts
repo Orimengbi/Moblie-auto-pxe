@@ -56,6 +56,11 @@ test("the proxy logs in to the BMC itself and relays pages and the KVM socket", 
   const seen: { method: string; path: string; headers: Record<string, unknown>; body: string }[] = [];
   let validSession = "s1";
   let logins = 0;
+  // 上次关掉面板后留下的 KVM 会话，加一个别人直接登录 BMC 开的会话。
+  let kvmSessions = [
+    { id: 14, client_ip: "127.0.0.1", session_type: 5 },
+    { id: 20, client_ip: "10.0.0.5", session_type: 5 },
+  ];
   const bmc = https.createServer({ key: fs.readFileSync(path.join(temp, "k.pem")), cert: fs.readFileSync(path.join(temp, "c.pem")) }, (req, res) => {
     let body = "";
     req.on("data", (chunk) => (body += chunk));
@@ -67,7 +72,7 @@ test("the proxy logs in to the BMC itself and relays pages and the KVM socket", 
           logins += 1;
           validSession = `s${logins}`;
           res.writeHead(200, { "set-cookie": `QSESSIONID=${validSession}; path=/; secure;HttpOnly`, "content-type": "application/json" });
-          res.end(`{"ok":0,"CSRFToken":"csrf${logins}","privilege":4,"extendedpriv":259}`);
+          res.end(`{"ok":0,"CSRFToken":"csrf${logins}","privilege":4,"extendedpriv":259,"remote_addr":"127.0.0.1"}`);
         } else {
           res.writeHead(401);
           res.end('{"code":15000}');
@@ -79,7 +84,18 @@ test("the proxy logs in to the BMC itself and relays pages and the KVM socket", 
         res.end('{"error":"Invalid Authentication"}');
         return;
       }
-      if (req.url === "/viewer.html") {
+      if (req.url === "/api/settings/services") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end('[{"id":1,"service_name":"web"},{"id":2,"service_name":"kvm"}]');
+      } else if (req.url === "/api/settings/service-sessions?service_id=2") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(kvmSessions));
+      } else if (req.method === "DELETE" && req.url?.startsWith("/api/settings/service-sessions/")) {
+        const id = Number(req.url.split("/").pop());
+        kvmSessions = kvmSessions.filter((item) => item.id !== id);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end('{"ok":0}');
+      } else if (req.url === "/viewer.html") {
         res.writeHead(200, { "content-type": "text/html", "content-encoding": "gzip", "set-cookie": "refresh=1; secure" });
         res.end(zlib.gzipSync('<html><head><script data-main="/app/main" src="/viewer.min.js"></script></head><body>KVM</body></html>'));
       } else if (req.url === "/api/configuration/project") {
@@ -102,6 +118,7 @@ test("the proxy logs in to the BMC itself and relays pages and the KVM socket", 
       socket.end("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
       return;
     }
+    kvmSessions.push({ id: 30, client_ip: "127.0.0.1", session_type: 5 });
     socket.write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n");
     socket.on("data", (chunk) => socket.write(Buffer.concat([Buffer.from("echo:"), chunk])));
   });
@@ -178,7 +195,10 @@ test("the proxy logs in to the BMC itself and relays pages and the KVM socket", 
   });
   assert.match(reply, /^HTTP\/1\.1 101/);
   assert.equal(seen.find((item) => item.method === "UPGRADE")?.path, "/kvm");
+  assert.deepEqual(kvmSessions.map((item) => item.id), [20, 30], "打开前清掉了上次留下的会话，别人的不动");
   socket.destroy();
+  await new Promise((resolve) => setTimeout(resolve, 3500));
+  assert.deepEqual(kvmSessions.map((item) => item.id), [20], "关掉面板后结束自己的 KVM 会话");
 
   auth.updateUser(user.id, { disabled: true });
   assert.equal((await fetch(`${base}${prefix}/viewer.html`, { headers: { cookie } })).status, 401, "停用用户后远程控制台也断开");

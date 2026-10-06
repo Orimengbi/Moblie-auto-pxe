@@ -39,6 +39,8 @@ interface BmcSession {
   user: string;
   privilege: number;
   extendedpriv: number;
+  /** BMC 看到的小主机地址，用来认出哪些 KVM 会话是经代理开的。 */
+  clientIp: string;
 }
 
 const sessions = new Map<string, Promise<BmcSession>>();
@@ -68,8 +70,16 @@ async function login(host: string, accounts: { user: string; password: string }[
     }, form);
     const sid = /QSESSIONID=([^;]+)/.exec([response.headers["set-cookie"] || []].flat().join(";"))?.[1];
     if (response.statusCode !== 200 || !sid) continue;
-    const data = JSON.parse(body.toString("utf8")) as { CSRFToken?: string; privilege?: number; extendedpriv?: number };
-    return { host, sid, csrf: data.CSRFToken || "", user: account.user, privilege: data.privilege ?? 4, extendedpriv: data.extendedpriv ?? 3 };
+    const data = JSON.parse(body.toString("utf8")) as { CSRFToken?: string; privilege?: number; extendedpriv?: number; remote_addr?: string };
+    return {
+      host,
+      sid,
+      csrf: data.CSRFToken || "",
+      user: account.user,
+      privilege: data.privilege ?? 4,
+      extendedpriv: data.extendedpriv ?? 3,
+      clientIp: data.remote_addr || "",
+    };
   }
   throw new Error("BMC 不接受服务器表里的账号密码");
 }
@@ -84,6 +94,56 @@ function session(key: string, host: string, accounts: { user: string; password: 
   sessions.set(key, created);
   created.catch(() => sessions.delete(key));
   return created;
+}
+
+class SessionExpired extends Error {}
+
+/** 每台 BMC 上经代理连着的 KVM 画面连接。 */
+const liveKvm = new Map<string, Set<Duplex>>();
+
+function liveCount(host: string): number {
+  return liveKvm.get(host)?.size || 0;
+}
+
+/**
+ * 结束这台 BMC 上由小主机开的、已经没人在看的 KVM 会话。
+ * 浏览器关掉面板时只是断开 WebSocket，BMC 不知道 KVM 已经退出，会一直留着主控权到超时（30 分钟），
+ * 下次打开就只拿到部分权限。只在经代理的 KVM 连接全部断开时调用，不动别人直接登录 BMC 开的会话。
+ */
+export async function closeStaleKvm(bmc: BmcSession): Promise<number> {
+  const headers = { Cookie: `QSESSIONID=${bmc.sid}`, "X-CSRFTOKEN": bmc.csrf };
+  const json = async (path: string) => {
+    const { response, body } = await call(bmc.host, { method: "GET", path, headers });
+    if (response.statusCode === 401) throw new SessionExpired();
+    return response.statusCode === 200 ? JSON.parse(decode(body, response.headers["content-encoding"]).toString("utf8")) : null;
+  };
+  const services = (await json("/api/settings/services")) as { id: number; service_name: string }[] | null;
+  const service = services?.find((item) => item.service_name === "kvm");
+  if (!service) return 0;
+  const list = ((await json(`/api/settings/service-sessions?service_id=${service.id}`)) || []) as { id: number; client_ip?: string }[];
+  let closed = 0;
+  for (const item of list) {
+    if (!bmc.clientIp || item.client_ip !== bmc.clientIp) continue;
+    const { response } = await call(bmc.host, { method: "DELETE", path: `/api/settings/service-sessions/${item.id}`, headers });
+    if (response.statusCode === 200) closed += 1;
+  }
+  return closed;
+}
+
+/** 用这个用户保存的 BMC 会话清理；会话过期就重新登录一次。 */
+async function closeStaleQuietly(target: { key: string; host: string; accounts: { user: string; password: string }[] }, label: string): Promise<void> {
+  try {
+    let count: number;
+    try {
+      count = await closeStaleKvm(await session(target.key, target.host, target.accounts));
+    } catch (error) {
+      if (!(error instanceof SessionExpired)) throw error;
+      count = await closeStaleKvm(await session(target.key, target.host, target.accounts, true));
+    }
+    if (count) console.log(`[kvm] ${label}：结束了 ${target.host} 上 ${count} 个没人在看的 KVM 会话`);
+  } catch (error) {
+    console.error(`[kvm] 清理 ${target.host} 的 KVM 会话失败：${error instanceof Error ? error.message : error}`);
+  }
 }
 
 const HOP = new Set(["connection", "keep-alive", "proxy-connection", "transfer-encoding", "upgrade", "te", "trailer", "x-real-ip", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "cookie", "x-csrftoken", "authorization"]);
@@ -414,7 +474,10 @@ function handleUpgrade(req: http.IncomingMessage, socket: Duplex, head: Buffer):
     socket.end(`HTTP/1.1 ${target.status} Refused\r\nConnection: close\r\n\r\n`);
     return;
   }
-  session(target.key, target.host, target.accounts)
+  const isKvm = target.rest.split("?")[0] === "/kvm";
+  // 没人经代理在看这台时，先清掉上次留下的 KVM 会话，新开的才能拿到完整权限。
+  (isKvm && !liveCount(target.host) ? closeStaleQuietly(target, "打开前") : Promise.resolve())
+    .then(() => session(target.key, target.host, target.accounts))
     .then((bmc) => {
       const upstream = https.request({
         host: target.host,
@@ -435,6 +498,18 @@ function handleUpgrade(req: http.IncomingMessage, socket: Duplex, head: Buffer):
         socket.on("close", () => bmcSocket.destroy());
         bmcSocket.on("close", () => socket.destroy());
         bmcSocket.pipe(socket).pipe(bmcSocket);
+        if (isKvm) {
+          const live = liveKvm.get(target.host) || new Set<Duplex>();
+          live.add(socket);
+          liveKvm.set(target.host, live);
+          socket.once("close", () => {
+            live.delete(socket);
+            // 关掉面板就退出 KVM。稍等一下，页面刷新或断线重连时不要误杀。
+            setTimeout(() => {
+              if (!liveCount(target.host)) void closeStaleQuietly(target, "关闭后");
+            }, 3000);
+          });
+        }
       });
       upstream.on("response", (response) => {
         if (response.statusCode === 401) sessions.delete(target.key);
