@@ -99,3 +99,30 @@ export function inspectIso(isoPath: string): DetectedImage {
   const treeinfo = readIsoText(isoPath, ".treeinfo") || "";
   return detectFromListing(files, diskInfo, treeinfo);
 }
+
+const DECOMPRESSORS: Record<string, string> = {
+  ".iso.xz": "xz",
+  ".iso.gz": "gzip",
+  ".iso.zst": "zstd",
+  ".iso.bz2": "bzip2",
+};
+
+/** 把压缩的 ISO 解压成 dest。先写到 .part，成功了再改名，失败不留半个文件。 */
+export function decompressIso(source: string, suffix: string, dest: string): void {
+  const tool = DECOMPRESSORS[suffix];
+  if (!tool) throw new Error(`不支持的压缩格式 ${suffix}`);
+  const part = `${dest}.part`;
+  const out = fs.openSync(part, "w");
+  let result;
+  try {
+    result = spawnSync(tool, ["-dc", source], { stdio: ["ignore", out, "pipe"], encoding: "utf8" });
+  } finally {
+    fs.closeSync(out);
+  }
+  if (result.error || result.status !== 0) {
+    fs.rmSync(part, { force: true });
+    if (result.error) throw new Error(`没有找到 ${tool}，无法解压 ${suffix}`);
+    throw new Error(`解压失败：${(result.stderr || "").trim() || `${tool} 退出码 ${result.status}`}`);
+  }
+  fs.renameSync(part, dest);
+}

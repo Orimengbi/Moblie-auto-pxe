@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ISO_ACCEPT, ISO_FORMATS_LABEL } from "@/lib/iso-name";
 import { FAMILY_LABEL, type ImageRecord } from "@/lib/types";
 
 export interface PendingUpload {
@@ -138,7 +139,7 @@ export function ImageManager({ images, uploads }: { images: ImageRecord[]; uploa
       <section className="grid gap-3 rounded-xl bg-card p-4 ring-1 ring-foreground/10">
         <h2 className="font-medium">上传 ISO</h2>
         <p className="text-sm text-muted-foreground">
-          支持 Ubuntu、Debian、Rocky Linux、AlmaLinux 的 x86_64 安装 ISO。按 4MB 一段上传，网络抖动会自动重试；断开后重新选择同一个文件，会从断开的位置接着传，传完自动识别抽取。
+          支持 Ubuntu、Debian、Rocky Linux、AlmaLinux 的 x86_64 安装 ISO，也可以直接传压缩过的 ISO（{ISO_FORMATS_LABEL}），导入后自动解压。按 4MB 一段上传，网络抖动会自动重试；断开后重新选择同一个文件，会从断开的位置接着传，传完自动识别抽取。
         </p>
         <div className="grid gap-3 sm:max-w-md">
           <div className="grid gap-1.5">
@@ -147,7 +148,7 @@ export function ImageManager({ images, uploads }: { images: ImageRecord[]; uploa
           </div>
           <Input
             type="file"
-            accept=".iso"
+            accept={ISO_ACCEPT}
             disabled={pending}
             onChange={(event) => {
               setFile(event.target.files?.[0] || null);

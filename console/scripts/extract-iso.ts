@@ -1,5 +1,7 @@
 import path from "node:path";
-import { extractFile, extractTree, inspectIso } from "../lib/iso.ts";
+import fs from "node:fs";
+import { decompressIso, extractFile, extractTree, inspectIso } from "../lib/iso.ts";
+import { ISO_SUFFIXES } from "../lib/iso-name.ts";
 import { imageDir } from "../lib/paths.ts";
 import { getImage, writeImage } from "../lib/store.ts";
 
@@ -18,6 +20,14 @@ if (!image) {
 const isoPath = path.join(imageDir(id), "source.iso");
 
 try {
+  for (const suffix of ISO_SUFFIXES) {
+    const packed = path.join(imageDir(id), `source${suffix}`);
+    if (suffix === ".iso" || !fs.existsSync(packed)) continue;
+    console.log(`解压 ${suffix}`);
+    decompressIso(packed, suffix, isoPath);
+    fs.rmSync(packed);
+    writeImage({ ...getImage(id)!, size: fs.statSync(isoPath).size });
+  }
   const detected = inspectIso(isoPath);
   console.log(`识别为 ${detected.family} ${detected.version}`);
   extractFile(isoPath, detected.kernel, path.join(imageDir(id), "vmlinuz"));

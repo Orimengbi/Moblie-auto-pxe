@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isoSuffix } from "./iso-name.ts";
 import { createImageFromIncoming } from "./store.ts";
 import type { ImageRecord } from "./types.ts";
 import { ensureDataDirs, incomingDir, uploadDir } from "./paths.ts";
@@ -68,17 +69,18 @@ export function listUploadSessions(): UploadSession[] {
 
 function safeIsoName(filename: string, id: string): string {
   const base = path.basename(filename).replace(/[^\w.\-()+ ]+/g, "_");
-  const withExt = base.toLowerCase().endsWith(".iso") ? base : `${base}.iso`;
+  const suffix = isoSuffix(base);
+  const withExt = suffix ? base : `${base}.iso`;
   const target = path.join(incomingDir(), withExt);
   if (!fs.existsSync(target)) return withExt;
-  const stem = withExt.replace(/\.iso$/i, "");
-  return `${stem}-${id.slice(0, 8)}.iso`;
+  const ext = suffix || ".iso";
+  return `${withExt.slice(0, -ext.length)}-${id.slice(0, 8)}${ext}`;
 }
 
 export function openUpload(input: { filename: string; size: number; name?: string; fingerprint: string }): UploadSession {
   ensureDataDirs();
   const filename = path.basename(input.filename);
-  if (!filename.toLowerCase().endsWith(".iso")) throw new Error("只能上传 .iso 文件");
+  if (!isoSuffix(filename)) throw new Error("只能上传 .iso 或压缩过的 ISO（.iso.xz、.iso.gz、.iso.zst、.iso.bz2）");
   if (!Number.isFinite(input.size) || input.size <= 0 || input.size > MAX_ISO) throw new Error("ISO 大小不合法");
   const fingerprint = input.fingerprint.trim();
   if (fingerprint.length < 3 || fingerprint.length > 240) throw new Error("上传标识不合法");

@@ -42,6 +42,7 @@ import {
   sameSubnet,
 } from "./net.ts";
 import { hashPassword } from "./password.ts";
+import { isoSuffix, stripIsoSuffix } from "./iso-name.ts";
 import {
   dataDir,
   diagDir,
@@ -231,7 +232,7 @@ export function listIncoming(): string[] {
   ensureDataDirs();
   return fs
     .readdirSync(incomingDir())
-    .filter((name) => name.toLowerCase().endsWith(".iso") && !name.startsWith("."))
+    .filter((name) => isoSuffix(name) && !name.startsWith("."))
     .sort();
 }
 
@@ -243,15 +244,18 @@ export interface NewImageInput {
 export async function createImageFromIncoming(input: NewImageInput): Promise<ImageRecord> {
   return withLock(() => {
     const filename = path.basename(input.filename);
-    if (!filename.toLowerCase().endsWith(".iso")) throw new Error("只能导入 .iso 文件");
+    const suffix = isoSuffix(filename);
+    if (!suffix) throw new Error("只能导入 .iso 或压缩过的 ISO（.iso.xz、.iso.gz、.iso.zst、.iso.bz2）");
     const source = path.join(incomingDir(), filename);
     if (!fs.existsSync(source)) throw new Error("incoming 目录里没有这个 ISO");
-    const name = input.name.trim() || filename.replace(/\.iso$/i, "");
+    const name = input.name.trim() || stripIsoSuffix(filename);
     if (name.length < 2 || name.length > 80) throw new Error("镜像名称需要 2 到 80 个字符");
     const id = crypto.randomUUID();
     const dir = imageDir(id);
     fs.mkdirSync(dir, { recursive: true });
-    fs.renameSync(source, path.join(dir, "source.iso"));
+    // 压缩的先原样放着，抽取任务里再解压成 source.iso，免得导入请求卡住。
+    const stored = path.join(dir, `source${suffix}`);
+    fs.renameSync(source, stored);
     const record: ImageRecord = {
       id,
       name,
@@ -260,7 +264,7 @@ export async function createImageFromIncoming(input: NewImageInput): Promise<Ima
       filename,
       status: "extracting",
       hasTree: false,
-      size: fs.statSync(path.join(dir, "source.iso")).size,
+      size: fs.statSync(stored).size,
       createdAt: new Date().toISOString(),
     };
     writeImage(record);
@@ -270,7 +274,7 @@ export async function createImageFromIncoming(input: NewImageInput): Promise<Ima
 
 export async function saveUploadedIso(filename: string, bytes: Buffer, name: string): Promise<ImageRecord> {
   const safe = path.basename(filename);
-  if (!safe.toLowerCase().endsWith(".iso")) throw new Error("只能上传 .iso 文件");
+  if (!isoSuffix(safe)) throw new Error("只能上传 .iso 或压缩过的 ISO 文件");
   ensureDataDirs();
   const dest = path.join(incomingDir(), safe);
   fs.writeFileSync(dest, bytes);
