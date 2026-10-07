@@ -3,6 +3,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { parseLeases, renderBootIpxe, renderDnsmasq } from "./dnsmasq.ts";
+import { refreshBootScript } from "./disk-image.ts";
 import {
   BOOT_DEVICES,
   POWER_ACTIONS,
@@ -210,6 +211,19 @@ export function listImages(): ImageRecord[] {
     .filter((item): item is ImageRecord => item !== null)
     .map(withImageSize)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+/** 已导入的整盘镜像换上当前的启动脚本（pxeimg.cpio 里的 scripts/pxeimg）。 */
+export function refreshDiskImageBoot(): void {
+  for (const image of listImages()) {
+    if (image.kind !== "disk" || image.status !== "ready") continue;
+    const file = path.join(imageDir(image.id), "pxeimg.cpio");
+    try {
+      if (refreshBootScript(file)) console.log(`更新了镜像 ${image.name} 的启动脚本`);
+    } catch (error) {
+      console.error(`没能更新镜像 ${image.name} 的启动脚本：`, error);
+    }
+  }
 }
 
 /** 早先导入的镜像没有记大小，按 ISO 文件补上。 */

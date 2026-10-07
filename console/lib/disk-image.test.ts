@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { BOOT_SCRIPT, buildCpio, importDiskImage, looksLikeDiskImage, osRelease, parseGpt, planDisk, readGptFile } from "./disk-image.ts";
+import { BOOT_SCRIPT, buildCpio, importDiskImage, parseCpio, refreshBootScript, looksLikeDiskImage, osRelease, parseGpt, planDisk, readGptFile } from "./disk-image.ts";
 import { renderDiskImageScript, renderIpxeMenu } from "./render.ts";
 import type { ImageRecord, Profile } from "./types.ts";
 
@@ -286,4 +286,29 @@ test("imports a dd disk image into boot files and two compressed halves", (t) =>
   fs.appendFileSync(source, fs.readFileSync(other));
   assert.throws(() => importDiskImage(dir, source, () => {}), /只支持 Ubuntu 和 Debian/);
   assert.equal(fs.existsSync(path.join(dir, "root.img")), false);
+});
+
+test("the boot script attaches the loop device without --show, which klibc losetup lacks", () => {
+  assert.doesNotMatch(BOOT_SCRIPT, /--show/);
+  assert.match(BOOT_SCRIPT, /dev=\$\(losetup -f\)/);
+  assert.match(BOOT_SCRIPT, /losetup "\$dev" "\$img"/);
+});
+
+test("images imported earlier get the current boot script in their pxeimg.cpio", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pxeimg-cpio-"));
+  const file = path.join(dir, "pxeimg.cpio");
+  const zstd = Buffer.from([0x7f, 0x45, 0x4c, 0x46, 1, 2, 3]);
+  fs.writeFileSync(file, buildCpio([
+    { name: "scripts", mode: 0o40755 },
+    { name: "scripts/pxeimg", mode: 0o100644, data: Buffer.from("old script") },
+    { name: "usr/bin/zstd", mode: 0o100755, data: zstd },
+  ]));
+  assert.equal(refreshBootScript(file), true);
+  const entries = parseCpio(fs.readFileSync(file));
+  assert.deepEqual(entries.map((entry) => entry.name), ["scripts", "scripts/pxeimg", "usr/bin/zstd"]);
+  assert.equal(entries[1].data?.toString("utf8"), BOOT_SCRIPT);
+  assert.equal(entries[2].mode, 0o100755);
+  assert.deepEqual(entries[2].data, zstd);
+  assert.equal(refreshBootScript(file), false, "已经是当前版本就不再写");
+  fs.rmSync(dir, { recursive: true });
 });

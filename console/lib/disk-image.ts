@@ -129,6 +129,38 @@ export function buildCpio(entries: CpioEntry[]): Buffer {
   return Buffer.concat([body, Buffer.alloc((512 - (body.length % 512)) % 512)]);
 }
 
+export function parseCpio(data: Buffer): CpioEntry[] {
+  const entries: CpioEntry[] = [];
+  let offset = 0;
+  while (offset + 110 <= data.length) {
+    const header = data.subarray(offset, offset + 110).toString("latin1");
+    if (!header.startsWith("070701")) throw new Error("不是 newc 格式的 cpio");
+    const field = (index: number) => parseInt(header.slice(6 + index * 8, 14 + index * 8), 16);
+    const mode = field(1);
+    const fileSize = field(6);
+    const nameSize = field(11);
+    const nameEnd = offset + 110 + nameSize;
+    const name = data.subarray(offset + 110, nameEnd - 1).toString("utf8");
+    if (name === "TRAILER!!!") break;
+    const dataStart = nameEnd + ((4 - ((110 + nameSize) % 4)) % 4);
+    entries.push({ name, mode, data: Buffer.from(data.subarray(dataStart, dataStart + fileSize)) });
+    offset = dataStart + fileSize + ((4 - (fileSize % 4)) % 4);
+  }
+  return entries;
+}
+
+/** 导入时 BOOT_SCRIPT 已经打进 pxeimg.cpio。脚本改过后把已导入镜像里的那份换成当前版本，不用重新导入。返回是否改了文件。 */
+export function refreshBootScript(cpioFile: string): boolean {
+  const entries = parseCpio(fs.readFileSync(cpioFile));
+  const script = entries.find((entry) => entry.name === "scripts/pxeimg");
+  if (!script || script.data?.toString("utf8") === BOOT_SCRIPT) return false;
+  script.data = Buffer.from(BOOT_SCRIPT);
+  const temp = `${cpioFile}.tmp`;
+  fs.writeFileSync(temp, buildCpio(entries));
+  fs.renameSync(temp, cpioFile);
+  return true;
+}
+
 /**
  * initramfs-tools 的 boot=pxeimg 脚本：起网络，把根分区下载进内存（tmpfs 上的稀疏文件），用 loop 挂成根。
  * 镜像里磁盘相关的 fstab 行注释掉；pxeimg.hook 给了地址就装一个开机服务，联网后下载执行那个脚本。
@@ -178,7 +210,9 @@ mountroot()
 		[ "$tries" -lt 5 ] || pxeimg_fail "download failed; check the network and that RAM is larger than the image"
 		sleep 5
 	done
-	dev=$(losetup -f --show "$img") || pxeimg_fail "losetup failed"
+	# Ubuntu's initrd ships klibc losetup, which cannot attach and print in one call: find a free device first, then attach.
+	dev=$(losetup -f) || pxeimg_fail "no free loop device"
+	losetup "$dev" "$img" || pxeimg_fail "losetup $dev failed"
 	mount -t ext4 -o rw "$dev" "\${rootmnt?}" || pxeimg_fail "cannot mount the root image"
 	# Running from RAM: do not touch the disks listed in the image's fstab.
 	sed -i 's|^\\([^#]\\)|#pxeimg# \\1|' "\${rootmnt}/etc/fstab"
