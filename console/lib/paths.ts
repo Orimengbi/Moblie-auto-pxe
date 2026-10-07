@@ -29,6 +29,8 @@ export function ensureDataDirs(): void {
     "ssh",
     "tasks",
     "files",
+    "inventory",
+    "baselines",
   ]) {
     fs.mkdirSync(path.join(dataDir(), rel), { recursive: true });
   }
@@ -120,4 +122,12 @@ export function taskPath(id: string): string {
 
 export function fileDir(id: string): string {
   return path.join(dataDir(), "files", id);
+}
+
+export function inventoryDir(serverId: string): string {
+  return path.join(dataDir(), "inventory", serverId);
+}
+
+export function baselinePath(projectId: string): string {
+  return path.join(dataDir(), "baselines", `${projectId}.json`);
 }

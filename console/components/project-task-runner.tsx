@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import type { RemoteFile, RemoteTask, TaskHostSource, TaskTargetStatus } from "@/lib/types";
+import type { InventorySource, RemoteFile, RemoteTask, TaskHostSource, TaskTargetStatus } from "@/lib/types";
 
 const TARGET: Record<TaskTargetStatus, string> = {
   pending: "排队",
@@ -79,6 +79,7 @@ export function ProjectTaskRunner({
   projectId,
   picked,
   installed,
+  all,
   onPick,
   files,
   tasks,
@@ -86,6 +87,8 @@ export function ProjectTaskRunner({
   projectId: string;
   picked: string[];
   installed: string[];
+  /** 项目里所有机器。采集硬件没勾选时对全部机器做。 */
+  all: string[];
   onPick: (ids: string[]) => void;
   files: RemoteFile[];
   tasks: RemoteTask[];
@@ -99,6 +102,7 @@ export function ProjectTaskRunner({
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
   const [uploading, setUploading] = useState("");
+  const [sources, setSources] = useState<InventorySource[]>(["os", "bmc"]);
   const running = tasks.some((task) => task.status === "running");
 
   useEffect(() => {
@@ -142,6 +146,15 @@ export function ProjectTaskRunner({
     }
     if (!window.confirm(`从 ${ids.length} 台机器上撤掉控制台公钥？撤完以后控制台不能再登录这些机器执行脚本。`)) return;
     await submit({ kind: "revoke", serverIds: ids, concurrency, timeoutSec: 60 });
+  }
+
+  async function collect() {
+    const ids = picked.length ? picked : all;
+    if (!ids.length) {
+      setError("列表里还没有机器");
+      return;
+    }
+    await submit({ kind: "inventory", sources, serverIds: ids, concurrency, timeoutSec: 600 });
   }
 
   async function upload(event: React.ChangeEvent<HTMLInputElement>) {
@@ -233,6 +246,24 @@ export function ProjectTaskRunner({
         </div>
         {error ? <p className="text-sm text-destructive">{error}</p> : null}
       </form>
+
+      <div className="grid gap-2 rounded-lg border p-3">
+        <p className="text-sm font-medium">采集硬件配置</p>
+        <p className="text-sm text-muted-foreground">
+          读每台机器的整机型号、CPU、内存、硬盘、GPU、网卡、电源和固件，记下序列号、型号和容量、频率等属性，和上一次比出变化。系统内要求能 SSH 登录，BMC 只要 IPMI 通，关机也能读，一台要一两分钟。上面选了机器就只采选中的，没选就采全部。
+        </p>
+        <div className="flex flex-wrap items-center gap-3 text-sm">
+          {(["os", "bmc"] as const).map((source) => (
+            <label key={source} className="flex items-center gap-1.5">
+              <input type="checkbox" checked={sources.includes(source)} onChange={() => setSources((list) => toggle(list, source) as InventorySource[])} />
+              {source === "os" ? "系统内（SSH）" : "BMC（Redfish）"}
+            </label>
+          ))}
+          <Button type="button" className="w-fit" disabled={pending || !sources.length} onClick={collect}>
+            {picked.length ? `采集选中的 ${picked.length} 台` : `采集全部 ${all.length} 台`}
+          </Button>
+        </div>
+      </div>
 
       <div className="grid gap-2 rounded-lg border p-3">
         <p className="text-sm font-medium">交付清理</p>

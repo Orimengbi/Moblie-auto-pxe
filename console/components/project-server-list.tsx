@@ -5,12 +5,13 @@ import { useRouter } from "next/navigation";
 import { ColumnHead, type ColumnFilter, type SortState } from "@/components/column-head";
 import { HOST_SOURCE, ProjectTaskRunner } from "@/components/project-task-runner";
 import { ServerEditDialog } from "@/components/server-edit-dialog";
+import { ServerInventoryDialog } from "@/components/server-inventory-dialog";
 import { RemoteConsole } from "@/components/remote-console";
 import { ServerPowerDialog } from "@/components/server-power-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import type { InstallState, IpmiLink, IpSource, PowerState, RemoteFile, RemoteTask, ServerImportReport, ServerRow, ServerStage, TaskHostSource } from "@/lib/types";
+import type { InstallState, InventoryStatus, IpmiLink, IpSource, PowerState, RemoteFile, RemoteTask, ServerImportReport, ServerRow, ServerStage, TaskHostSource } from "@/lib/types";
 
 const STAGE: Record<ServerStage, string> = {
   waiting: "等待发现",
@@ -46,10 +47,22 @@ const INSTALLED: Record<InstallState, string> = {
 
 const AUTO_CHECK_MS = 30000;
 
-export type ServerListRow = Omit<ServerRow, "originalPassword" | "targetPassword"> & { host: string; hostSource: TaskHostSource };
+export type ServerListRow = Omit<ServerRow, "originalPassword" | "targetPassword"> & { host: string; hostSource: TaskHostSource; inventory: InventoryStatus };
 
 function stageLabel(row: ServerListRow): string {
   return row.installed === "yes" ? "已安装" : STAGE[row.stage];
+}
+
+function hardwareLabel(row: ServerListRow): string {
+  if (!row.inventory.os && !row.inventory.bmc) return "未采集";
+  if (row.inventory.issues === null) return "已采集";
+  return row.inventory.issues ? "不符合基准" : "符合基准";
+}
+
+function collectedLine(label: string, item: InventoryStatus["os"]): string {
+  if (!item) return "";
+  const at = new Date(item.at).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+  return `${label} ${at}${item.changes ? ` · ${item.changes} 处变化` : ""}`;
 }
 
 /** IP 按每段数字比，不按字符串比。 */
@@ -76,6 +89,7 @@ const COLUMNS: Column[] = [
   { key: "power", label: "开关机", sortValue: (row) => POWER[row.power], pick: (row) => POWER[row.power] },
   { key: "installed", label: "系统", sortValue: (row) => INSTALLED[row.installed], pick: (row) => INSTALLED[row.installed] },
   { key: "host", label: "系统地址", sortValue: (row) => ipKey(row.host), text: (row) => row.host || "" },
+  { key: "hardware", label: "硬件", sortValue: hardwareLabel, pick: hardwareLabel },
 ];
 
 function matches(row: ServerListRow, column: Column, filter: ColumnFilter): boolean {
@@ -175,6 +189,7 @@ export function ProjectServerList({
   const [adding, setAdding] = useState(false);
   const [powerTargets, setPowerTargets] = useState<ServerListRow[]>([]);
   const [consoleRow, setConsoleRow] = useState<ServerListRow | null>(null);
+  const [inventoryRow, setInventoryRow] = useState<ServerListRow | null>(null);
 
   async function remove(row: ServerListRow) {
     if (!window.confirm(`从列表里删掉 ${row.sn}？不会动这台机器的 BMC 和系统。`)) return;
@@ -369,6 +384,21 @@ export function ProjectServerList({
                       {row.host || "—"}
                       {row.hostSource ? <span className="mt-1 block font-sans text-muted-foreground">{HOST_SOURCE[row.hostSource]}</span> : null}
                     </TableCell>
+                    <TableCell>
+                      <button type="button" className="text-left" onClick={() => setInventoryRow(row)} title="查看硬件配置">
+                        <Badge variant={hardwareLabel(row) === "不符合基准" ? "destructive" : hardwareLabel(row) === "未采集" ? "outline" : "default"}>
+                          {hardwareLabel(row)}
+                          {row.inventory.issues ? ` ${row.inventory.issues} 项` : ""}
+                        </Badge>
+                        {[collectedLine("系统内", row.inventory.os), collectedLine("BMC", row.inventory.bmc)]
+                          .filter(Boolean)
+                          .map((line) => (
+                            <span key={line} className="mt-1 block text-xs text-muted-foreground">
+                              {line}
+                            </span>
+                          ))}
+                      </button>
+                    </TableCell>
                     <TableCell className="text-right whitespace-nowrap">
                       <Button type="button" size="xs" variant="ghost" disabled={!row.bmcIp} onClick={() => setConsoleRow(row)}>
                         远程控制台
@@ -407,9 +437,10 @@ export function ProjectServerList({
       />
       <ServerPowerDialog projectId={projectId} targets={powerTargets} onClose={() => setPowerTargets([])} />
       {consoleRow ? <RemoteConsole projectId={projectId} row={consoleRow} port={bmcPort} onClose={() => setConsoleRow(null)} /> : null}
+      <ServerInventoryDialog projectId={projectId} row={inventoryRow} onClose={() => setInventoryRow(null)} />
       <div className="grid gap-3 border-t pt-4">
         <h3 className="font-medium">批量任务</h3>
-        <ProjectTaskRunner projectId={projectId} picked={picked} installed={installed} onPick={setPicked} files={files} tasks={tasks} />
+        <ProjectTaskRunner projectId={projectId} picked={picked} installed={installed} all={rows.map((row) => row.id)} onPick={setPicked} files={files} tasks={tasks} />
       </div>
     </div>
   );

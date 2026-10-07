@@ -1,0 +1,199 @@
+import https from "node:https";
+
+/**
+ * 从 BMC 的 Redfish 读整机配置，不需要系统，关机也能读。
+ * 只做 GET。各家 BMC 给的字段多少不一，取不到的就空着，由 inventory.ts 统一成部件列表。
+ */
+
+export type RedfishGet = (path: string) => Promise<RedfishDoc | null>;
+
+export type RedfishDoc = Record<string, unknown>;
+
+/** 读到的原始文档，按用途分好。inventory.ts 里的 redfishComponents 从这里取部件。 */
+export interface RedfishRaw {
+  systems: RedfishDoc[];
+  processors: RedfishDoc[];
+  memory: RedfishDoc[];
+  drives: RedfishDoc[];
+  chassis: RedfishDoc[];
+  pcieDevices: RedfishDoc[];
+  networkAdapters: RedfishDoc[];
+  powerSupplies: RedfishDoc[];
+  managers: RedfishDoc[];
+  firmware: RedfishDoc[];
+  /** 读失败的路径和原因，只用来提示。 */
+  errors: string[];
+}
+
+const agent = new https.Agent({ keepAlive: true, rejectUnauthorized: false, maxSockets: 8 });
+
+/** BMC 的网页端口。只有测试会改它。 */
+function bmcPort(): number {
+  return Number(process.env.PXE_KVM_BMC_PORT || 443);
+}
+
+export class RedfishAuthError extends Error {}
+
+/** 用 Basic 认证读一个 Redfish 路径。401 抛 RedfishAuthError，404 返回 null。 */
+export function redfishGetter(host: string, user: string, password: string, timeoutMs = 20_000): RedfishGet {
+  const auth = `Basic ${Buffer.from(`${user}:${password}`).toString("base64")}`;
+  return (path) =>
+    new Promise((resolve, reject) => {
+      const request = https.request(
+        { host, port: bmcPort(), path, method: "GET", agent, timeout: timeoutMs, headers: { Authorization: auth, Accept: "application/json" } },
+        (response) => {
+          const chunks: Buffer[] = [];
+          response.on("data", (chunk: Buffer) => chunks.push(chunk));
+          response.on("error", reject);
+          response.on("end", () => {
+            const status = response.statusCode || 0;
+            if (status === 401 || status === 403) return reject(new RedfishAuthError(`BMC 拒绝了账号（HTTP ${status}）`));
+            if (status === 404) return resolve(null);
+            if (status >= 400) return reject(new Error(`HTTP ${status}`));
+            try {
+              resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")) as RedfishDoc);
+            } catch {
+              reject(new Error("不是 JSON"));
+            }
+          });
+        },
+      );
+      request.on("timeout", () => request.destroy(new Error("超时")));
+      request.on("error", reject);
+      request.end();
+    });
+}
+
+function link(doc: RedfishDoc | null | undefined, key: string): string {
+  const value = doc?.[key] as { "@odata.id"?: string } | undefined;
+  return typeof value?.["@odata.id"] === "string" ? value["@odata.id"] : "";
+}
+
+function members(doc: RedfishDoc | null): string[] {
+  const list = doc?.Members;
+  if (!Array.isArray(list)) return [];
+  return list.map((item) => (item as { "@odata.id"?: string })?.["@odata.id"]).filter((id): id is string => typeof id === "string");
+}
+
+/** 并发读一批路径，最多 limit 个同时在读。读不到的记进 errors。 */
+async function fetchAll(get: RedfishGet, paths: string[], errors: string[], limit = 4): Promise<RedfishDoc[]> {
+  const out: (RedfishDoc | null)[] = new Array(paths.length).fill(null);
+  let next = 0;
+  const worker = async () => {
+    while (next < paths.length) {
+      const index = next++;
+      try {
+        out[index] = await get(paths[index]);
+      } catch (error) {
+        if (error instanceof RedfishAuthError) throw error;
+        errors.push(`${paths[index]}：${error instanceof Error ? error.message : "读取失败"}`);
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, paths.length) }, worker));
+  return out.filter((doc): doc is RedfishDoc => Boolean(doc));
+}
+
+/** 读一个集合的全部成员。大的集合分页，后面的页在 Members@odata.nextLink 里。 */
+async function collection(get: RedfishGet, path: string, errors: string[]): Promise<RedfishDoc[]> {
+  if (!path) return [];
+  try {
+    const paths: string[] = [];
+    let page: RedfishDoc | null = await get(path);
+    for (let pages = 0; page && pages < 50; pages++) {
+      paths.push(...members(page));
+      const next = page["Members@odata.nextLink"];
+      page = typeof next === "string" && next ? await get(next) : null;
+    }
+    return await fetchAll(get, paths, errors);
+  } catch (error) {
+    if (error instanceof RedfishAuthError) throw error;
+    errors.push(`${path}：${error instanceof Error ? error.message : "读取失败"}`);
+    return [];
+  }
+}
+
+/** 读一个单独的文档；读不到记一笔，账号被拒照样抛出。 */
+async function optional(get: RedfishGet, path: string, errors: string[]): Promise<RedfishDoc | null> {
+  if (!path) return null;
+  try {
+    return await get(path);
+  } catch (error) {
+    if (error instanceof RedfishAuthError) throw error;
+    errors.push(`${path}：${error instanceof Error ? error.message : "读取失败"}`);
+    return null;
+  }
+}
+
+async function eachLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) await fn(items[next++]);
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+}
+
+/** 按 Redfish 的链接走一遍：Systems、Chassis、Managers 和固件清单。 */
+export async function crawlRedfish(get: RedfishGet): Promise<RedfishRaw> {
+  const errors: string[] = [];
+  const root = await get("/redfish/v1/");
+  if (!root) throw new Error("BMC 没有 Redfish 服务");
+  const raw: RedfishRaw = {
+    systems: [],
+    processors: [],
+    memory: [],
+    drives: [],
+    chassis: [],
+    pcieDevices: [],
+    networkAdapters: [],
+    powerSupplies: [],
+    managers: [],
+    firmware: [],
+    errors,
+  };
+
+  raw.systems = await collection(get, link(root, "Systems") || "/redfish/v1/Systems", errors);
+  for (const system of raw.systems) {
+    raw.processors.push(...(await collection(get, link(system, "Processors"), errors)));
+    raw.memory.push(...(await collection(get, link(system, "Memory"), errors)));
+    for (const storage of await collection(get, link(system, "Storage"), errors)) {
+      const drives = Array.isArray(storage.Drives) ? storage.Drives : [];
+      const paths = drives.map((item) => (item as { "@odata.id"?: string })?.["@odata.id"]).filter((id): id is string => typeof id === "string");
+      raw.drives.push(...(await fetchAll(get, paths, errors)));
+    }
+  }
+
+  raw.chassis = await collection(get, link(root, "Chassis") || "/redfish/v1/Chassis", errors);
+  // 带 GPU 底板的机器有上百个机箱，几个一起读。
+  await eachLimit(raw.chassis, 4, async (chassis) => {
+    raw.pcieDevices.push(...(await collection(get, link(chassis, "PCIeDevices"), errors)));
+    raw.networkAdapters.push(...(await collection(get, link(chassis, "NetworkAdapters"), errors)));
+    // 新的 BMC 用 PowerSubsystem/PowerSupplies，旧的把电源列在 Power 里。
+    const subsystem = link(chassis, "PowerSubsystem");
+    const fromSubsystem = subsystem ? await collection(get, link(await optional(get, subsystem, errors), "PowerSupplies"), errors) : [];
+    if (fromSubsystem.length) {
+      raw.powerSupplies.push(...fromSubsystem);
+    } else if (link(chassis, "Power")) {
+      const power = await optional(get, link(chassis, "Power"), errors);
+      const list = Array.isArray(power?.PowerSupplies) ? (power.PowerSupplies as RedfishDoc[]) : [];
+      raw.powerSupplies.push(...list);
+    }
+  });
+
+  raw.managers = await collection(get, link(root, "Managers") || "/redfish/v1/Managers", errors);
+  const update = await optional(get, link(root, "UpdateService"), errors);
+  raw.firmware = await collection(get, link(update, "FirmwareInventory"), errors);
+
+  // 同一个部件可能从不同的链接读到两次（比如 PCIe 设备挂在两个机箱下），按 @odata.id 去重。
+  for (const key of ["processors", "memory", "drives", "pcieDevices", "networkAdapters", "firmware"] as const) {
+    const seen = new Set<string>();
+    raw[key] = raw[key].filter((doc) => {
+      const id = String(doc["@odata.id"] || "");
+      if (!id) return true;
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+  }
+  return raw;
+}

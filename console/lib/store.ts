@@ -4,6 +4,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { parseLeases, renderBootIpxe, renderDnsmasq } from "./dnsmasq.ts";
 import { refreshBootScript } from "./disk-image.ts";
+import { checkBaseline, diffComponents, generateBaseline, KIND_LABEL } from "./inventory.ts";
 import {
   BOOT_DEVICES,
   POWER_ACTIONS,
@@ -46,8 +47,10 @@ import {
 import { hashPassword } from "./password.ts";
 import { ISO_FORMATS_LABEL, isoSuffix, storedSuffix, stripIsoSuffix } from "./iso-name.ts";
 import {
+  baselinePath,
   dataDir,
   diagDir,
+  inventoryDir,
   dnsmasqConfPath,
   fileDir,
   ensureDataDirs,
@@ -72,7 +75,14 @@ import {
 import {
   DEFAULT_STATE,
   type ApplianceState,
+  type Baseline,
+  type BaselineRule,
   type BuiltinDiag,
+  type HwKind,
+  type InventoryMeta,
+  type InventorySnapshot,
+  type InventorySource,
+  type InventoryStatus,
   type DiagScript,
   type DiskPartition,
   type DiskMode,
@@ -638,7 +648,9 @@ export async function deleteProject(id: string): Promise<void> {
     for (const server of listServers()) {
       if (server.projectId !== id) continue;
       fs.rmSync(serverPath(server.id), { force: true });
+      fs.rmSync(inventoryDir(server.id), { recursive: true, force: true });
     }
+    fs.rmSync(baselinePath(id), { force: true });
     for (const fact of listMachineFacts()) {
       if (fact.projectId !== id) continue;
       fs.rmSync(factPath(fact.id), { force: true });
@@ -1495,6 +1507,7 @@ export async function deleteServer(projectId: string, serverId: string): Promise
     if (!row) throw new Error("这台机器不在这个项目里");
     if (row.bootMac) unbindInstall(row.bootMac);
     fs.rmSync(serverPath(row.id), { force: true });
+    fs.rmSync(inventoryDir(row.id), { recursive: true, force: true });
   });
 }
 
@@ -1946,4 +1959,141 @@ export async function saveFile(rawName: string, body: ReadableStream<Uint8Array>
 export async function deleteFile(id: string): Promise<void> {
   if (!getFile(id)) throw new Error("文件不存在");
   fs.rmSync(fileDir(id), { recursive: true, force: true });
+}
+
+/** 每台机器、每个来源留下的采集次数。 */
+const INVENTORY_KEEP = 30;
+const SNAPSHOT_ID = /^\d{8}T\d{9}Z-(os|bmc)-[0-9a-f]{6}$/;
+const HW_KINDS = Object.keys(KIND_LABEL) as HwKind[];
+
+/** 采集记录的文件名按时间排序，新的在后。 */
+function snapshotIds(serverId: string, source?: InventorySource): string[] {
+  const dir = inventoryDir(serverId);
+  if (!/^[0-9a-f-]{36}$/.test(serverId) || !fs.existsSync(dir)) return [];
+  return fs
+    .readdirSync(dir)
+    .filter((name) => name.endsWith(".json"))
+    .map((name) => name.slice(0, -5))
+    .filter((id) => SNAPSHOT_ID.test(id) && (!source || id.includes(`-${source}-`)))
+    .sort();
+}
+
+export function getInventory(serverId: string, id: string): InventorySnapshot | null {
+  if (!SNAPSHOT_ID.test(id) || !/^[0-9a-f-]{36}$/.test(serverId)) return null;
+  return readJson<InventorySnapshot>(path.join(inventoryDir(serverId), `${id}.json`));
+}
+
+/** 新的在前。 */
+export function listInventory(serverId: string): InventorySnapshot[] {
+  return snapshotIds(serverId)
+    .reverse()
+    .map((id) => getInventory(serverId, id))
+    .filter((item): item is InventorySnapshot => item !== null);
+}
+
+export function inventoryMeta(snapshot: InventorySnapshot): InventoryMeta {
+  return {
+    id: snapshot.id,
+    source: snapshot.source,
+    at: snapshot.at,
+    host: snapshot.host,
+    components: snapshot.components.length,
+    changes: snapshot.changes ? snapshot.changes.length : null,
+  };
+}
+
+/** 服务器列表「硬件」一列用。baseline 由调用方读一次传进来。 */
+export function inventoryStatus(serverId: string, baseline: Baseline | null): InventoryStatus {
+  const status: InventoryStatus = { issues: null };
+  for (const source of ["os", "bmc"] as const) {
+    const latest = latestInventory(serverId, source);
+    if (!latest) continue;
+    status[source] = { at: latest.at, changes: latest.changes ? latest.changes.length : null };
+    if (baseline?.source === source) status.issues = checkBaseline(baseline.rules, latest.components).length;
+  }
+  return status;
+}
+
+export function latestInventory(serverId: string, source: InventorySource): InventorySnapshot | null {
+  const id = snapshotIds(serverId, source).at(-1);
+  return id ? getInventory(serverId, id) : null;
+}
+
+/** 存一次采集，和同来源的上一次比出变化，旧的只留最近 30 次。 */
+export async function saveInventory(input: Omit<InventorySnapshot, "id" | "changes">): Promise<InventorySnapshot> {
+  return withLock(() => {
+    const previous = latestInventory(input.serverId, input.source);
+    const stamp = input.at.replace(/[-:.]/g, "");
+    const snapshot: InventorySnapshot = {
+      ...input,
+      id: `${stamp}-${input.source}-${crypto.randomUUID().slice(0, 6)}`,
+      ...(previous ? { changes: diffComponents(previous.components, input.components) } : {}),
+    };
+    writeJson(path.join(inventoryDir(input.serverId), `${snapshot.id}.json`), snapshot);
+    for (const old of snapshotIds(input.serverId, input.source).slice(0, -INVENTORY_KEEP)) {
+      fs.rmSync(path.join(inventoryDir(input.serverId), `${old}.json`), { force: true });
+    }
+    return snapshot;
+  });
+}
+
+export function getBaseline(projectId: string): Baseline | null {
+  if (!/^[0-9a-f-]{36}$/.test(projectId)) return null;
+  return readJson<Baseline>(baselinePath(projectId));
+}
+
+function cleanRules(input: unknown): BaselineRule[] {
+  if (!Array.isArray(input)) throw new Error("基准配置的格式不对");
+  if (input.length > 500) throw new Error("基准配置最多 500 条");
+  return input.map((raw, index) => {
+    const rule = raw as Partial<BaselineRule>;
+    if (!rule || !HW_KINDS.includes(rule.kind as HwKind)) throw new Error(`第 ${index + 1} 条的类别不对`);
+    const count = Number(rule.count);
+    if (!Number.isInteger(count) || count < 0 || count > 10000) throw new Error(`第 ${index + 1} 条的数量要是 0 到 10000 的整数`);
+    const attrs = Object.fromEntries(
+      Object.entries(rule.attrs && typeof rule.attrs === "object" ? rule.attrs : {})
+        .map(([key, value]) => [key.slice(0, 40), String(value ?? "").trim().slice(0, 200)])
+        .filter(([key, value]) => key && value),
+    );
+    const firmware = String(rule.firmware ?? "").trim().slice(0, 200);
+    return {
+      kind: rule.kind as HwKind,
+      model: String(rule.model ?? "").trim().slice(0, 300),
+      count,
+      ...(firmware ? { firmware } : {}),
+      ...(Object.keys(attrs).length ? { attrs } : {}),
+    };
+  });
+}
+
+export async function saveBaseline(projectId: string, input: { source?: InventorySource; rules?: unknown; fromSn?: string }): Promise<Baseline> {
+  return withLock(() => {
+    if (!getProject(projectId)) throw new Error("项目不存在");
+    const current = getBaseline(projectId);
+    const source = input.source === "bmc" || input.source === "os" ? input.source : current?.source || "os";
+    const baseline: Baseline = {
+      projectId,
+      source,
+      rules: cleanRules(input.rules ?? current?.rules ?? []),
+      ...(input.fromSn ?? current?.fromSn ? { fromSn: String(input.fromSn ?? current?.fromSn).slice(0, 80) } : {}),
+      updatedAt: new Date().toISOString(),
+    };
+    writeJson(baselinePath(projectId), baseline);
+    return baseline;
+  });
+}
+
+/** 用某台机器最近一次的采集生成项目的基准，替换原来的。 */
+export async function baselineFromServer(projectId: string, serverId: string, source: InventorySource): Promise<Baseline> {
+  const row = getServer(projectId, serverId);
+  if (!row) throw new Error("这台机器不在这个项目里");
+  const snapshot = latestInventory(serverId, source);
+  if (!snapshot) throw new Error(`${row.sn} 还没有${source === "os" ? "系统内" : " BMC "}的采集结果`);
+  return saveBaseline(projectId, { source, rules: generateBaseline(snapshot.components), fromSn: row.sn });
+}
+
+export async function deleteBaseline(projectId: string): Promise<void> {
+  return withLock(() => {
+    fs.rmSync(baselinePath(projectId), { force: true });
+  });
 }

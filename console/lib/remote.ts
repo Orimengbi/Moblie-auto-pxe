@@ -2,23 +2,30 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { parseLeases, type Lease } from "./dnsmasq.ts";
+import { describeChange, INVENTORY_SCRIPT, parseOsInventory, redfishComponents, summarizeComponents } from "./inventory.ts";
 import { listLocalIpv4, sameSubnet } from "./net.ts";
 import { sshKeyPath, taskPath } from "./paths.ts";
+import { crawlRedfish, RedfishAuthError, redfishGetter, type RedfishGet } from "./redfish.ts";
 import { renderRevokeScript } from "./render.ts";
 import {
+  bmcAccounts,
   filePayloadPath,
   getFile,
   getProject,
+  getServer,
   getTask,
   listMachines,
   listNicPlans,
   listServers,
   readLeasesText,
+  saveInventory,
   writeTask,
 } from "./store.ts";
-import type { Machine, NicPlan, RemoteTask, ServerRow, TaskHostSource, TaskKind, TaskTarget, TaskTargetStatus } from "./types.ts";
+import type { HwChange, InventorySource, Machine, NicPlan, RemoteTask, ServerRow, TaskHostSource, TaskKind, TaskTarget, TaskTargetStatus } from "./types.ts";
 
 const OUTPUT_LIMIT = 16000;
+/** 采集脚本的原始输出要整段解析，不能像普通任务那样只留结尾。 */
+const INVENTORY_OUTPUT_LIMIT = 4 * 1024 * 1024;
 
 /** 小主机自己的 SSH 密钥。第一次用到时生成，私钥只留在数据目录。 */
 export function consolePublicKey(): string {
@@ -72,6 +79,8 @@ export function hostContext(): HostContext {
 
 export interface TaskInput {
   kind?: TaskKind;
+  /** 采集硬件读哪几边，默认两边都读。 */
+  sources?: InventorySource[];
   name?: string;
   script?: string;
   serverIds: string[];
@@ -90,12 +99,16 @@ function boundedInt(value: unknown, fallback: number, min: number, max: number, 
 export function createTask(projectId: string, input: TaskInput, context: HostContext = hostContext()): RemoteTask {
   const project = getProject(projectId);
   if (!project) throw new Error("项目不存在");
-  const kind: TaskKind = input.kind === "revoke" ? "revoke" : "script";
-  const script = kind === "revoke" ? renderRevokeScript(consolePublicKey()) : (input.script || "").replace(/\r\n/g, "\n");
+  const kind: TaskKind = input.kind === "revoke" || input.kind === "inventory" ? input.kind : "script";
+  const script =
+    kind === "revoke" ? renderRevokeScript(consolePublicKey()) : kind === "inventory" ? INVENTORY_SCRIPT : (input.script || "").replace(/\r\n/g, "\n");
   if (!script.trim()) throw new Error("脚本是空的");
   if (script.length > 200000) throw new Error("脚本超过 200KB");
-  const name = (input.name || "").trim().slice(0, 80) || (kind === "revoke" ? "交付清理：撤掉控制台公钥" : script.trim().split("\n")[0].slice(0, 80));
-  const fileIds = kind === "revoke" ? [] : [...new Set(input.fileIds || [])];
+  const sources = kind === "inventory" ? (["os", "bmc"] as const).filter((source) => !input.sources || input.sources.includes(source)) : [];
+  if (kind === "inventory" && !sources.length) throw new Error("至少选一种采集方式");
+  const defaultName = kind === "revoke" ? "交付清理：撤掉控制台公钥" : kind === "inventory" ? "采集硬件配置" : script.trim().split("\n")[0].slice(0, 80);
+  const name = (input.name || "").trim().slice(0, 80) || defaultName;
+  const fileIds = kind === "script" ? [...new Set(input.fileIds || [])] : [];
   for (const id of fileIds) {
     if (!getFile(id)) throw new Error("选中的文件已经不存在，刷新页面再选");
   }
@@ -106,14 +119,20 @@ export function createTask(projectId: string, input: TaskInput, context: HostCon
     const row = rows.find((item) => item.id === id);
     if (!row) throw new Error("选中的机器不在这个项目里，刷新页面再选");
     const found = resolveHost(row, context);
+    // 采集硬件只读 BMC 时不需要系统地址；两边都读时有一边能连就去试。
+    const reachable = kind === "inventory" ? (sources.includes("os") && Boolean(found.host)) || (sources.includes("bmc") && Boolean(row.bmcIp)) : Boolean(found.host);
+    const missing =
+      kind === "inventory"
+        ? `${sources.includes("os") ? "找不到系统地址" : ""}${sources.length === 2 ? "，" : ""}${sources.includes("bmc") ? "还没有 BMC 地址" : ""}`
+        : "找不到这台机器的地址：服务器表没填系统地址，DHCP 租约里也没有它的装机网卡";
     return {
       serverId: row.id,
       sn: row.sn,
       host: found.host,
       hostSource: found.source,
-      status: found.host ? "pending" : "unreachable",
+      status: reachable ? "pending" : "unreachable",
       exitCode: null,
-      output: found.host ? "" : "找不到这台机器的地址：服务器表没填系统地址，DHCP 租约里也没有它的装机网卡",
+      output: reachable ? "" : missing,
     };
   });
   const task: RemoteTask = {
@@ -127,6 +146,7 @@ export function createTask(projectId: string, input: TaskInput, context: HostCon
     timeoutSec: boundedInt(input.timeoutSec, 600, 10, 7200, "单台超时"),
     status: targets.some((item) => item.status === "pending") ? "running" : "done",
     targets,
+    ...(kind === "inventory" ? { inventorySources: [...sources] } : {}),
     createdAt: new Date().toISOString(),
   };
   if (task.status === "done") task.finishedAt = task.createdAt;
@@ -153,17 +173,17 @@ export interface ExecResult {
   timedOut: boolean;
 }
 
-/** 执行一条命令，stdin 可选。deadline 是绝对时间，到点就杀掉。 */
-export type Exec = (command: string, args: string[], stdin: string | null, deadline: number) => Promise<ExecResult>;
+/** 执行一条命令，stdin 可选。deadline 是绝对时间，到点就杀掉。limit 是输出最多留多少字符，超了只留结尾。 */
+export type Exec = (command: string, args: string[], stdin: string | null, deadline: number, limit?: number) => Promise<ExecResult>;
 
-export const defaultExec: Exec = (command, args, stdin, deadline) =>
+export const defaultExec: Exec = (command, args, stdin, deadline, limit = OUTPUT_LIMIT) =>
   new Promise((resolve) => {
     const child = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"] });
     let output = "";
     let timedOut = false;
     const keep = (chunk: Buffer) => {
       output += chunk.toString("utf8");
-      if (output.length > OUTPUT_LIMIT * 2) output = output.slice(-OUTPUT_LIMIT);
+      if (output.length > limit * 2) output = output.slice(-limit);
     };
     const timer = setTimeout(() => {
       timedOut = true;
@@ -250,8 +270,125 @@ export async function runOnHost(
   return { status: ran.code === 0 ? "ok" : "failed", exitCode: ran.code, output: tail(log) };
 }
 
+/** 用某台 BMC 的账号做一个 Redfish 读取函数。测试时换成假的。 */
+export type RedfishFactory = (host: string, user: string, password: string) => RedfishGet;
+
+function changeLines(changes: HwChange[] | undefined): string[] {
+  if (!changes) return ["第一次采集"];
+  if (!changes.length) return ["和上次采集相比没有变化"];
+  return [`和上次采集相比有 ${changes.length} 处变化：`, ...changes.slice(0, 20).map((change) => `  ${describeChange(change)}`), ...(changes.length > 20 ? ["  ……"] : [])];
+}
+
+function withDeadline<T>(work: Promise<T>, deadline: number, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label}超时`)), Math.max(0, deadline - Date.now()));
+    work.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+/**
+ * 采集一台机器的硬件：SSH 进系统跑采集脚本，再读 BMC 的 Redfish，两边各存一次。
+ * 有一边成功就把结果存下；要读的两边都成功才算成功。
+ */
+export async function collectInventory(
+  task: Pick<RemoteTask, "projectId" | "timeoutSec" | "inventorySources">,
+  target: Pick<TaskTarget, "serverId" | "host" | "sn">,
+  exec: Exec,
+  redfish: RedfishFactory = redfishGetter,
+): Promise<{ status: TaskTargetStatus; exitCode: number | null; output: string }> {
+  const deadline = Date.now() + task.timeoutSec * 1000;
+  const sources = task.inventorySources || ["os", "bmc"];
+  const row = getServer(task.projectId, target.serverId);
+  const lines: string[] = [];
+  let ok = 0;
+  let tried = 0;
+  let reached = false;
+
+  if (sources.includes("os")) {
+    if (!target.host) {
+      lines.push("系统内：找不到系统地址，跳过");
+    } else {
+      tried++;
+      const ran = await exec("ssh", [...sshOptions(), `root@${target.host}`, "bash -s"], INVENTORY_SCRIPT, deadline, INVENTORY_OUTPUT_LIMIT);
+      if (ran.timedOut) {
+        lines.push(`系统内（${target.host}）：超过 ${task.timeoutSec} 秒，已中止`);
+      } else if (ran.code === 255 || !ran.output.includes("===PXEINV ")) {
+        lines.push(`系统内（${target.host}）：SSH 登录失败。机器没开、地址不对，或者装机时没写入控制台公钥`, tail(ran.output).trim());
+      } else {
+        reached = true;
+        const parsed = parseOsInventory(ran.output);
+        const saved = await saveInventory({
+          serverId: target.serverId,
+          projectId: task.projectId,
+          sn: target.sn,
+          source: "os",
+          at: new Date().toISOString(),
+          host: target.host,
+          components: parsed.components,
+          warnings: parsed.warnings,
+        });
+        ok++;
+        lines.push(`系统内（${target.host}）：`, ...summarizeComponents(parsed.components).map((line) => `  ${line}`), ...changeLines(saved.changes), ...parsed.warnings.map((line) => `  提示：${line}`));
+      }
+    }
+  }
+
+  if (sources.includes("bmc")) {
+    const accounts = row ? bmcAccounts(row) : [];
+    if (!row?.bmcIp) {
+      lines.push("BMC：还没有 BMC 地址，跳过");
+    } else if (!accounts.length) {
+      lines.push(`BMC（${row.bmcIp}）：服务器表里没有 IPMI 账号密码，跳过`);
+    } else {
+      tried++;
+      let done = false;
+      let failure = "";
+      for (const account of accounts) {
+        try {
+          const raw = await withDeadline(crawlRedfish(redfish(row.bmcIp, account.user, account.password)), deadline, "读 Redfish ");
+          reached = true;
+          const components = redfishComponents(raw);
+          const warnings = raw.errors.length ? [`有 ${raw.errors.length} 个 Redfish 路径没读到，例如 ${raw.errors[0]}`] : [];
+          const saved = await saveInventory({
+            serverId: target.serverId,
+            projectId: task.projectId,
+            sn: target.sn,
+            source: "bmc",
+            at: new Date().toISOString(),
+            host: row.bmcIp,
+            components,
+            warnings,
+          });
+          ok++;
+          done = true;
+          lines.push(`BMC（${row.bmcIp}）：`, ...summarizeComponents(components).map((line) => `  ${line}`), ...changeLines(saved.changes), ...warnings.map((line) => `  提示：${line}`));
+          break;
+        } catch (error) {
+          failure = error instanceof Error ? error.message : "读取失败";
+          if (!(error instanceof RedfishAuthError)) break;
+        }
+      }
+      if (!done) lines.push(`BMC（${row.bmcIp}）：${failure}`);
+    }
+  }
+
+  const output = tail(`${lines.filter(Boolean).join("\n")}\n`);
+  if (ok > 0 && ok === tried) return { status: "ok", exitCode: 0, output };
+  if (Date.now() >= deadline) return { status: "timeout", exitCode: null, output };
+  return { status: ok > 0 || reached ? "failed" : "unreachable", exitCode: null, output };
+}
+
 /** 在独立进程里跑完一个任务，每台机器状态变化时写回任务文件。 */
-export async function runTask(id: string, exec: Exec = defaultExec): Promise<RemoteTask> {
+export async function runTask(id: string, exec: Exec = defaultExec, redfish: RedfishFactory = redfishGetter): Promise<RemoteTask> {
   const loaded = getTask(id);
   if (!loaded) throw new Error("任务不存在");
   const task: RemoteTask = { ...loaded, status: "running", runnerPid: process.pid };
@@ -268,7 +405,7 @@ export async function runTask(id: string, exec: Exec = defaultExec): Promise<Rem
       target.startedAt = new Date().toISOString();
       writeTask(task);
       try {
-        Object.assign(target, await runOnHost(task, target, files, exec));
+        Object.assign(target, task.kind === "inventory" ? await collectInventory(task, target, exec, redfish) : await runOnHost(task, target, files, exec));
       } catch (error) {
         target.status = "failed";
         target.output = error instanceof Error ? error.message : "执行失败";

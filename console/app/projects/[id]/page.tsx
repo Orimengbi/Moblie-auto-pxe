@@ -2,12 +2,13 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { PageHeader } from "@/components/page-header";
 import { ProfileManager } from "@/components/profile-manager";
+import { ProjectBaseline } from "@/components/project-baseline";
 import { ProjectDhcpForm } from "@/components/project-dhcp-form";
 import { ProjectServerImport } from "@/components/project-server-import";
 import { ProjectServerList } from "@/components/project-server-list";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { hostContext, resolveHost } from "@/lib/remote";
-import { getProject, getServerImportReport, listFiles, listImages, listProfiles, listServers, listTasks, publicProfile, publicServer, runsInRam } from "@/lib/store";
+import { getBaseline, getProject, getServerImportReport, inventoryStatus, listFiles, listImages, listProfiles, listServers, listTasks, publicProfile, publicServer, runsInRam } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
@@ -18,12 +19,14 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
   const profileRecords = listProfiles().filter((profile) => profile.projectId === project.id);
   const profiles = profileRecords.map(publicProfile);
   const hosts = hostContext();
+  const baseline = getBaseline(project.id);
   const servers = listServers()
     .filter((row) => row.projectId === project.id)
     .map((row) => {
       const found = resolveHost(row, hosts);
-      return { ...publicServer(row), host: found.host, hostSource: found.source };
+      return { ...publicServer(row), host: found.host, hostSource: found.source, inventory: inventoryStatus(row.id, baseline) };
     });
+  const checked = servers.filter((row) => row.inventory.issues !== null);
   return (
     <div className="grid gap-4">
       <div>
@@ -69,6 +72,19 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
             files={listFiles()}
             tasks={listTasks(project.id).slice(0, 10)}
             bmcPort={process.env.PXE_BMC_PORT || ""}
+          />
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>基准配置</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ProjectBaseline
+            projectId={project.id}
+            baseline={baseline}
+            matched={checked.filter((row) => row.inventory.issues === 0).length}
+            mismatched={checked.filter((row) => row.inventory.issues).length}
           />
         </CardContent>
       </Card>

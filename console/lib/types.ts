@@ -322,7 +322,7 @@ export const DEFAULT_STATE: ApplianceState = {
   },
 };
 
-export type TaskKind = "script" | "revoke";
+export type TaskKind = "script" | "revoke" | "inventory";
 export type TaskStatus = "running" | "done";
 export type TaskTargetStatus = "pending" | "running" | "ok" | "failed" | "timeout" | "unreachable";
 export type TaskHostSource = "sheet" | "nic" | "fixed" | "lease" | "";
@@ -352,8 +352,102 @@ export interface RemoteTask {
   status: TaskStatus;
   runnerPid?: number;
   targets: TaskTarget[];
+  /** 采集硬件任务读哪几边。旧任务没有这一项。 */
+  inventorySources?: InventorySource[];
   createdAt: string;
   finishedAt?: string;
+}
+
+/** 硬件部件的类别。firmware 是 BIOS、BMC、CPLD 这类只有版本号的固件。 */
+export type HwKind = "system" | "board" | "cpu" | "memory" | "disk" | "gpu" | "nic" | "psu" | "firmware";
+
+/** os：SSH 进系统里用 dmidecode 等工具读；bmc：从 BMC 的 Redfish 读。两边的槽位名不一样，不互相比。 */
+export type InventorySource = "os" | "bmc";
+
+/** 一个部件。slot 在同一台机器、同一来源里是稳定的位置名，比如 DIMM_P0_A0、P0、nvme0n1、GPU 的 PCI 地址。 */
+export interface HwComponent {
+  kind: HwKind;
+  slot: string;
+  model: string;
+  vendor: string;
+  sn: string;
+  firmware: string;
+  /** 各类特有的属性，比如内存的 sizeGB、CPU 的 cores。数值按数字存，比对基准时按文字比。 */
+  attrs: Record<string, string | number>;
+}
+
+export type HwChangeType = "added" | "removed" | "replaced" | "changed";
+
+/** 和同一来源的上一次采集比出的变化。replaced 是同一槽位换了序列号，changed 是同一个部件的型号、固件或属性变了。 */
+export interface HwChange {
+  type: HwChangeType;
+  kind: HwKind;
+  slot: string;
+  before?: HwComponent;
+  after?: HwComponent;
+  /** changed 时变了的字段，例如 firmware、sizeGB。 */
+  fields?: string[];
+}
+
+/** 一次采集的结果。每台机器、每个来源各留最近 30 次。 */
+export interface InventorySnapshot {
+  id: string;
+  serverId: string;
+  projectId: string;
+  sn: string;
+  source: InventorySource;
+  at: string;
+  /** os 来源是 SSH 登录的地址，bmc 来源是 BMC 地址。 */
+  host: string;
+  components: HwComponent[];
+  /** 和上一次同来源采集比出的变化；第一次采集没有。 */
+  changes?: HwChange[];
+  /** 没装的工具、读不到的 Redfish 路径等，只提示不算失败。 */
+  warnings: string[];
+}
+
+/** 基准配置的一条：这一类、这个型号（和这些属性）应该有 count 个。firmware 填了就要求版本一致。 */
+export interface BaselineRule {
+  kind: HwKind;
+  model: string;
+  count: number;
+  firmware?: string;
+  attrs?: Record<string, string>;
+}
+
+/** 项目的基准配置。只和同一来源的采集比，因为两边的型号写法不一样。 */
+export interface Baseline {
+  projectId: string;
+  source: InventorySource;
+  rules: BaselineRule[];
+  /** 从哪台机器生成的，只用来显示。 */
+  fromSn?: string;
+  updatedAt: string;
+}
+
+export interface BaselineIssue {
+  kind: HwKind;
+  model: string;
+  message: string;
+}
+
+/** 采集记录列表里的一行，不带部件明细。 */
+export interface InventoryMeta {
+  id: string;
+  source: InventorySource;
+  at: string;
+  host: string;
+  components: number;
+  /** 和上一次比的变化数；第一次采集是 null。 */
+  changes: number | null;
+}
+
+/** 服务器列表里「硬件」一列：每个来源最近一次的时间和变化数，以及按基准检查出的问题数。 */
+export interface InventoryStatus {
+  os?: { at: string; changes: number | null };
+  bmc?: { at: string; changes: number | null };
+  /** 没有基准，或者基准那个来源还没采集过时是 null。 */
+  issues: number | null;
 }
 
 /** 上传给批量任务用的文件，例如驱动包。执行前用 scp 推到目标机。 */
