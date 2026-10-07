@@ -207,6 +207,7 @@ export function ProfileManager({
                     <h2 className="font-medium">{profile.name}</h2>
                     <p className="mt-1 text-sm text-muted-foreground">
                       {image ? `${FAMILY_LABEL[image.family]} · ${image.name}` : "镜像已删除"} · 主机名 {profile.hostnamePattern}
+                      {image?.kind === "disk" && !profile.username ? " · 账号用镜像里的" : ""}
                       {image?.kind === "disk" ? ` · ${DISK_MODE_LABEL[profile.diskMode || "deploy"]}` : ""}
                       {runsLive ? "" : ` · ${DISK_LABEL[profile.diskPolicy]}`}
                       {profile.diskPolicy === "named" && !runsLive ? ` ${profile.diskName}` : ""}
@@ -260,11 +261,11 @@ export function ProfileManager({
               <Input value={form.hostnamePattern} onChange={(event) => setForm({ ...form, hostnamePattern: event.target.value })} />
             </Field>
             <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="用户名">
-                <Input value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} required />
+              <Field label={diskImage ? "用户名（留空则用镜像里的账号）" : "用户名"}>
+                <Input value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} required={!diskImage} />
               </Field>
-              <Field label={editing ? "新密码（留空则不变）" : "密码"}>
-                <Input type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} required={!editing} />
+              <Field label={diskImage ? "密码（留空则不改密码）" : editing ? "新密码（留空则不变）" : "密码"}>
+                <Input type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} required={!editing && !diskImage} disabled={diskImage && !form.username.trim()} />
               </Field>
             </div>
             {diskImage ? (

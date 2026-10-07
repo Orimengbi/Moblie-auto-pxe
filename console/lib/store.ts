@@ -359,8 +359,11 @@ function normalizeProfileInput(input: ProfileInput, existing?: Profile): Omit<Pr
   const diskName = diskPolicy === "named" || (diskPolicy === "custom" && diskPick === "named") ? assertDiskName(input.diskName || "") : input.diskName?.trim() || "sda";
   const partitions = diskPolicy === "custom" ? normalizePartitions(input.partitions || []) : [];
   const password = input.password?.trim();
-  const passwordHash = password ? hashPassword(password) : existing?.passwordHash;
-  if (!passwordHash) throw new Error("请设置安装密码");
+  // 整盘镜像里常常已经有账号：用户名留空就不动镜像里的账号，密码留空就不改密码。
+  const keepImageAccount = image.kind === "disk" && !input.username?.trim();
+  const username = keepImageAccount ? "" : assertUsername(input.username);
+  const passwordHash = keepImageAccount ? "" : password ? hashPassword(password) : existing?.passwordHash || "";
+  if (!passwordHash && image.kind !== "disk") throw new Error("请设置安装密码");
   const projectId = input.projectId || existing?.projectId;
   if (!projectId || !getProject(projectId)) throw new Error("安装配置必须放在一个项目里");
   return {
@@ -368,7 +371,7 @@ function normalizeProfileInput(input: ProfileInput, existing?: Profile): Omit<Pr
     imageId: image.id,
     projectId,
     hostnamePattern,
-    username: assertUsername(input.username),
+    username,
     passwordHash,
     diskPolicy,
     diskName,

@@ -753,15 +753,19 @@ export function renderDiagTask(input: {
   return `${lines.join("\n")}\n`;
 }
 
-/** 在镜像里的系统上设主机名和账号。写盘时在 chroot 里跑，内存运行时直接跑。 */
+/** 在镜像里的系统上设主机名和账号。写盘时在 chroot 里跑，内存运行时直接跑。
+ *  没填用户名就不动镜像里的账号；填了用户名没填密码，只保证用户存在，不改密码。 */
 function diskIdentityShell(profile: Profile, hostname: string): string {
+  const user = profile.username;
+  const account = user
+    ? `id -u ${shq(user)} >/dev/null 2>&1 || useradd -m -s /bin/bash ${shq(user)}
+${profile.passwordHash ? `usermod -p ${shq(profile.passwordHash)} ${shq(user)}\n` : ""}if getent group sudo >/dev/null; then usermod -aG sudo ${shq(user)}; fi
+`
+    : "";
   return `printf '%s\\n' ${shq(hostname)} > /etc/hostname
 hostname ${shq(hostname)} 2>/dev/null || true
 if grep -q '^127\\.0\\.1\\.1' /etc/hosts; then sed -i 's/^127\\.0\\.1\\.1.*/127.0.1.1 ${hostname}/' /etc/hosts; else echo '127.0.1.1 ${hostname}' >> /etc/hosts; fi
-id -u ${shq(profile.username)} >/dev/null 2>&1 || useradd -m -s /bin/bash ${shq(profile.username)}
-usermod -p ${shq(profile.passwordHash)} ${shq(profile.username)}
-if getent group sudo >/dev/null; then usermod -aG sudo ${shq(profile.username)}; fi
-`;
+${account}`;
 }
 
 /**

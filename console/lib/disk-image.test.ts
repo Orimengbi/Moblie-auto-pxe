@@ -166,6 +166,17 @@ test("a profile set to run in RAM makes the bound machine boot the RAM entry", (
   assert.doesNotMatch(menu, /will be erased/);
 });
 
+test("an empty username keeps the accounts that are already in the image", () => {
+  const kept = renderDiskImageScript({ profile: { ...profile, username: "", passwordHash: "" }, image: disk, hostname: "gpu-eeff", serverIp: "192.168.77.1", httpPort: 8080, mode: "live" });
+  const identity = Buffer.from(kept.match(/echo (\S+) \| base64 -d \| bash \|\| say "could not set hostname or account"/)![1], "base64").toString();
+  assert.match(identity, /\/etc\/hostname/);
+  assert.doesNotMatch(identity, /useradd|usermod/);
+  const noPassword = renderDiskImageScript({ profile: { ...profile, passwordHash: "" }, image: disk, hostname: "gpu-eeff", serverIp: "192.168.77.1", httpPort: 8080, mode: "live" });
+  const ensured = Buffer.from(noPassword.match(/echo (\S+) \| base64 -d \| bash \|\| say "could not set hostname or account"/)![1], "base64").toString();
+  assert.match(ensured, /useradd/);
+  assert.doesNotMatch(ensured, /usermod -p/);
+});
+
 test("deploy script writes both halves and grows the root partition", () => {
   const script = renderDiskImageScript({ profile, image: disk, hostname: "gpu-eeff", serverIp: "192.168.77.1", httpPort: 8080, mode: "deploy" });
   assert.match(script, /head\.img\.zst" \| zstd -dcq \| dd of="\$disk"/);
