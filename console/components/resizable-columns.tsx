@@ -8,7 +8,7 @@ const FALLBACK_WIDTH = 120;
 
 /**
  * 表格列宽可以拖动调整，存在这个浏览器里。没拖过时按内容自动排；拖过以后整张表按记下的宽度固定排，
- * 放不下的内容换行。同一个 storageKey 的几张表共用一套宽度（例如硬件配置里每类部件一张表）。
+ * 放不下的内容换行。用同一个 storageKey 的几张表共用一套宽度。
  * 表头每个 th 要带 data-col（列的 key），拖动的手柄用 ResizeHandle。
  */
 export function useColumnWidths(storageKey: string, columns: string[]) {

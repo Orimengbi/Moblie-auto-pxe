@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ATTR_LABEL, CHANGE_LABEL, changeDetail, KIND_LABEL, KIND_ORDER, SOURCE_LABEL } from "@/lib/inventory";
-import type { Baseline, BaselineIssue, HwChange, HwComponent, InventoryMeta, InventorySnapshot, InventorySource } from "@/lib/types";
+import type { Baseline, BaselineIssue, HwChange, HwComponent, HwKind, InventoryMeta, InventorySnapshot, InventorySource } from "@/lib/types";
 
 interface View {
   history: InventoryMeta[];
@@ -23,7 +23,7 @@ const CHANGE_VARIANT: Record<HwChange["type"], "default" | "destructive" | "outl
   changed: "outline",
 };
 
-/** 每类部件一张表，列都一样，共用一套列宽。 */
+/** 每类部件一张表，列都一样，列宽按类别各记各的。 */
 const PART_COLUMNS = [
   { key: "slot", label: "槽位" },
   { key: "model", label: "型号" },
@@ -53,6 +53,39 @@ function kindHeading(kind: HwComponent["kind"], items: HwComponent[], all: HwCom
   return `${KIND_LABEL[kind]}（${items.length}）`;
 }
 
+/** 一类部件的表格。列宽按类别记，比如 GPU 表把序列号拉宽不影响内存表。 */
+function PartTable({ kind, items }: { kind: HwKind; items: HwComponent[] }) {
+  const columnWidths = useColumnWidths(`pxe-inventory-columns:${kind}`, PART_KEYS);
+  return (
+    <div className="overflow-x-auto">
+      <Table className={columnWidths.tableClassName} style={columnWidths.tableStyle}>
+        <TableHeader>
+          <TableRow>
+            {PART_COLUMNS.map((column) => (
+              <TableHead key={column.key} data-col={column.key} className="relative" style={columnWidths.headStyle(column.key)}>
+                {column.label}
+                <ResizeHandle onStart={(event) => columnWidths.startResize(column.key, event)} onReset={columnWidths.reset} />
+              </TableHead>
+            ))}
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {items.map((item, index) => (
+            <TableRow key={`${item.slot}-${index}`}>
+              <TableCell className="font-mono text-xs">{item.slot}</TableCell>
+              <TableCell className="max-w-72 text-xs whitespace-normal">{item.model || "—"}</TableCell>
+              <TableCell className="text-xs">{item.vendor || "—"}</TableCell>
+              <TableCell className="font-mono text-xs">{item.sn || "—"}</TableCell>
+              <TableCell className="font-mono text-xs">{item.firmware || "—"}</TableCell>
+              <TableCell className="max-w-96 text-xs whitespace-normal text-muted-foreground">{attrText(item) || "—"}</TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
+  );
+}
+
 /** 一台机器的硬件配置：按来源看最近一次或历史上某一次的部件、和上次相比的变化、按项目基准检查的结果。放在服务器侧边栏里。 */
 export function ServerInventory({ projectId, row }: { projectId: string; row: { id: string; sn: string } }) {
   const router = useRouter();
@@ -60,7 +93,6 @@ export function ServerInventory({ projectId, row }: { projectId: string; row: { 
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
-  const columnWidths = useColumnWidths("pxe-inventory-columns", PART_KEYS);
 
   const load = useCallback(
     async (query: string) => {
@@ -207,32 +239,7 @@ export function ServerInventory({ projectId, row }: { projectId: string; row: { 
             return (
               <section key={kind} className="grid gap-1">
                 <h4 className="text-sm font-medium">{kindHeading(kind, items, snapshot.components)}</h4>
-                <div className="overflow-x-auto">
-                  <Table className={columnWidths.tableClassName} style={columnWidths.tableStyle}>
-                    <TableHeader>
-                      <TableRow>
-                        {PART_COLUMNS.map((column) => (
-                          <TableHead key={column.key} data-col={column.key} className="relative" style={columnWidths.headStyle(column.key)}>
-                            {column.label}
-                            <ResizeHandle onStart={(event) => columnWidths.startResize(column.key, event)} onReset={columnWidths.reset} />
-                          </TableHead>
-                        ))}
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {items.map((item, index) => (
-                        <TableRow key={`${item.slot}-${index}`}>
-                          <TableCell className="font-mono text-xs">{item.slot}</TableCell>
-                          <TableCell className="max-w-72 text-xs whitespace-normal">{item.model || "—"}</TableCell>
-                          <TableCell className="text-xs">{item.vendor || "—"}</TableCell>
-                          <TableCell className="font-mono text-xs">{item.sn || "—"}</TableCell>
-                          <TableCell className="font-mono text-xs">{item.firmware || "—"}</TableCell>
-                          <TableCell className="max-w-96 text-xs whitespace-normal text-muted-foreground">{attrText(item) || "—"}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
+                <PartTable kind={kind} items={items} />
               </section>
             );
           })}
