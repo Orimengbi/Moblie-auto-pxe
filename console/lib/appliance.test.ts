@@ -628,21 +628,59 @@ test("an installed server boots from disk until someone asks to reinstall", asyn
   await assert.rejects(requestReinstall(projectId, "missing-row-id"), /不在这个项目里/);
 });
 
-test("the server sheet can give each system address for batch tasks", async () => {
+test("the server sheet sets a static system address on the business nic", async () => {
   const parsed = parseServerTable([
-    ["序列号", "IPMI MAC", "原用户", "原密码", "目标用户", "目标密码", "安装系统", "系统地址"],
-    ["sn-os 1", "aa:bb:cc:dd:ee:a1", "ADMIN", "old-pass", "ops", "new-pass", "机房 Ubuntu", "10.50.0.11"],
-    ["sn-os 2", "aa:bb:cc:dd:ee:a2", "ADMIN", "old-pass", "ops", "new-pass", "机房 Ubuntu", "10.50.0.300"],
+    ["序列号", "IPMI MAC", "原用户", "原密码", "目标用户", "目标密码", "安装系统", "系统地址", "系统掩码", "系统网关", "系统DNS", "系统网卡"],
+    ["sn-os 1", "aa:bb:cc:dd:ee:a1", "ADMIN", "old-pass", "ops", "new-pass", "机房 Ubuntu", "10.50.0.11", "24", "10.50.0.1", "10.50.0.2 8.8.8.8", "ens1f0"],
+    ["sn-os 2", "aa:bb:cc:dd:ee:a2", "ADMIN", "old-pass", "ops", "new-pass", "机房 Ubuntu", "10.50.0.300", "", "", "", ""],
+    ["sn-os 3", "aa:bb:cc:dd:ee:a3", "ADMIN", "old-pass", "ops", "new-pass", "机房 Ubuntu", "10.50.0.13", "", "", "", ""],
+    ["sn-os 4", "aa:bb:cc:dd:ee:a4", "ADMIN", "old-pass", "ops", "new-pass", "机房 Ubuntu", "10.50.0.14/24", "", "10.60.0.1", "", ""],
+    ["sn-os 5", "aa:bb:cc:dd:ee:a5", "ADMIN", "old-pass", "ops", "new-pass", "机房 Ubuntu", "10.50.0.15/16", "", "", "", "AA-BB-CC-DD-EE-B5"],
+    ["sn-os 6", "aa:bb:cc:dd:ee:a6", "ADMIN", "old-pass", "ops", "new-pass", "机房 Ubuntu", "", "24", "", "", "ens1f0"],
   ]);
-  assert.equal(parsed.records[0]?.cells.osAddress, "10.50.0.11");
+  assert.equal(parsed.records[0]?.cells.osNetmask, "24");
+  assert.equal(parsed.records[0]?.cells.osNic, "ens1f0");
   const project = await createProject({ name: "机房 OS 地址" });
   const imported = await importServerSheet(project.id, parsed.records);
-  assert.equal(imported.errors.length, 1);
+  assert.deepEqual(imported.errors.map((item) => item.row), [3, 4, 5]);
   assert.match(imported.errors[0].message, /系统地址/);
+  assert.match(imported.errors[1].message, /还要填系统掩码/);
+  assert.match(imported.errors[2].message, /不在同一个子网/);
   const row = listServers().find((item) => item.projectId === project.id && item.sn === "SN-OS1");
   assert.equal(row?.osAddress, "10.50.0.11");
+  assert.equal(row?.osNetmask, "255.255.255.0");
+  assert.equal(row?.osDns, "10.50.0.2,8.8.8.8");
+  const byMac = listServers().find((item) => item.projectId === project.id && item.sn === "SN-OS5");
+  assert.equal(byMac?.osNetmask, "255.255.0.0");
+  assert.equal(byMac?.osNic, "aa:bb:cc:dd:ee:b5");
+  const untouched = listServers().find((item) => item.projectId === project.id && item.sn === "SN-OS6");
+  assert.equal(untouched?.osAddress, undefined, "没填系统地址就不设置");
+
+  // 装机时按序列号领网卡设置，只看开着的项目。
+  const activeId = listProjects().find((item) => item.name === "机房A")?.id || "";
+  await setProjectEnabled(activeId, true);
+  const cells = { ...parsed.records[0].cells, sn: "sn-os 7", ipmiMac: "aa:bb:cc:dd:ee:a7" };
+  const saved = await saveServer(activeId, null, cells);
+  const byName = await saveServer(activeId, null, { ...parsed.records[4].cells, sn: "sn-os 8", ipmiMac: "aa:bb:cc:dd:ee:a8", osAddress: "10.50.0.18/16" });
+  const bare = await saveServer(activeId, null, { ...parsed.records[5].cells, sn: "sn-os 9", ipmiMac: "aa:bb:cc:dd:ee:a9" });
+  const [plan] = listNicsBySn("SN-OS7");
+  assert.equal(plan.iface, "ens1f0");
+  assert.match(renderNicScript([plan]), /apply_one '' 'ens1f0' '10\.50\.0\.11' 24 '255\.255\.255\.0' '10\.50\.0\.1'/);
+  assert.equal(listNicsBySn("SN-OS8")[0].mac, "aa:bb:cc:dd:ee:b5");
+  assert.deepEqual(listNicsBySn("SN-OS9"), []);
+  for (const item of [saved, byName, bare]) await deleteServer(activeId, item.id);
+  const auto = renderNicScript([{ ...plan, iface: undefined }], "192.168.77.1");
+  assert.match(auto, /pxe_server='192\.168\.77\.1'/);
+  assert.match(auto, /ip -o route get "\$pxe_server"/);
+  assert.match(auto, /tag="\$\{10\}"/, "sh 里第 10 个参数要写成 ${10}");
+  const check = spawnSync("sh", ["-n"], { input: auto });
+  assert.equal(check.status, 0, check.stderr?.toString());
+
+  // 系统地址配在业务网卡上，小主机够不着时，批量任务走 PXE 口的 DHCP 租约。
   const lease = { expiry: 0, mac: "aa:bb:cc:dd:ee:f1", ip: "192.168.77.11", hostname: "", active: true };
-  assert.deepEqual(resolveHost({ ...row!, bootMac: lease.mac }, { nics: [], machines: [], leases: [lease], locals: [] }), { host: "10.50.0.11", source: "sheet" });
+  assert.deepEqual(resolveHost({ ...row!, bootMac: lease.mac }, { nics: [], machines: [], leases: [lease], locals: ["192.168.77.1"] }), { host: "192.168.77.11", source: "lease" });
+  assert.deepEqual(resolveHost({ ...row!, bootMac: lease.mac }, { nics: [], machines: [], leases: [lease], locals: ["10.50.0.250"] }), { host: "10.50.0.11", source: "sheet" });
+  assert.deepEqual(resolveHost(row!, { nics: [], machines: [], leases: [], locals: [] }), { host: "10.50.0.11", source: "sheet" });
 
   const task = createTask(project.id, { script: "true", serverIds: [row!.id] }, { nics: [], machines: [], leases: [], locals: [] });
   assert.equal(task.targets[0].host, "10.50.0.11");
@@ -759,6 +797,10 @@ test("one server can be added, fixed and removed without a new sheet", async () 
     ipmiGateway: "",
     ipmiVlan: "",
     osAddress: "",
+    osNetmask: "",
+    osGateway: "",
+    osDns: "",
+    osNic: "",
   };
   const created = await saveServer(project.id, null, base);
   assert.equal(created.sn, "SN-EDIT1");
@@ -770,7 +812,7 @@ test("one server can be added, fixed and removed without a new sheet", async () 
 
   const file = path.join(temp, "servers", `${created.id}.json`);
   fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, "utf8")), passwordChanged: true, bmcIp: "192.168.77.9" }));
-  const renamed = await saveServer(project.id, created.id, { ...base, sn: "sn-edit 9", originalPassword: "", targetPassword: "", osAddress: "10.60.0.9" });
+  const renamed = await saveServer(project.id, created.id, { ...base, sn: "sn-edit 9", originalPassword: "", targetPassword: "", osAddress: "10.60.0.9/24" });
   assert.equal(renamed.id, created.id);
   assert.equal(renamed.sn, "SN-EDIT9");
   assert.equal(renamed.originalPassword, "factory", "密码留空不改");

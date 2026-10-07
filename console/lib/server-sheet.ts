@@ -12,6 +12,10 @@ export interface ServerCells {
   ipmiGateway: string;
   ipmiVlan: string;
   osAddress: string;
+  osNetmask: string;
+  osGateway: string;
+  osDns: string;
+  osNic: string;
 }
 
 const HEADER_MAP: Record<string, HeaderField> = {
@@ -70,6 +74,18 @@ const HEADER_MAP: Record<string, HeaderField> = {
   业务ip: "osAddress",
   业务地址: "osAddress",
   osip: "osAddress",
+  系统掩码: "osNetmask",
+  系统子网掩码: "osNetmask",
+  业务掩码: "osNetmask",
+  系统网关: "osGateway",
+  系统路由: "osGateway",
+  业务网关: "osGateway",
+  系统dns: "osDns",
+  业务dns: "osDns",
+  系统网卡: "osNic",
+  系统网口: "osNic",
+  业务网卡: "osNic",
+  业务网口: "osNic",
 };
 
 type HeaderField = keyof ServerCells | "originalAccount" | "targetAccount";
@@ -143,7 +159,11 @@ function emptyCells(): ServerCells {
     ipmiGateway: "",
     ipmiVlan: "",
     osAddress: "",
+    osNetmask: "",
+    osGateway: "",
+    osDns: "",
+    osNic: "",
   };
 }
 
-export const SERVER_TEMPLATE_HEADERS = ["序列号", "IPMI MAC", "原用户", "原密码", "目标用户", "目标密码", "IPMI地址", "IPMI掩码", "IPMI路由", "IPMI VLAN", "安装系统", "系统地址", "定制需求"];
+export const SERVER_TEMPLATE_HEADERS = ["序列号", "IPMI MAC", "原用户", "原密码", "目标用户", "目标密码", "IPMI地址", "IPMI掩码", "IPMI路由", "IPMI VLAN", "安装系统", "系统地址", "系统掩码", "系统网关", "系统DNS", "系统网卡", "定制需求"];

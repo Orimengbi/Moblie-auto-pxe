@@ -40,6 +40,7 @@ import {
   netmaskToPrefix,
   normalizeMac,
   normalizeSn,
+  parseNetmask,
   sameSubnet,
 } from "./net.ts";
 import { hashPassword } from "./password.ts";
@@ -651,7 +652,12 @@ export function listNicsBySn(sn: string): NicPlan[] {
   const active = activeProject();
   if (!active) return [];
   const normalized = normalizeSn(sn);
-  return listNicPlans().filter((item) => item.sn === normalized && item.projectId === active.id);
+  const plans = listNicPlans().filter((item) => item.sn === normalized && item.projectId === active.id);
+  const row = listServers().find((item) => item.projectId === active.id && item.sn === normalized);
+  const fromSheet = row ? serverNicPlan(row) : null;
+  // 网卡规划里已经有同一个地址的，以网卡规划为准。
+  if (fromSheet && !plans.some((plan) => plan.address === fromSheet.address)) plans.push(fromSheet);
+  return plans;
 }
 
 export interface IpmiInput {
@@ -1253,6 +1259,62 @@ function problemOf(error: unknown, fallback: string): string {
  * 把一行表格变成服务器记录。上传和页面编辑都走这里，规则一样：
  * IPMI MAC 没变就保留找 BMC 的进度；原账号也没变才保留「已改密码」。
  */
+/**
+ * 系统地址那几列。填了地址就在装机最后一步配成业务网卡的静态 IP，掩码必填（也可以把地址写成 10.0.0.5/24）。
+ * 没填地址就不动系统网络，其余几列不起作用。
+ */
+function parseOsNetwork(cells: ServerCells, problems: string[]): Pick<ServerRow, "osAddress" | "osNetmask" | "osGateway" | "osDns" | "osNic"> {
+  const raw = cells.osAddress?.trim() || "";
+  if (!raw) return {};
+  const [addressPart, prefixPart] = raw.split("/");
+  const out: Pick<ServerRow, "osAddress" | "osNetmask" | "osGateway" | "osDns" | "osNic"> = {};
+  try {
+    out.osAddress = assertIpv4(addressPart, "系统地址");
+  } catch (error) {
+    problems.push(problemOf(error, "系统地址不合法"));
+    return {};
+  }
+  const maskText = cells.osNetmask?.trim() || prefixPart?.trim() || "";
+  try {
+    if (!maskText) {
+      problems.push("填了系统地址，还要填系统掩码（或把地址写成 10.0.0.5/24）");
+      return out;
+    }
+    out.osNetmask = parseNetmask(maskText, "系统掩码");
+    if (cells.osGateway?.trim()) {
+      out.osGateway = assertIpv4(cells.osGateway, "系统网关");
+      if (!sameSubnet(out.osAddress, out.osGateway, out.osNetmask)) problems.push("系统地址和系统网关不在同一个子网");
+    }
+    if (cells.osDns?.trim()) out.osDns = assertDnsList(cells.osDns, "系统 DNS");
+    const nic = cells.osNic?.trim() || "";
+    if (nic) out.osNic = /^([0-9a-f]{2}[:-]?){5}[0-9a-f]{2}$/i.test(nic) ? normalizeMac(nic) : assertInterface(nic);
+  } catch (error) {
+    problems.push(problemOf(error, "系统网络不合法"));
+  }
+  return out;
+}
+
+/** 服务器表里填了系统地址和掩码的机器，装机时按序列号领到这块业务网卡的设置。 */
+function serverNicPlan(row: ServerRow): NicPlan | null {
+  if (!row.osAddress || !row.osNetmask) return null;
+  const isMac = Boolean(row.osNic && row.osNic.includes(":"));
+  return {
+    id: `server-${row.id}`,
+    projectId: row.projectId,
+    sn: row.sn,
+    mac: isMac ? row.osNic : undefined,
+    iface: isMac ? undefined : row.osNic,
+    label: "系统地址",
+    address: row.osAddress,
+    netmask: row.osNetmask,
+    gateway: row.osGateway || "",
+    dns: row.osDns || "",
+    note: "",
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
 function buildServerRow(project: Project, cells: ServerCells, existing: ServerRow | undefined, label: string, now: string): { row: ServerRow; problems: string[] } {
   const problems: string[] = [];
   let sn = "";
@@ -1295,14 +1357,7 @@ function buildServerRow(project: Project, cells: ServerCells, existing: ServerRo
   }
   const osName = cells.osName.trim().slice(0, 80);
   if (!osName) problems.push("没有填写安装系统");
-  let osAddress = "";
-  if (cells.osAddress?.trim()) {
-    try {
-      osAddress = assertIpv4(cells.osAddress, "系统地址");
-    } catch (error) {
-      problems.push(problemOf(error, "系统地址不合法"));
-    }
-  }
+  const os = parseOsNetwork(cells, problems);
   let ipmiAddress = "";
   let ipmiNetmask = "";
   let ipmiGateway = "";
@@ -1333,6 +1388,8 @@ function buildServerRow(project: Project, cells: ServerCells, existing: ServerRo
     if (duplicateMac) problems.push(`IPMI MAC ${ipmiMac} 已经属于序列号 ${duplicateMac.sn}`);
   }
   if (others.some((item) => item.sn === sn)) problems.push(`序列号 ${sn} 已经在列表里`);
+  const sameOs = os.osAddress ? others.find((item) => item.osAddress === os.osAddress) : undefined;
+  if (sameOs) problems.push(`系统地址 ${os.osAddress} 已经分给序列号 ${sameOs.sn}`);
   const sameMac = existing?.ipmiMac === ipmiMac;
   // 原账号改了（比如 BMC 恢复过出厂设置），就当还没改过密码，重新用原账号登录。
   const sameAccount = sameMac && existing?.originalUser === originalUser && existing?.originalPassword === originalPassword;
@@ -1359,7 +1416,7 @@ function buildServerRow(project: Project, cells: ServerCells, existing: ServerRo
     networkApplied: sameNetwork ? Boolean(existing?.networkApplied) : false,
     bmcIp: sameMac ? existing?.bmcIp : undefined,
     bootMac: sameMac ? existing?.bootMac : undefined,
-    osAddress: osAddress || undefined,
+    ...os,
     passwordChanged: sameAccount ? Boolean(existing?.passwordChanged) : false,
     canApply,
     ipmiLink: sameAccount ? existing?.ipmiLink || "unknown" : "unknown",

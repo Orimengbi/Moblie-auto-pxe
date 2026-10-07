@@ -40,6 +40,21 @@ export function netmaskToPrefix(mask: string): number {
   return zero === -1 ? 32 : zero;
 }
 
+export function prefixToNetmask(prefix: number): string {
+  if (!Number.isInteger(prefix) || prefix < 0 || prefix > 32) throw new Error("前缀长度要在 0 到 32 之间");
+  const bits = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
+  return [24, 16, 8, 0].map((shift) => (bits >>> shift) & 255).join(".");
+}
+
+/** 掩码可以写 255.255.255.0，也可以写 24 或 /24。 */
+export function parseNetmask(value: string, label: string): string {
+  const v = value.trim().replace(/^\//, "");
+  if (/^\d{1,2}$/.test(v)) return prefixToNetmask(Number(v));
+  const mask = assertIpv4(v, label);
+  netmaskToPrefix(mask);
+  return mask;
+}
+
 export function sameSubnet(left: string, right: string, mask: string): boolean {
   const bits = ipv4ToInt(mask);
   return (ipv4ToInt(left) & bits) === (ipv4ToInt(right) & bits);

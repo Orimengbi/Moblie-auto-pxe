@@ -177,7 +177,8 @@ echo "已撤掉 PXE 控制台公钥，之后控制台不能再登录这台机器
 `;
 }
 
-export function renderNicScript(plans: NicPlan[] | null): string {
+/** pxeServer：装机网上小主机的地址。没写 MAC 和接口名的那条，挑一块不走这个地址的物理网卡。 */
+export function renderNicScript(plans: NicPlan[] | null, pxeServer = ""): string {
   const list = plans ?? [];
   if (!list.length) {
     return "#!/bin/sh\necho \"没有和这个序列号匹配的网卡设置，跳过\"\nexit 0\n";
@@ -202,6 +203,7 @@ export function renderNicScript(plans: NicPlan[] | null): string {
     .join("\n");
   return `#!/bin/sh
 set -eu
+pxe_server=${shq(pxeServer)}
 ${hostLine}rm -f /tmp/pxe-netplan.yaml /tmp/pxe-ifaces
 rm -rf /tmp/pxe-nm
 mkdir -p /tmp/pxe-nm
@@ -217,7 +219,7 @@ apply_one() {
   dns_yaml="$7"
   dns_if="$8"
   dns_nm="$9"
-  tag="$10"
+  tag="\${10}"
   iface=""
   if [ -n "$mac" ]; then
     for n in /sys/class/net/*; do
@@ -233,12 +235,33 @@ apply_one() {
       echo "找不到 MAC 为 $mac 的网卡（$tag）" >&2
       exit 1
     fi
-  else
+  elif [ -n "$want" ]; then
     iface=$want
     if [ ! -e "/sys/class/net/$iface" ]; then
       echo "找不到接口 $iface（$tag）" >&2
       exit 1
     fi
+  else
+    # 没指定网卡：不用 PXE 那块（通往小主机的那块），在剩下的物理网卡里先挑插着线的。
+    pxe=""
+    [ -z "$pxe_server" ] || pxe=$(ip -o route get "$pxe_server" 2>/dev/null | sed -n 's/.* dev \\([^ ]*\\).*/\\1/p')
+    first=""
+    for n in /sys/class/net/*; do
+      base=$(basename "$n")
+      [ -e "$n/device" ] || continue
+      [ "$base" = "$pxe" ] && continue
+      [ -n "$first" ] || first=$base
+      if [ "$(cat "$n/carrier" 2>/dev/null || true)" = 1 ]; then
+        iface=$base
+        break
+      fi
+    done
+    [ -n "$iface" ] || iface=$first
+    if [ -z "$iface" ]; then
+      echo "除了 PXE 口没有别的物理网卡，$tag 没配上" >&2
+      exit 1
+    fi
+    echo "没指定网卡，$tag 配在 $iface 上（PXE 口是 \${pxe:-未知}）"
   fi
   {
     printf '    %s:\\n' "$iface"
@@ -771,7 +794,7 @@ ${account}`;
 /**
  * 整盘镜像在内存里跑起来以后，开机服务下载执行的脚本。
  * deploy：按磁盘策略选盘，写分区表和 EFI 分区，再写根分区，扩到整块盘，进 chroot 做装机后的步骤，重启。
- * live：主机名、账号、控制台公钥，根分区在内存里扩大一些，别的不动。
+ * live：主机名、账号、控制台公钥、服务器表里的系统地址，根分区在内存里扩大一些，别的不动。
  * 输出在机器的屏幕上，只打英文。
  */
 export function renderDiskImageScript(input: {
@@ -809,6 +832,16 @@ fi
 echo ${b64(diskIdentityShell(profile, hostname))} | base64 -d | bash || say "could not set hostname or account"
 hostnamectl set-hostname ${shq(hostname)} 2>/dev/null || true
 if curl -fsS "$server/boot/authorized-key.sh" -o /tmp/pxe-key.sh; then sh /tmp/pxe-key.sh; else say "console key not written; batch tasks will not reach this machine"; fi
+sn=$(tr -d '[:space:]' < /sys/class/dmi/id/product_serial 2>/dev/null || true)
+if [ -n "$sn" ] && curl -fsS "$server/boot/nic.sh?sn=$sn" -o /tmp/pxe-nic.sh; then
+  if sh /tmp/pxe-nic.sh; then
+    if [ -f /etc/netplan/99-pxe-nics.yaml ]; then netplan apply || say "netplan apply failed"
+    elif command -v nmcli >/dev/null 2>&1; then nmcli connection reload || true
+    fi
+  else
+    say "NIC settings failed, see above"
+  fi
+fi
 say "ready: $(hostname) $(hostname -I)"
 `;
   }

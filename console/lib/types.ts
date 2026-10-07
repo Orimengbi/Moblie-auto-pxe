@@ -157,8 +157,14 @@ export interface ServerRow {
   networkApplied: boolean;
   bmcIp?: string;
   bootMac?: string;
-  /** 装好的系统的地址，批量任务优先用它登录。不填就查网卡规划和 DHCP 租约。 */
+  /** 装好的系统的地址。和掩码一起填了，装机最后一步把它配成业务网卡的静态 IP；批量任务也会用它登录。 */
   osAddress?: string;
+  osNetmask?: string;
+  osGateway?: string;
+  /** 逗号分隔。 */
+  osDns?: string;
+  /** 业务网卡：接口名或 MAC。留空时自动挑一块不是 PXE 口的物理网卡。 */
+  osNic?: string;
   passwordChanged: boolean;
   canApply: boolean;
   ipmiLink: IpmiLink;

@@ -25,6 +25,10 @@ const EMPTY: ServerCells = {
   ipmiGateway: "",
   ipmiVlan: "",
   osAddress: "",
+  osNetmask: "",
+  osGateway: "",
+  osDns: "",
+  osNic: "",
 };
 
 function cellsOf(row: EditableRow | null): ServerCells {
@@ -43,6 +47,10 @@ function cellsOf(row: EditableRow | null): ServerCells {
     ipmiGateway: row.ipmiGateway,
     ipmiVlan: row.ipmiVlan ? String(row.ipmiVlan) : "",
     osAddress: row.osAddress || "",
+    osNetmask: row.osNetmask || "",
+    osGateway: row.osGateway || "",
+    osDns: row.osDns || "",
+    osNic: row.osNic || "",
   };
 }
 
@@ -153,7 +161,19 @@ export function ServerEditDialog({
               </select>
             </Labeled>
             <Labeled label="系统地址">
-              <Input {...field("osAddress")} placeholder="可留空，批量任务查 DHCP 租约" />
+              <Input {...field("osAddress")} placeholder="可留空，留空不改系统网络" />
+            </Labeled>
+            <Labeled label="系统掩码">
+              <Input {...field("osNetmask")} placeholder="255.255.255.0 或 24" />
+            </Labeled>
+            <Labeled label="系统网关">
+              <Input {...field("osGateway")} placeholder="可留空" />
+            </Labeled>
+            <Labeled label="系统 DNS">
+              <Input {...field("osDns")} placeholder="可留空，多个用逗号分开" />
+            </Labeled>
+            <Labeled label="系统网卡">
+              <Input {...field("osNic")} placeholder="网卡名或 MAC；留空自动选非 PXE 口" />
             </Labeled>
           </div>
           <Labeled label="定制需求">

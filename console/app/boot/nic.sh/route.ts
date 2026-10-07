@@ -1,5 +1,5 @@
 import { renderNicScript } from "@/lib/render";
-import { listNicsBySn } from "@/lib/store";
+import { getState, installServerIp, listNicsBySn } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
@@ -11,7 +11,7 @@ export function GET(request: Request) {
   } catch {
     plans = [];
   }
-  return new Response(renderNicScript(plans), {
+  return new Response(renderNicScript(plans, installServerIp(getState().network)), {
     headers: { "content-type": "text/plain; charset=utf-8" },
   });
 }
