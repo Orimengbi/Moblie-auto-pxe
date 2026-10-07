@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { ColumnHead, type ColumnFilter, type SortState } from "@/components/column-head";
 import { HOST_SOURCE, ProjectTaskRunner } from "@/components/project-task-runner";
 import { ServerEditDialog } from "@/components/server-edit-dialog";
-import { ServerInventoryDialog } from "@/components/server-inventory-dialog";
+import { ServerSidebar } from "@/components/server-sidebar";
 import { RemoteConsole } from "@/components/remote-console";
 import { ServerPowerDialog } from "@/components/server-power-dialog";
 import { Badge } from "@/components/ui/badge";
@@ -189,7 +189,9 @@ export function ProjectServerList({
   const [adding, setAdding] = useState(false);
   const [powerTargets, setPowerTargets] = useState<ServerListRow[]>([]);
   const [consoleRow, setConsoleRow] = useState<ServerListRow | null>(null);
-  const [inventoryRow, setInventoryRow] = useState<ServerListRow | null>(null);
+  const [sideId, setSideId] = useState<string | null>(null);
+  // 按 id 找，列表刷新后侧边栏里显示的状态也跟着更新。
+  const sideRow = rows.find((row) => row.id === sideId) || null;
 
   async function remove(row: ServerListRow) {
     if (!window.confirm(`从列表里删掉 ${row.sn}？不会动这台机器的 BMC 和系统。`)) return;
@@ -348,7 +350,16 @@ export function ProjectServerList({
                   </TableRow>
                 ) : null}
                 {shown.map((row) => (
-                  <TableRow key={row.id} data-state={picked.includes(row.id) ? "selected" : undefined}>
+                  <TableRow
+                    key={row.id}
+                    data-state={picked.includes(row.id) ? "selected" : undefined}
+                    className={`cursor-pointer ${sideId === row.id ? "bg-muted" : ""}`}
+                    onClick={(event) => {
+                      // 勾选框和按钮照常用，点行里别的地方打开侧边栏。
+                      if ((event.target as HTMLElement).closest("button, input, a, select, label")) return;
+                      setSideId(row.id);
+                    }}
+                  >
                     <TableCell>
                       <input type="checkbox" aria-label={`选择 ${row.sn}`} checked={picked.includes(row.id)} onChange={() => toggle(row.id)} />
                     </TableCell>
@@ -385,19 +396,17 @@ export function ProjectServerList({
                       {row.hostSource ? <span className="mt-1 block font-sans text-muted-foreground">{HOST_SOURCE[row.hostSource]}</span> : null}
                     </TableCell>
                     <TableCell>
-                      <button type="button" className="text-left" onClick={() => setInventoryRow(row)} title="查看硬件配置">
-                        <Badge variant={hardwareLabel(row) === "不符合基准" ? "destructive" : hardwareLabel(row) === "未采集" ? "outline" : "default"}>
-                          {hardwareLabel(row)}
-                          {row.inventory.issues ? ` ${row.inventory.issues} 项` : ""}
-                        </Badge>
-                        {[collectedLine("系统内", row.inventory.os), collectedLine("BMC", row.inventory.bmc)]
-                          .filter(Boolean)
-                          .map((line) => (
-                            <span key={line} className="mt-1 block text-xs text-muted-foreground">
-                              {line}
-                            </span>
-                          ))}
-                      </button>
+                      <Badge variant={hardwareLabel(row) === "不符合基准" ? "destructive" : hardwareLabel(row) === "未采集" ? "outline" : "default"}>
+                        {hardwareLabel(row)}
+                        {row.inventory.issues ? ` ${row.inventory.issues} 项` : ""}
+                      </Badge>
+                      {[collectedLine("系统内", row.inventory.os), collectedLine("BMC", row.inventory.bmc)]
+                        .filter(Boolean)
+                        .map((line) => (
+                          <span key={line} className="mt-1 block text-xs text-muted-foreground">
+                            {line}
+                          </span>
+                        ))}
                     </TableCell>
                     <TableCell className="text-right whitespace-nowrap">
                       <Button type="button" size="xs" variant="ghost" disabled={!row.bmcIp} onClick={() => setConsoleRow(row)}>
@@ -437,7 +446,7 @@ export function ProjectServerList({
       />
       <ServerPowerDialog projectId={projectId} targets={powerTargets} onClose={() => setPowerTargets([])} />
       {consoleRow ? <RemoteConsole projectId={projectId} row={consoleRow} port={bmcPort} onClose={() => setConsoleRow(null)} /> : null}
-      <ServerInventoryDialog projectId={projectId} row={inventoryRow} onClose={() => setInventoryRow(null)} />
+      <ServerSidebar projectId={projectId} row={sideRow} onClose={() => setSideId(null)} />
       <div className="grid gap-3 border-t pt-4">
         <h3 className="font-medium">批量任务</h3>
         <ProjectTaskRunner projectId={projectId} picked={picked} installed={installed} all={rows.map((row) => row.id)} onPick={setPicked} files={files} tasks={tasks} />
