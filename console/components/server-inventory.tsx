@@ -3,11 +3,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ResizeHandle, useColumnWidths } from "@/components/resizable-columns";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { ATTR_LABEL, CHANGE_LABEL, changeDetail, KIND_LABEL, KIND_ORDER, SOURCE_LABEL } from "@/lib/inventory";
-import type { Baseline, BaselineIssue, HwChange, HwComponent, HwKind, InventoryMeta, InventorySnapshot, InventorySource } from "@/lib/types";
+import { ATTR_LABEL, KIND_LABEL, KIND_ORDER, SOURCE_LABEL } from "@/lib/inventory";
+import type { Baseline, BaselineIssue, HwComponent, HwKind, InventoryMeta, InventorySnapshot, InventorySource } from "@/lib/types";
 
 interface View {
   history: InventoryMeta[];
@@ -15,13 +14,6 @@ interface View {
   baseline: Baseline | null;
   issues: BaselineIssue[] | null;
 }
-
-const CHANGE_VARIANT: Record<HwChange["type"], "default" | "destructive" | "outline" | "secondary"> = {
-  added: "default",
-  removed: "destructive",
-  replaced: "destructive",
-  changed: "outline",
-};
 
 /** 每类部件一张表，列都一样，列宽按类别各记各的。 */
 const PART_COLUMNS = [
@@ -146,7 +138,7 @@ export function ServerInventory({ projectId, row }: { projectId: string; row: { 
     <section className="grid gap-4">
       <div className="grid gap-1">
         <h3 className="font-medium">硬件配置</h3>
-        <p className="text-xs text-muted-foreground">系统内是 SSH 进系统读的，BMC 是从 Redfish 读的，两边的槽位名不一样，各自和自己的上一次比。</p>
+        <p className="text-xs text-muted-foreground">系统内是 SSH 进系统读的，BMC 是从 Redfish 读的。和上一次采集比出的变化在「变更记录」里。</p>
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -164,7 +156,7 @@ export function ServerInventory({ projectId, row }: { projectId: string; row: { 
             {history.map((item, index) => (
               <option key={item.id} value={item.id}>
                 {when(item.at)}
-                {index === 0 ? "（最近）" : ""} · {item.components} 个部件{item.changes === null ? "" : item.changes ? ` · ${item.changes} 处变化` : " · 无变化"}
+                {index === 0 ? "（最近）" : ""} · {item.components} 个部件
               </option>
             ))}
           </select>
@@ -201,24 +193,6 @@ export function ServerInventory({ projectId, row }: { projectId: string; row: { 
               </ul>
             ) : (
               <p className="text-sm">符合基准{view.baseline.fromSn ? `（按 ${view.baseline.fromSn} 生成）` : ""}。</p>
-            )}
-          </section>
-
-          <section className="grid gap-1">
-            <h4 className="text-sm font-medium">和上一次比</h4>
-            {!snapshot.changes ? (
-              <p className="text-sm text-muted-foreground">这是这台机器第一次{SOURCE_LABEL[snapshot.source]}采集。</p>
-            ) : !snapshot.changes.length ? (
-              <p className="text-sm text-muted-foreground">没有变化。</p>
-            ) : (
-              <ul className="grid gap-1 text-sm">
-                {snapshot.changes.map((change, index) => (
-                  <li key={index} className="flex items-start gap-2">
-                    <Badge variant={CHANGE_VARIANT[change.type]}>{CHANGE_LABEL[change.type]}</Badge>
-                    <span>{changeDetail(change)}</span>
-                  </li>
-                ))}
-              </ul>
             )}
           </section>
 

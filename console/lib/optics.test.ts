@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { OPTICS_SCRIPT, opticsComponents, parseLaneValues, parseOptics, powerLevel } from "./optics.ts";
+import { groupModules, OPTICS_SCRIPT, opticsComponents, parseLaneValues, parseOptics, powerLevel } from "./optics.ts";
 
 /** 照 CX8 上一个 twin-port OSFP 的 mlxlink -m --json 删减，序列号换掉了。 */
 const MLX_PORT = `{
@@ -52,6 +52,8 @@ const ETHTOOL_QSFP = `	Identifier                                : 0x11 (QSFP28)
 
 const OUTPUT = `===PXEOPT mlx mlx5_2 0000:03:00.0 enp3s0f0np0 ===
 ${MLX_PORT}
+===PXEOPT mlx mlx5_3 0000:03:00.1 enp3s0f1np1 ===
+${MLX_PORT.replace('"0,2,-9,0 [-8..6]"', '"1,1,1,1 [-8..6]"')}
 ===PXEOPT mlx mlx5_10 0000:d9:00.0 ibs11f0 ===
 \u001b[31m
 -E- Checking valid firmware raised the following exception: Failed to send access register: ICMD error 0x4
@@ -76,13 +78,14 @@ test("reads module identity and per-lane power from mlxlink and ethtool -m", () 
     ports.map((port) => [port.port, port.present]),
     [
       ["enp3s0f0np0", true],
+      ["enp3s0f1np1", true],
       ["ibs11f0", false],
       ["ens1f0", true],
       ["ens2", false],
     ],
     "没插模块的口和电口不列，读错的列出来",
   );
-  const [osfp, broken, qsfp, raw] = ports;
+  const [osfp, , broken, qsfp, raw] = ports;
   assert.equal(osfp.rdma, "mlx5_2");
   assert.equal(osfp.vendor, "ACCELINK");
   assert.equal(osfp.model, "RTXM600-2401");
@@ -113,12 +116,26 @@ test("reads module identity and per-lane power from mlxlink and ethtool -m", () 
   assert.deepEqual(qsfp.txRange, [-8, 5]);
   assert.match(raw.error || "", /ethtool 解不了/);
 
+  const modules = groupModules(ports);
+  assert.deepEqual(
+    modules.map((group) => [group.info.sn, group.ports.map((port) => port.port)]),
+    [
+      ["MODSN0001", ["enp3s0f0np0", "enp3s0f1np1"]],
+      ["X3AB123", ["ens1f0"]],
+    ],
+    "twin-port 模块两个口读到同一个序列号，算一个模块；读不到的口不算",
+  );
+  assert.deepEqual(modules[0].ports[1].rx, [1, 1, 1, 1], "每个口的收发光还在");
+
   const parts = opticsComponents(ports);
   assert.deepEqual(parts.map((part) => [part.kind, part.slot, part.model, part.sn]), [
-    ["transceiver", "enp3s0f0np0", "RTXM600-2401", "MODSN0001"],
+    ["transceiver", "enp3s0f0np0, enp3s0f1np1", "RTXM600-2401", "MODSN0001"],
     ["transceiver", "ens1f0", "FTLC1154RDPL", "X3AB123"],
   ]);
-  assert.deepEqual(parts[0].attrs, { type: "OSFP", compliance: "400GBASE-DR4", wavelengthNm: 1311, length: "500m", cable: "Optical Module (separated)", rdma: "mlx5_2" });
+  assert.deepEqual(parts[0].attrs, { type: "OSFP", compliance: "400GBASE-DR4", wavelengthNm: 1311, length: "500m", cable: "Optical Module (separated)", rdma: "mlx5_2, mlx5_3" });
+
+  const noSerial = parseOptics(OUTPUT.replace(/MODSN0001/g, "N/A"));
+  assert.equal(groupModules(noSerial).length, 3, "读不到序列号的口各算一个模块");
 });
 
 test("judges each lane against the module's own alarm thresholds", () => {

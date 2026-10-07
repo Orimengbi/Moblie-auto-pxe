@@ -65,7 +65,6 @@ function parseMlxlink(head: string[], body: string): OpticsPort {
   }
   const info = parsed?.result?.output?.["Module Info"];
   if (!info) {
-    // eslint-disable-next-line no-control-regex
     const message = body.replace(/\u001b\[[0-9;]*m/g, "").replace(/\s+/g, " ").trim().replace(/^-E-\s*/, "");
     port.error = parsed?.status?.message && parsed.status.code !== 0 ? parsed.status.message : message.slice(0, 200) || "mlxlink 没有返回模块信息";
     return port;
@@ -161,28 +160,45 @@ export function parseOptics(text: string): OpticsPort[] {
   return ports.filter((port) => port.present || (port.source === "mlxlink" && port.error !== "没有插模块") || port.error?.startsWith("ethtool 解不了"));
 }
 
-/** 插着的光模块换成部件，进硬件清单。 */
+/** 一个光模块和它服务的几个口。twin-port 模块（比如一个 OSFP 接一张卡的两个口）每个口都能读到同一个模块。 */
+export interface OpticsModule {
+  /** 模块本身的信息取第一个口读到的。 */
+  info: OpticsPort;
+  ports: OpticsPort[];
+}
+
+/** 按序列号把口合成模块；读不到序列号的口各自算一个。读不到模块的口不在里面。 */
+export function groupModules(ports: OpticsPort[]): OpticsModule[] {
+  const modules = new Map<string, OpticsModule>();
+  for (const port of ports.filter((item) => item.present)) {
+    const key = port.sn ? `${port.vendor || ""}\u0000${port.model || ""}\u0000${port.sn}` : `port\u0000${port.pci}\u0000${port.port}`;
+    const found = modules.get(key);
+    if (found) found.ports.push(port);
+    else modules.set(key, { info: port, ports: [port] });
+  }
+  return [...modules.values()];
+}
+
+/** 插着的光模块换成部件，进硬件清单，一个模块一条，槽位是它服务的网口。 */
 export function opticsComponents(ports: OpticsPort[]): HwComponent[] {
-  return ports
-    .filter((port) => port.present)
-    .map((port) => ({
-      kind: "transceiver" as const,
-      slot: port.port,
-      model: port.model || "",
-      vendor: port.vendor || "",
-      sn: port.sn || "",
-      firmware: port.firmware || "",
-      attrs: Object.fromEntries(
-        Object.entries({
-          type: port.type,
-          compliance: port.compliance,
-          wavelengthNm: port.wavelengthNm,
-          length: port.length,
-          cable: port.cable,
-          rdma: port.rdma,
-        }).filter(([, value]) => value !== undefined && value !== ""),
-      ) as Record<string, string | number>,
-    }));
+  return groupModules(ports).map(({ info, ports: served }) => ({
+    kind: "transceiver" as const,
+    slot: served.map((port) => port.port).join(", "),
+    model: info.model || "",
+    vendor: info.vendor || "",
+    sn: info.sn || "",
+    firmware: info.firmware || "",
+    attrs: Object.fromEntries(
+      Object.entries({
+        type: info.type,
+        compliance: info.compliance,
+        wavelengthNm: info.wavelengthNm,
+        length: info.length,
+        cable: info.cable,
+        rdma: served.map((port) => port.rdma).filter(Boolean).join(", "),
+      }).filter(([, value]) => value !== undefined && value !== ""),
+    ) as Record<string, string | number>,
+  }));
 }
 
 /** 一个读数相对门限的状态：超出门限 bad，离下限不到 2 dB warn。 */

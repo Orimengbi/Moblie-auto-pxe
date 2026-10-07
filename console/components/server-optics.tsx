@@ -4,12 +4,12 @@ import { useEffect, useState } from "react";
 import { ResizeHandle, useColumnWidths } from "@/components/resizable-columns";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { powerLevel } from "@/lib/optics";
+import { groupModules, powerLevel, type OpticsModule } from "@/lib/optics";
 import type { OpticsPort, OpticsReading } from "@/lib/types";
 
 const COLUMNS = [
   { key: "port", label: "端口" },
-  { key: "module", label: "模块" },
+  { key: "group", label: "模块" },
   { key: "sn", label: "序列号" },
   { key: "temp", label: "温度" },
   { key: "tx", label: "发光 dBm" },
@@ -26,11 +26,26 @@ const LEVEL_CLASS = {
 function Lanes({ values, range, label }: { values: number[]; range?: [number, number]; label: string }) {
   if (!values.length) return <span className="text-muted-foreground">—</span>;
   return (
-    <div className="flex flex-wrap gap-1" title={range ? `${label}告警门限 ${range[0]} ~ ${range[1]} dBm` : undefined}>
+    <span className="inline-flex flex-wrap gap-1" title={range ? `${label}告警门限 ${range[0]} ~ ${range[1]} dBm` : undefined}>
       {values.map((value, index) => (
         <span key={index} className={`rounded px-1 font-mono ${LEVEL_CLASS[powerLevel(value, range)]}`}>
           {value}
         </span>
+      ))}
+    </span>
+  );
+}
+
+/** 一个模块的收光或发光：每个口一行，口多于一个时前面标上口名。 */
+function ModuleLanes({ group, kind }: { group: OpticsModule; kind: "rx" | "tx" }) {
+  const label = kind === "rx" ? "收光" : "发光";
+  return (
+    <div className="grid gap-1">
+      {group.ports.map((port) => (
+        <div key={port.pci} className="flex flex-wrap items-center gap-1">
+          {group.ports.length > 1 ? <span className="font-mono text-muted-foreground">{port.port}</span> : null}
+          <Lanes values={port[kind]} range={kind === "rx" ? port.rxRange : port.txRange} label={label} />
+        </div>
       ))}
     </div>
   );
@@ -38,13 +53,13 @@ function Lanes({ values, range, label }: { values: number[]; range?: [number, nu
 
 function summary(ports: OpticsPort[]): string {
   const present = ports.filter((port) => port.present);
-  const modules = new Set(present.map((port) => port.sn || port.port)).size;
+  const modules = groupModules(ports).length;
   const levels = present.flatMap((port) => [...port.rx.map((value) => powerLevel(value, port.rxRange)), ...port.tx.map((value) => powerLevel(value, port.txRange))]);
   const bad = levels.filter((level) => level === "bad").length;
   const warn = levels.filter((level) => level === "warn").length;
   const failed = ports.length - present.length;
   return [
-    `${present.length} 个口插着光模块，按序列号算 ${modules} 个模块`,
+    `${modules} 个光模块，接在 ${present.length} 个口上`,
     bad ? `${bad} 条 lane 超出告警门限` : "没有超出告警门限的 lane",
     warn ? `${warn} 条离下限不到 2 dB` : "",
     failed ? `${failed} 个口读不到` : "",
@@ -98,7 +113,7 @@ export function ServerOptics({ projectId, row }: { projectId: string; row: { id:
         <div className="grid flex-1 gap-1">
           <h3 className="font-medium">光模块</h3>
           <p className="text-xs text-muted-foreground">
-            SSH 进系统读：NVIDIA/Mellanox 网卡用 mlxlink，其他网卡用 ethtool -m。颜色按模块自己报的告警门限：红色超出门限，黄色离下限不到 2 dB。每个口一行，twin-port 模块的两个口序列号相同。型号和序列号也会在「采集硬件配置」时记进硬件明细。
+            SSH 进系统读：NVIDIA/Mellanox 网卡用 mlxlink，其他网卡用 ethtool -m。一个模块一行，按序列号合并：twin-port 模块接两个口，收发光按口分行。颜色按模块自己报的告警门限：红色超出门限，黄色离下限不到 2 dB。型号和序列号也会在「采集硬件配置」时记进硬件明细。
           </p>
         </div>
         <Button type="button" size="sm" disabled={pending} onClick={query}>
@@ -128,39 +143,51 @@ export function ServerOptics({ projectId, row }: { projectId: string; row: { id:
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {reading.ports.map((port) => (
-                    <TableRow key={`${port.pci}-${port.port}`}>
-                      <TableCell className="text-xs">
-                        <div className="font-mono">{port.port}</div>
-                        <div className="font-mono text-muted-foreground">{[port.rdma, port.pci.replace(/^0000:/, "")].filter(Boolean).join(" · ")}</div>
-                      </TableCell>
-                      {port.present ? (
-                        <>
-                          <TableCell className="text-xs whitespace-normal">
-                            <div>{[port.vendor, port.model].filter(Boolean).join(" ") || "—"}</div>
-                            <div className="text-muted-foreground">
-                              {[port.type, port.compliance, port.wavelengthNm ? `${port.wavelengthNm} nm` : "", port.length, port.firmware && `固件 ${port.firmware}`].filter(Boolean).join(" · ")}
+                  {groupModules(reading.ports).map((group) => {
+                    const info = group.info;
+                    return (
+                      <TableRow key={`${info.pci}-${info.port}`}>
+                        <TableCell className="text-xs">
+                          {group.ports.map((port) => (
+                            <div key={port.pci}>
+                              <span className="font-mono">{port.port}</span>
+                              <span className="font-mono text-muted-foreground"> {[port.rdma, port.pci.replace(/^0000:/, "")].filter(Boolean).join(" · ")}</span>
                             </div>
-                          </TableCell>
-                          <TableCell className="font-mono text-xs">{port.sn || "—"}</TableCell>
-                          <TableCell className="text-xs">
-                            {port.temperatureC !== undefined ? `${port.temperatureC} ℃` : "—"}
-                            {port.voltageV !== undefined ? <div className="text-muted-foreground">{port.voltageV} V</div> : null}
-                          </TableCell>
-                          <TableCell className="text-xs">
-                            <Lanes values={port.tx} range={port.txRange} label="发光" />
-                          </TableCell>
-                          <TableCell className="text-xs">
-                            <Lanes values={port.rx} range={port.rxRange} label="收光" />
-                          </TableCell>
-                        </>
-                      ) : (
+                          ))}
+                        </TableCell>
+                        <TableCell className="text-xs whitespace-normal">
+                          <div>{[info.vendor, info.model].filter(Boolean).join(" ") || "—"}</div>
+                          <div className="text-muted-foreground">
+                            {[info.type, info.compliance, info.wavelengthNm ? `${info.wavelengthNm} nm` : "", info.length, info.firmware && `固件 ${info.firmware}`].filter(Boolean).join(" · ")}
+                          </div>
+                        </TableCell>
+                        <TableCell className="font-mono text-xs">{info.sn || "—"}</TableCell>
+                        <TableCell className="text-xs">
+                          {info.temperatureC !== undefined ? `${info.temperatureC} ℃` : "—"}
+                          {info.voltageV !== undefined ? <div className="text-muted-foreground">{info.voltageV} V</div> : null}
+                        </TableCell>
+                        <TableCell className="text-xs">
+                          <ModuleLanes group={group} kind="tx" />
+                        </TableCell>
+                        <TableCell className="text-xs">
+                          <ModuleLanes group={group} kind="rx" />
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                  {reading.ports
+                    .filter((port) => !port.present)
+                    .map((port) => (
+                      <TableRow key={`${port.pci}-${port.port}`}>
+                        <TableCell className="text-xs">
+                          <span className="font-mono">{port.port}</span>
+                          <span className="font-mono text-muted-foreground"> {[port.rdma, port.pci.replace(/^0000:/, "")].filter(Boolean).join(" · ")}</span>
+                        </TableCell>
                         <TableCell colSpan={5} className="text-xs whitespace-normal text-destructive">
                           读不到：{port.error}
                         </TableCell>
-                      )}
-                    </TableRow>
-                  ))}
+                      </TableRow>
+                    ))}
                 </TableBody>
               </Table>
             </div>

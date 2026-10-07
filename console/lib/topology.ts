@@ -29,7 +29,6 @@ function parsePciLine(line: string): { pci: string; cls: string; vendor: string;
 
 /** 去掉 nvidia-smi 表头里的终端颜色码。 */
 function stripAnsi(text: string): string {
-  // eslint-disable-next-line no-control-regex
   return text.replace(/\u001b\[[0-9;]*m/g, "");
 }
 
