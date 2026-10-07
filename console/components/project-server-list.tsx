@@ -352,6 +352,7 @@ export function ProjectServerList({
                 {shown.map((row) => (
                   <TableRow
                     key={row.id}
+                    data-server-row
                     data-state={picked.includes(row.id) ? "selected" : undefined}
                     className={`cursor-pointer ${sideId === row.id ? "bg-muted" : ""}`}
                     onClick={(event) => {

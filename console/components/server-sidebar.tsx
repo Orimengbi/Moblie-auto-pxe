@@ -12,10 +12,20 @@ interface Row {
   detail: string;
 }
 
-/** 点服务器列表里的一行，从右边滑出这台机器的侧边栏。不挡列表，点别的行直接换成那一台。 */
+/** 点服务器列表里的一行，从右边滑出这台机器的侧边栏。点外面关闭；点到列表里别的行不关，直接换成那一台。 */
 export function ServerSidebar({ projectId, row, onClose }: { projectId: string; row: Row | null; onClose: () => void }) {
   return (
-    <Sheet open={Boolean(row)} onOpenChange={(open) => (open ? undefined : onClose())}>
+    <Sheet
+      open={Boolean(row)}
+      onOpenChange={(open, details) => {
+        if (open) return;
+        if (details.reason === "outside-press" && (details.event.target as Element | null)?.closest?.("[data-server-row]")) {
+          details.cancel();
+          return;
+        }
+        onClose();
+      }}
+    >
       <SheetContent>
         {row ? (
           <>

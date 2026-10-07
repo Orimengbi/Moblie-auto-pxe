@@ -7,9 +7,9 @@ import { cn } from "cn"
 import { Button } from "@/components/ui/button"
 import { XIcon } from "lucide-react"
 
-/** 从右边滑出的侧边栏。默认不挡页面：点页面别处不会关，按 Esc 或右上角关闭。 */
-function Sheet({ modal = false, disablePointerDismissal = true, ...props }: SheetPrimitive.Root.Props) {
-  return <SheetPrimitive.Root data-slot="sheet" modal={modal} disablePointerDismissal={disablePointerDismissal} {...props} />
+/** 从右边滑出的侧边栏。不加遮罩，页面照常能点；点侧边栏外面、按 Esc 或右上角都会关闭。 */
+function Sheet({ modal = false, ...props }: SheetPrimitive.Root.Props) {
+  return <SheetPrimitive.Root data-slot="sheet" modal={modal} {...props} />
 }
 
 function SheetContent({
