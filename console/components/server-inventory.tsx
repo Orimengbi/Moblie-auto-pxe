@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { ResizeHandle, useColumnWidths } from "@/components/resizable-columns";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -21,6 +22,17 @@ const CHANGE_VARIANT: Record<HwChange["type"], "default" | "destructive" | "outl
   replaced: "destructive",
   changed: "outline",
 };
+
+/** 每类部件一张表，列都一样，共用一套列宽。 */
+const PART_COLUMNS = [
+  { key: "slot", label: "槽位" },
+  { key: "model", label: "型号" },
+  { key: "vendor", label: "厂商" },
+  { key: "sn", label: "序列号" },
+  { key: "firmware", label: "固件" },
+  { key: "attrs", label: "属性" },
+];
+const PART_KEYS = PART_COLUMNS.map((column) => column.key);
 
 function when(at: string): string {
   return new Date(at).toLocaleString("zh-CN");
@@ -48,6 +60,7 @@ export function ServerInventory({ projectId, row }: { projectId: string; row: { 
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
+  const columnWidths = useColumnWidths("pxe-inventory-columns", PART_KEYS);
 
   const load = useCallback(
     async (query: string) => {
@@ -195,15 +208,15 @@ export function ServerInventory({ projectId, row }: { projectId: string; row: { 
               <section key={kind} className="grid gap-1">
                 <h4 className="text-sm font-medium">{kindHeading(kind, items, snapshot.components)}</h4>
                 <div className="overflow-x-auto">
-                  <Table>
+                  <Table className={columnWidths.tableClassName} style={columnWidths.tableStyle}>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>槽位</TableHead>
-                        <TableHead>型号</TableHead>
-                        <TableHead>厂商</TableHead>
-                        <TableHead>序列号</TableHead>
-                        <TableHead>固件</TableHead>
-                        <TableHead>属性</TableHead>
+                        {PART_COLUMNS.map((column) => (
+                          <TableHead key={column.key} data-col={column.key} className="relative" style={columnWidths.headStyle(column.key)}>
+                            {column.label}
+                            <ResizeHandle onStart={(event) => columnWidths.startResize(column.key, event)} onReset={columnWidths.reset} />
+                          </TableHead>
+                        ))}
                       </TableRow>
                     </TableHeader>
                     <TableBody>

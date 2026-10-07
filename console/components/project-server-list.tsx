@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { ColumnHead, type ColumnFilter, type SortState } from "@/components/column-head";
 import { HOST_SOURCE, ProjectTaskRunner } from "@/components/project-task-runner";
 import { ServerEditDialog } from "@/components/server-edit-dialog";
+import { ResizeHandle, useColumnWidths } from "@/components/resizable-columns";
 import { ServerSidebar } from "@/components/server-sidebar";
 import { RemoteConsole } from "@/components/remote-console";
 import { ServerPowerDialog } from "@/components/server-power-dialog";
@@ -92,6 +93,9 @@ const COLUMNS: Column[] = [
   { key: "hardware", label: "硬件", sortValue: hardwareLabel, pick: hardwareLabel },
 ];
 
+/** 列宽要算上勾选框和最后的操作列。 */
+const WIDTH_KEYS = ["select", ...COLUMNS.map((column) => column.key), "actions"];
+
 function matches(row: ServerListRow, column: Column, filter: ColumnFilter): boolean {
   if (filter.kind === "pick") return !column.pick || filter.value.includes(column.pick(row));
   const needle = filter.value.trim().toLowerCase();
@@ -141,6 +145,7 @@ export function ProjectServerList({
     });
   }, [rows, filters, sort]);
   const filtering = Object.keys(filters).length > 0;
+  const columnWidths = useColumnWidths("pxe-server-columns", WIDTH_KEYS);
   const allPicked = shown.length > 0 && shown.every((row) => picked.includes(row.id));
 
   // 排序和筛选按项目记在这个浏览器里，刷新后还在。
@@ -311,10 +316,10 @@ export function ProjectServerList({
           <p className="text-sm text-muted-foreground">上传后每一行会出现在下面。表头要能认出序列号和 IPMI MAC，原用户和原密码可以分成两列，也可以写成「用户/密码」。</p>
         ) : (
           <div className="overflow-x-auto">
-            <Table>
+            <Table className={columnWidths.tableClassName} style={columnWidths.tableStyle}>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-8">
+                  <TableHead className="w-8" data-col="select" style={columnWidths.headStyle("select")}>
                     <input
                       type="checkbox"
                       aria-label="全选当前显示的"
@@ -326,7 +331,7 @@ export function ProjectServerList({
                     />
                   </TableHead>
                   {COLUMNS.map((column) => (
-                    <TableHead key={column.key}>
+                    <TableHead key={column.key} data-col={column.key} className="relative" style={columnWidths.headStyle(column.key)}>
                       <ColumnHead
                         label={column.label}
                         columnKey={column.key}
@@ -336,9 +341,12 @@ export function ProjectServerList({
                         onFilter={(next) => setFilter(column.key, next)}
                         options={optionsFor(column)}
                       />
+                      <ResizeHandle onStart={(event) => columnWidths.startResize(column.key, event)} onReset={columnWidths.reset} />
                     </TableHead>
                   ))}
-                  <TableHead />
+                  <TableHead data-col="actions" className="relative" style={columnWidths.headStyle("actions")}>
+                    <ResizeHandle onStart={(event) => columnWidths.startResize("actions", event)} onReset={columnWidths.reset} />
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
