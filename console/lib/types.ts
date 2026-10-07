@@ -2,6 +2,8 @@ export type Family = "ubuntu" | "debian" | "rocky" | "alma";
 
 export type DiskPolicy = "largest" | "smallest" | "named" | "custom";
 export type DiskPick = "largest" | "smallest" | "named";
+/** 整盘镜像的启动方式：写到硬盘，或者整个系统放进内存跑、不碰硬盘。 */
+export type DiskMode = "deploy" | "live";
 export type PartitionFs = "ext4" | "xfs" | "fat32" | "swap";
 
 export interface DiskPartition {
@@ -56,6 +58,8 @@ export interface Profile {
   diskName: string;
   diskPick?: DiskPick;
   partitions?: DiskPartition[];
+  /** 只对整盘镜像有用。绑定的机器菜单超时后按这个方式启动；旧配置没有这一项，按写盘处理。 */
+  diskMode?: DiskMode;
   packages: string[];
   postScript: string;
   locale: string;
@@ -276,6 +280,11 @@ export const FAMILY_LABEL: Record<Family, string> = {
   debian: "Debian",
   rocky: "Rocky Linux",
   alma: "AlmaLinux",
+};
+
+export const DISK_MODE_LABEL: Record<DiskMode, string> = {
+  deploy: "落盘部署",
+  live: "内存运行",
 };
 
 export const DISK_LABEL: Record<DiskPolicy, string> = {

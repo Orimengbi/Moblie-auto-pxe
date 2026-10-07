@@ -7,7 +7,7 @@ import { ProjectServerImport } from "@/components/project-server-import";
 import { ProjectServerList } from "@/components/project-server-list";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { hostContext, resolveHost } from "@/lib/remote";
-import { getProject, getServerImportReport, listFiles, listImages, listProfiles, listServers, listTasks, publicProfile, publicServer } from "@/lib/store";
+import { getProject, getServerImportReport, listFiles, listImages, listProfiles, listServers, listTasks, publicProfile, publicServer, runsInRam } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
@@ -15,9 +15,8 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
   const { id } = await params;
   const project = getProject(id);
   if (!project) notFound();
-  const profiles = listProfiles()
-    .filter((profile) => profile.projectId === project.id)
-    .map(publicProfile);
+  const profileRecords = listProfiles().filter((profile) => profile.projectId === project.id);
+  const profiles = profileRecords.map(publicProfile);
   const hosts = hostContext();
   const servers = listServers()
     .filter((row) => row.projectId === project.id)
@@ -65,6 +64,7 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
             enabled={project.enabled}
             rows={servers}
             osNames={profiles.map((profile) => profile.name)}
+            liveOsNames={profileRecords.filter(runsInRam).map((profile) => profile.name)}
             report={getServerImportReport(project.id)}
             files={listFiles()}
             tasks={listTasks(project.id).slice(0, 10)}

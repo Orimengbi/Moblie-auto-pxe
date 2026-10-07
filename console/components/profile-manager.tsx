@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { DISK_LABEL, FAMILY_LABEL, type DiskPartition, type DiskPick, type DiskPolicy, type ImageRecord, type PartitionFs } from "@/lib/types";
+import { DISK_LABEL, DISK_MODE_LABEL, FAMILY_LABEL, type DiskMode, type DiskPartition, type DiskPick, type DiskPolicy, type ImageRecord, type PartitionFs } from "@/lib/types";
 
 interface PublicProfile {
   id: string;
@@ -19,6 +19,7 @@ interface PublicProfile {
   diskName: string;
   diskPick?: DiskPick;
   partitions?: DiskPartition[];
+  diskMode?: DiskMode;
   packages: string[];
   postScript: string;
   locale: string;
@@ -35,6 +36,7 @@ const EMPTY = {
   diskName: "sda",
   diskPick: "largest" as DiskPick,
   partitions: [] as DiskPartition[],
+  diskMode: "deploy" as DiskMode,
   packages: "openssh-server,curl",
   postScript: "",
   locale: "zh_CN.UTF-8",
@@ -109,6 +111,7 @@ export function ProfileManager({
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
   const diskImage = images.find((image) => image.id === form.imageId)?.kind === "disk";
+  const live = diskImage && form.diskMode === "live";
 
   function updatePartition(index: number, patch: Partial<DiskPartition>) {
     setForm({
@@ -136,6 +139,7 @@ export function ProfileManager({
       diskName: profile.diskName,
       diskPick: profile.diskPick || "largest",
       partitions: profile.partitions || [],
+      diskMode: profile.diskMode || "deploy",
       packages: profile.packages.join(","),
       postScript: profile.postScript,
       locale: profile.locale,
@@ -195,18 +199,21 @@ export function ProfileManager({
         <div className="grid gap-3">
           {profiles.map((profile) => {
             const image = images.find((item) => item.id === profile.imageId);
+            const runsLive = image?.kind === "disk" && profile.diskMode === "live";
             return (
               <article key={profile.id} className="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <h2 className="font-medium">{profile.name}</h2>
                     <p className="mt-1 text-sm text-muted-foreground">
-                      {image ? `${FAMILY_LABEL[image.family]} · ${image.name}` : "镜像已删除"} · 主机名 {profile.hostnamePattern} · {DISK_LABEL[profile.diskPolicy]}
-                      {profile.diskPolicy === "named" ? ` ${profile.diskName}` : ""}
+                      {image ? `${FAMILY_LABEL[image.family]} · ${image.name}` : "镜像已删除"} · 主机名 {profile.hostnamePattern}
+                      {image?.kind === "disk" ? ` · ${DISK_MODE_LABEL[profile.diskMode || "deploy"]}` : ""}
+                      {runsLive ? "" : ` · ${DISK_LABEL[profile.diskPolicy]}`}
+                      {profile.diskPolicy === "named" && !runsLive ? ` ${profile.diskName}` : ""}
                       {profile.diskPolicy === "custom" ? ` · ${(profile.partitions || []).map((part) => `${part.mount} ${part.size === "rest" ? "剩余" : `${part.size}MB`}`).join("，")}` : ""}
                     </p>
                   </div>
-                  <Badge variant="outline">将清空所选磁盘</Badge>
+                  <Badge variant="outline">{runsLive ? "不碰硬盘" : "将清空所选磁盘"}</Badge>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2">
                   <Button size="sm" variant="secondary" onClick={() => startEdit(profile)}>
@@ -228,7 +235,7 @@ export function ProfileManager({
               <DialogTitle>{editing ? "编辑安装配置" : "新建安装配置"}</DialogTitle>
               <DialogDescription>
                 {diskImage
-                  ? "整盘镜像：写盘时按磁盘策略选盘，整块盘清空后写入镜像，根分区扩到整块盘。启动菜单里还有一项“内存运行”，不碰硬盘。"
+                  ? "整盘镜像：绑定这条配置的机器按“启动方式”启动。落盘部署按磁盘策略选盘，整块盘清空后写入镜像，根分区扩到整块盘；内存运行把系统整个放进内存，不碰硬盘，每次从网卡启动都重新进内存系统。启动菜单里两种方式都能手动选。"
                   : "安装会按磁盘策略清空目标盘。"}
               </DialogDescription>
             </DialogHeader>
@@ -260,8 +267,20 @@ export function ProfileManager({
                 <Input type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} required={!editing} />
               </Field>
             </div>
+            {diskImage ? (
+              <Field label="启动方式">
+                <select
+                  className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm"
+                  value={form.diskMode}
+                  onChange={(event) => setForm({ ...form, diskMode: event.target.value as DiskMode })}
+                >
+                  <option value="deploy">落盘部署（清空所选磁盘，写入镜像）</option>
+                  <option value="live">内存运行（不碰硬盘，内存需大于根分区）</option>
+                </select>
+              </Field>
+            ) : null}
             <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="磁盘策略">
+              <Field label={live ? "磁盘策略（菜单里手动选落盘时用）" : "磁盘策略"}>
                 <select
                   className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm"
                   value={form.diskPolicy}

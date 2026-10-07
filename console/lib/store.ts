@@ -73,6 +73,7 @@ import {
   type BuiltinDiag,
   type DiagScript,
   type DiskPartition,
+  type DiskMode,
   type DiskPick,
   type DiskPolicy,
   type ImageRecord,
@@ -311,6 +312,7 @@ export interface ProfileInput {
   diskName?: string;
   diskPick?: DiskPick;
   partitions?: DiskPartition[];
+  diskMode?: DiskMode;
   packages: string[];
   postScript?: string;
   locale?: string;
@@ -372,6 +374,7 @@ function normalizeProfileInput(input: ProfileInput, existing?: Profile): Omit<Pr
     diskName,
     diskPick: diskPolicy === "custom" ? diskPick : undefined,
     partitions,
+    diskMode: image.kind === "disk" ? (input.diskMode === "live" ? "live" : "deploy") : undefined,
     packages: assertPackages(input.packages),
     postScript: (input.postScript || "").slice(0, 20000),
     locale: (input.locale || "zh_CN.UTF-8").trim(),
@@ -1692,7 +1695,8 @@ export async function bindServerBoot(snRaw: string, macRaw: string): Promise<Ser
     writeJson(machinePath(mac), machine);
     row.stage = "installing";
     row.installed = "installing";
-    row.detail = `正在安装「${row.osName}」`;
+    // 内存运行不会回报「已安装」，机器每次从网卡启动都重新进内存系统。
+    row.detail = runsInRam(profile) ? `正在内存运行「${row.osName}」，不碰硬盘` : `正在安装「${row.osName}」`;
     writeJson(serverPath(row.id), row);
     return row;
   });
@@ -1754,6 +1758,11 @@ export function customizationForMac(mac: string, projectId: string): string {
 export function readLeasesText(): string {
   if (!fs.existsSync(leasePath())) return "";
   return fs.readFileSync(leasePath(), "utf8");
+}
+
+/** 整盘镜像配置选了内存运行：绑定的机器菜单超时后进内存系统，不写盘。 */
+export function runsInRam(profile: Profile): boolean {
+  return profile.diskMode === "live" && getImage(profile.imageId)?.kind === "disk";
 }
 
 export function publicProfile(profile: Profile): Omit<Profile, "passwordHash"> & { hasPassword: boolean } {

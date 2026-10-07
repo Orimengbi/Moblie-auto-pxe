@@ -89,6 +89,7 @@ export function ProjectServerList({
   enabled,
   rows,
   osNames,
+  liveOsNames,
   report,
   files,
   tasks,
@@ -98,6 +99,8 @@ export function ProjectServerList({
   enabled: boolean;
   rows: ServerListRow[];
   osNames: string[];
+  /** 选了内存运行的整盘镜像配置，重装不会清空磁盘。 */
+  liveOsNames: string[];
   report: ServerImportReport | null;
   files: RemoteFile[];
   tasks: RemoteTask[];
@@ -224,7 +227,10 @@ export function ProjectServerList({
   }
 
   async function reinstall(row: ServerListRow) {
-    if (!window.confirm(`重装 ${row.sn}？会让它从网卡启动，按「${row.osName}」重新安装并清空磁盘。`)) return;
+    const prompt = liveOsNames.includes(row.osName)
+      ? `重新启动 ${row.sn} 进内存系统？会让它从网卡启动，按「${row.osName}」在内存里运行，不碰硬盘。`
+      : `重装 ${row.sn}？会让它从网卡启动，按「${row.osName}」重新安装并清空磁盘。`;
+    if (!window.confirm(prompt)) return;
     setError("");
     const response = await fetch(`/api/projects/${projectId}/servers/${row.id}/reinstall`, { method: "POST" });
     const body = await response.json().catch(() => ({}));

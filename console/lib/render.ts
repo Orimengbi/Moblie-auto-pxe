@@ -1,4 +1,4 @@
-import type { DiskPartition, DiskPick, DiskPolicy, Family, ImageRecord, InstalledNetwork, IpmiSetting, NicPlan, Profile } from "./types.ts";
+import type { DiskMode, DiskPartition, DiskPick, DiskPolicy, Family, ImageRecord, InstalledNetwork, IpmiSetting, NicPlan, Profile } from "./types.ts";
 import { FAMILY_LABEL } from "./types.ts";
 import { applyHostname, bootOrigin, netmaskToPrefix } from "./net.ts";
 
@@ -554,7 +554,7 @@ export interface MenuProfile {
   image: ImageRecord;
 }
 
-export type DiskMode = "deploy" | "live";
+export type { DiskMode };
 
 /** 整盘镜像：镜像自带的内核和 initrd，后面追加 pxeimg.cpio，根分区下载进内存运行。 */
 function diskImageKernel(server: string, image: ImageRecord, profile: Profile, mode: DiskMode): string[] {
@@ -649,9 +649,14 @@ export function renderIpxeMenu(input: {
   let defaultItem = "local";
   let banner = "";
   if (input.binding?.action === "install" && input.binding.profileId && installIds.has(input.binding.profileId)) {
-    defaultItem = `install-${input.binding.profileId}`;
     const bound = input.entries.find((entry) => entry.profile.id === input.binding?.profileId);
-    banner = `echo This machine will install ${bound ? menuLabel(bound) : "the bound profile"} when the menu times out. The selected disk will be erased.`;
+    if (bound?.image.kind === "disk" && bound.profile.diskMode === "live") {
+      defaultItem = `live-${bound.profile.id}`;
+      banner = `echo This machine will run ${menuLabel(bound)} in RAM when the menu times out. Disks are not touched.`;
+    } else {
+      defaultItem = `install-${input.binding.profileId}`;
+      banner = `echo This machine will install ${bound ? menuLabel(bound) : "the bound profile"} when the menu times out. The selected disk will be erased.`;
+    }
   }
 
   lines.push(`choose --default ${defaultItem} --timeout ${timeoutMs} selected || goto local`);

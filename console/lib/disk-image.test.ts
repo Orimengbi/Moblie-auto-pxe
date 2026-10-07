@@ -152,6 +152,20 @@ test("disk images get a write-to-disk and a run-in-RAM menu item", () => {
   assert.doesNotMatch(menu, /[^\x00-\x7f]/);
 });
 
+test("a profile set to run in RAM makes the bound machine boot the RAM entry", () => {
+  const menu = renderIpxeMenu({
+    serverIp: "192.168.77.1",
+    httpPort: 8080,
+    timeoutSec: 15,
+    entries: [{ profile: { ...profile, diskMode: "live" }, image: disk }],
+    binding: { action: "install", profileId: profile.id, profileName: profile.name },
+  });
+  assert.match(menu, new RegExp(`choose --default live-${profile.id}`));
+  assert.match(menu, /in RAM when the menu times out\. Disks are not touched\./);
+  assert.match(menu, new RegExp(`item install-${profile.id} `), "菜单里仍可手动选写盘");
+  assert.doesNotMatch(menu, /will be erased/);
+});
+
 test("deploy script writes both halves and grows the root partition", () => {
   const script = renderDiskImageScript({ profile, image: disk, hostname: "gpu-eeff", serverIp: "192.168.77.1", httpPort: 8080, mode: "deploy" });
   assert.match(script, /head\.img\.zst" \| zstd -dcq \| dd of="\$disk"/);
