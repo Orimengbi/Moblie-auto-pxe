@@ -359,7 +359,7 @@ export interface RemoteTask {
 }
 
 /** 硬件部件的类别。firmware 是 BIOS、BMC、CPLD 这类只有版本号的固件。 */
-export type HwKind = "system" | "board" | "cpu" | "memory" | "disk" | "gpu" | "nic" | "psu" | "firmware";
+export type HwKind = "system" | "board" | "cpu" | "memory" | "disk" | "gpu" | "nic" | "transceiver" | "psu" | "firmware";
 
 /** os：SSH 进系统里用 dmidecode 等工具读；bmc：从 BMC 的 Redfish 读。两边的槽位名不一样，不互相比。 */
 export type InventorySource = "os" | "bmc";
@@ -406,6 +406,45 @@ export interface InventorySnapshot {
   warnings: string[];
   /** GPU 和网卡的 PCIe/NVLink 拓扑，只有系统内采集有。 */
   topology?: Topology;
+}
+
+/** 一个网口上的光模块和它当时的收发光。twin-port 模块的两个口会读到同一个序列号。 */
+export interface OpticsPort {
+  /** 网口名，没有网口时是 RDMA 设备名。 */
+  port: string;
+  ports: string[];
+  rdma?: string;
+  pci: string;
+  source: "mlxlink" | "ethtool";
+  present: boolean;
+  /** 读不到时的原因。 */
+  error?: string;
+  type?: string;
+  vendor?: string;
+  model?: string;
+  sn?: string;
+  firmware?: string;
+  compliance?: string;
+  cable?: string;
+  wavelengthNm?: number;
+  length?: string;
+  temperatureC?: number;
+  temperatureRange?: [number, number];
+  voltageV?: number;
+  /** 每条 lane 的收光、发光，dBm。 */
+  rx: number[];
+  tx: number[];
+  /** 模块自己报的告警门限，dBm。 */
+  rxRange?: [number, number];
+  txRange?: [number, number];
+}
+
+/** 一台机器最近一次手动查询的收发光。 */
+export interface OpticsReading {
+  serverId: string;
+  at: string;
+  host: string;
+  ports: OpticsPort[];
 }
 
 /** 拓扑图里的一个 PCIe 设备：一块 GPU，或网卡的一个 function（一个口）。 */

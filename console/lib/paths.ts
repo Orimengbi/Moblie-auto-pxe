@@ -31,6 +31,7 @@ export function ensureDataDirs(): void {
     "files",
     "inventory",
     "baselines",
+    "optics",
   ]) {
     fs.mkdirSync(path.join(dataDir(), rel), { recursive: true });
   }
@@ -130,4 +131,8 @@ export function inventoryDir(serverId: string): string {
 
 export function baselinePath(projectId: string): string {
   return path.join(dataDir(), "baselines", `${projectId}.json`);
+}
+
+export function opticsPath(serverId: string): string {
+  return path.join(dataDir(), "optics", `${serverId}.json`);
 }

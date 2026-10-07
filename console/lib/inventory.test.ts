@@ -11,8 +11,8 @@ import type { HwComponent } from "./types.ts";
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pxe-inventory-test-"));
 process.env.PXE_DATA_DIR = temp;
 
-const { createProject, getBaseline, getTask, inventoryStatus, latestInventory, listInventory, saveBaseline, baselineFromServer, deleteServer } = await import("./store.ts");
-const { createTask, runTask } = await import("./remote.ts");
+const { createProject, getOptics, getBaseline, getTask, inventoryStatus, latestInventory, listInventory, saveBaseline, baselineFromServer, deleteServer } = await import("./store.ts");
+const { createTask, queryOptics, runTask } = await import("./remote.ts");
 const { serverPath } = await import("./paths.ts");
 
 /** 照一台 2 路 EPYC、8 卡 GPU 服务器的真实输出删减，序列号都换掉了。 */
@@ -192,6 +192,11 @@ NIC Legend:
 NUMA node0 CPU(s):                       0-63
 NUMA node1 CPU(s):                       64-127
 
+===PXEINV optics===
+===PXEOPT mlx mlx5_0 0000:73:00.0 enp115s0f0np0 ===
+{ "result" : { "output" : { "Module Info" : { "Identifier" : "OSFP", "Vendor Name" : "ACCELINK", "Vendor Part Number" : "RTXM600-2401", "Vendor Serial Number" : "MODSN0001", "FW Version" : "80.1.0", "Rx Power Current [dBm]" : "0,2,0,0 [-8..6]" } } }, "status" : { "code" : 0 } }
+===PXEOPT end===
+
 ===PXEINV end===
 `;
 
@@ -253,12 +258,15 @@ test("parses the in-system collection output into components", () => {
   assert.equal(nics[1].attrs.partNumber, "MLX000647");
   assert.equal(nics[1].attrs.speedMbps, 400000);
 
+  const optics = components.filter((c) => c.kind === "transceiver");
+  assert.deepEqual(optics.map((c) => [c.slot, c.vendor, c.model, c.sn, c.firmware]), [["enp115s0f0np0", "ACCELINK", "RTXM600-2401", "MODSN0001", "80.1.0"]]);
+
   assert.deepEqual(summarizeComponents(components).slice(2, 4), ["CPU 2 × AMD EPYC 9555 64-Core Processor", "内存 2 × M321RAJA0MB2-CCPWC 128GB，共 256 GB（2/3 槽）"]);
   assert.match(parseOsInventory(OS_OUTPUT.replace(/===PXEINV end===\n/, "")).warnings.join(), /没有跑完/);
 });
 
 test("the collection script stays read-only and marks every section", () => {
-  for (const section of ["tools", "dmidecode", "bmc", "lsblk", "smart", "gpu", "net", "vpd", "pcitopo", "rdma", "gputopo", "numa", "end"]) {
+  for (const section of ["tools", "dmidecode", "bmc", "lsblk", "smart", "gpu", "net", "vpd", "pcitopo", "rdma", "gputopo", "numa", "optics", "end"]) {
     assert.match(INVENTORY_SCRIPT, new RegExp(`sec ${section}\\n`));
   }
   assert.doesNotMatch(INVENTORY_SCRIPT, /\b(rm|dd|mkfs|wipefs|reboot|shutdown)\b/);
@@ -527,6 +535,22 @@ test("inventory tasks collect both sources, keep history and feed the baseline",
   assert.equal(bmcOnly.targets[0].status, "pending");
   assert.equal(createTask(project.id, { kind: "inventory", sources: ["os"], serverIds: [serverId] }, noHost).targets[0].status, "unreachable");
 
+  // 手动查收发光：只走 SSH，存最近一次。
+  fs.writeFileSync(serverPath(serverId), JSON.stringify(row));
+  const opticsExec = async (_command: string, args: string[], stdin: string | null) => {
+    assert.ok(args.includes("root@10.0.0.5"));
+    assert.match(stdin || "", /mlxlink/);
+    return { code: 0, output: OS_OUTPUT.slice(OS_OUTPUT.indexOf("===PXEOPT")), timedOut: false };
+  };
+  const reading = await queryOptics(project.id, serverId, opticsExec, context);
+  assert.equal(reading.host, "10.0.0.5");
+  assert.deepEqual(reading.ports.map((port) => [port.port, port.sn, port.rx.join("/")]), [["enp115s0f0np0", "MODSN0001", "0/2/0/0"]]);
+  assert.equal(getOptics(serverId)?.at, reading.at);
+  await assert.rejects(queryOptics(project.id, serverId, async () => ({ code: 255, output: "", timedOut: false }), context), /SSH 登录 10\.0\.0\.5 失败/);
+  fs.writeFileSync(serverPath(serverId), JSON.stringify({ ...row, osAddress: undefined }));
+  await assert.rejects(queryOptics(project.id, serverId, opticsExec, noHost), /找不到系统地址/);
+
   await deleteServer(project.id, serverId);
+  assert.equal(getOptics(serverId), null, "删机器时一起删收发光读数");
   assert.deepEqual(listInventory(serverId), [], "删机器时一起删采集记录");
 });

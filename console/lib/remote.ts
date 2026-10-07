@@ -5,6 +5,7 @@ import { parseLeases, type Lease } from "./dnsmasq.ts";
 import { describeChange, INVENTORY_SCRIPT, parseOsInventory, redfishComponents, summarizeComponents } from "./inventory.ts";
 import { listLocalIpv4, sameSubnet } from "./net.ts";
 import { sshKeyPath, taskPath } from "./paths.ts";
+import { OPTICS_SCRIPT, parseOptics } from "./optics.ts";
 import { crawlRedfish, RedfishAuthError, redfishGetter, type RedfishGet } from "./redfish.ts";
 import { renderRevokeScript } from "./render.ts";
 import {
@@ -19,9 +20,10 @@ import {
   listServers,
   readLeasesText,
   saveInventory,
+  saveOptics,
   writeTask,
 } from "./store.ts";
-import type { HwChange, InventorySource, Machine, NicPlan, RemoteTask, ServerRow, TaskHostSource, TaskKind, TaskTarget, TaskTargetStatus } from "./types.ts";
+import type { HwChange, InventorySource, OpticsReading, Machine, NicPlan, RemoteTask, ServerRow, TaskHostSource, TaskKind, TaskTarget, TaskTargetStatus } from "./types.ts";
 
 const OUTPUT_LIMIT = 16000;
 /** 采集脚本的原始输出要整段解析，不能像普通任务那样只留结尾。 */
@@ -386,6 +388,20 @@ export async function collectInventory(
   if (ok > 0 && ok === tried) return { status: "ok", exitCode: 0, output };
   if (Date.now() >= deadline) return { status: "timeout", exitCode: null, output };
   return { status: ok > 0 || reached ? "failed" : "unreachable", exitCode: null, output };
+}
+
+/** 手动查一台机器所有光模块的收发光：SSH 进系统跑 mlxlink / ethtool -m，存下这一次的读数。 */
+export async function queryOptics(projectId: string, serverId: string, exec: Exec = defaultExec, context: HostContext = hostContext()): Promise<OpticsReading> {
+  const row = listServers().find((item) => item.projectId === projectId && item.id === serverId);
+  if (!row) throw new Error("这台机器不在这个项目里");
+  const { host } = resolveHost(row, context);
+  if (!host) throw new Error(`${row.sn} 找不到系统地址，查不了光模块。收发光只能在系统里读`);
+  const ran = await exec("ssh", [...sshOptions(), `root@${host}`, "bash -s"], OPTICS_SCRIPT, Date.now() + 120_000, INVENTORY_OUTPUT_LIMIT);
+  if (ran.timedOut) throw new Error(`${row.sn}（${host}）查询超过 2 分钟，已中止`);
+  if (ran.code === 255 || !ran.output.includes("===PXEOPT end===")) {
+    throw new Error(`SSH 登录 ${host} 失败。机器没开、地址不对，或者装机时没写入控制台公钥`);
+  }
+  return saveOptics({ serverId: row.id, at: new Date().toISOString(), host, ports: parseOptics(ran.output) });
 }
 
 /** 在独立进程里跑完一个任务，每台机器状态变化时写回任务文件。 */

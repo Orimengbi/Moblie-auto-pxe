@@ -51,6 +51,7 @@ import {
   dataDir,
   diagDir,
   inventoryDir,
+  opticsPath,
   dnsmasqConfPath,
   fileDir,
   ensureDataDirs,
@@ -83,6 +84,7 @@ import {
   type InventorySnapshot,
   type InventorySource,
   type InventoryStatus,
+  type OpticsReading,
   type DiagScript,
   type DiskPartition,
   type DiskMode,
@@ -649,6 +651,7 @@ export async function deleteProject(id: string): Promise<void> {
       if (server.projectId !== id) continue;
       fs.rmSync(serverPath(server.id), { force: true });
       fs.rmSync(inventoryDir(server.id), { recursive: true, force: true });
+      fs.rmSync(opticsPath(server.id), { force: true });
     }
     fs.rmSync(baselinePath(id), { force: true });
     for (const fact of listMachineFacts()) {
@@ -1508,6 +1511,7 @@ export async function deleteServer(projectId: string, serverId: string): Promise
     if (row.bootMac) unbindInstall(row.bootMac);
     fs.rmSync(serverPath(row.id), { force: true });
     fs.rmSync(inventoryDir(row.id), { recursive: true, force: true });
+    fs.rmSync(opticsPath(row.id), { force: true });
   });
 }
 
@@ -2095,5 +2099,18 @@ export async function baselineFromServer(projectId: string, serverId: string, so
 export async function deleteBaseline(projectId: string): Promise<void> {
   return withLock(() => {
     fs.rmSync(baselinePath(projectId), { force: true });
+  });
+}
+
+/** 一台机器最近一次查询的收发光，只留最新的一次。 */
+export function getOptics(serverId: string): OpticsReading | null {
+  if (!/^[0-9a-f-]{36}$/.test(serverId)) return null;
+  return readJson<OpticsReading>(opticsPath(serverId));
+}
+
+export async function saveOptics(reading: OpticsReading): Promise<OpticsReading> {
+  return withLock(() => {
+    writeJson(opticsPath(reading.serverId), reading);
+    return reading;
   });
 }

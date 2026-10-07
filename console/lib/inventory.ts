@@ -1,4 +1,5 @@
 import type { RedfishDoc, RedfishRaw } from "./redfish.ts";
+import { OPTICS_BODY, opticsComponents, parseOptics } from "./optics.ts";
 import { buildTopology } from "./topology.ts";
 import type { BaselineIssue, BaselineRule, HwChange, HwComponent, HwKind, InventorySource, Topology } from "./types.ts";
 
@@ -15,11 +16,12 @@ export const KIND_LABEL: Record<HwKind, string> = {
   disk: "硬盘",
   gpu: "GPU",
   nic: "网卡",
+  transceiver: "光模块",
   psu: "电源",
   firmware: "固件",
 };
 
-export const KIND_ORDER: HwKind[] = ["system", "board", "cpu", "memory", "gpu", "disk", "nic", "psu", "firmware"];
+export const KIND_ORDER: HwKind[] = ["system", "board", "cpu", "memory", "gpu", "disk", "nic", "transceiver", "psu", "firmware"];
 
 export const SOURCE_LABEL: Record<InventorySource, string> = {
   os: "系统内",
@@ -56,6 +58,11 @@ export const ATTR_LABEL: Record<string, string> = {
   health: "健康",
   chassisSn: "机箱序列号",
   memorySlots: "内存槽",
+  compliance: "规格",
+  wavelengthNm: "波长 nm",
+  length: "距离",
+  cable: "线缆",
+  rdma: "RDMA",
   version: "版本",
   releaseDate: "日期",
 };
@@ -135,6 +142,8 @@ sec gputopo
 have nvidia-smi && timeout 60 nvidia-smi topo -m 2>/dev/null
 sec numa
 lscpu 2>/dev/null | grep -E '^NUMA node[0-9]+ CPU'
+sec optics
+${OPTICS_BODY}
 sec end
 `;
 
@@ -427,6 +436,7 @@ export function parseOsInventory(text: string): { components: HwComponent[]; war
     );
   }
 
+  components.push(...opticsComponents(parseOptics(sections.get("optics") || "")));
   return { components, warnings, topology: buildTopology(sections, components) };
 }
 
