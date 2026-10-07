@@ -1,5 +1,6 @@
 import type { RedfishDoc, RedfishRaw } from "./redfish.ts";
-import type { BaselineIssue, BaselineRule, HwChange, HwComponent, HwKind, InventorySource } from "./types.ts";
+import { buildTopology } from "./topology.ts";
+import type { BaselineIssue, BaselineRule, HwChange, HwComponent, HwKind, InventorySource, Topology } from "./types.ts";
 
 /**
  * 整机硬件清单：系统里采集的脚本和解析、Redfish 文档到部件的转换、两次采集的比对、基准配置。
@@ -123,6 +124,17 @@ if have lspci; then
     lspci -vvv -s "$bus" 2>/dev/null | sed -n '/Vital Product Data/,/End$/p'
   done
 fi
+sec pcitopo
+for d in /sys/bus/pci/devices/*; do
+  c=$(cat "$d/class" 2>/dev/null)
+  case "$c" in 0x02*|0x0300*|0x0302*) echo "$(basename "$d") $c $(cat "$d/vendor" 2>/dev/null) $(cat "$d/numa_node" 2>/dev/null) $(readlink -f "$d")";; esac
+done
+sec rdma
+for d in /sys/class/infiniband/*; do [ -e "$d/device" ] && echo "$(basename "$d") $(pci_of "$d")"; done
+sec gputopo
+have nvidia-smi && timeout 60 nvidia-smi topo -m 2>/dev/null
+sec numa
+lscpu 2>/dev/null | grep -E '^NUMA node[0-9]+ CPU'
 sec end
 `;
 
@@ -261,7 +273,7 @@ function jsonOrNull<T>(text: string | undefined): T | null {
 const PCI_ADDRESS = /^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]$/i;
 
 /** 解析 INVENTORY_SCRIPT 的输出。 */
-export function parseOsInventory(text: string): { components: HwComponent[]; warnings: string[] } {
+export function parseOsInventory(text: string): { components: HwComponent[]; warnings: string[]; topology?: Topology } {
   const sections = splitSections(text);
   const components: HwComponent[] = [];
   const warnings: string[] = [];
@@ -415,7 +427,7 @@ export function parseOsInventory(text: string): { components: HwComponent[]; war
     );
   }
 
-  return { components, warnings };
+  return { components, warnings, topology: buildTopology(sections, components) };
 }
 
 function rfStr(doc: RedfishDoc | undefined, key: string): string {

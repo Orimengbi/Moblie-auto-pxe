@@ -335,6 +335,7 @@ export async function collectInventory(
           host: target.host,
           components: parsed.components,
           warnings: parsed.warnings,
+          ...(parsed.topology ? { topology: parsed.topology } : {}),
         });
         ok++;
         lines.push(`系统内（${target.host}）：`, ...summarizeComponents(parsed.components).map((line) => `  ${line}`), ...changeLines(saved.changes), ...parsed.warnings.map((line) => `  提示：${line}`));

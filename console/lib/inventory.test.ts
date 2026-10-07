@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { changeDetail, checkBaseline, clean, diffComponents, generateBaseline, INVENTORY_SCRIPT, parseDmidecode, parseOsInventory, redfishComponents, sizeToGb, summarizeComponents } from "./inventory.ts";
 import { crawlRedfish, RedfishAuthError, type RedfishDoc, type RedfishGet } from "./redfish.ts";
+import { linkBetween, linkText, parseNvlinks } from "./topology.ts";
 import type { HwComponent } from "./types.ts";
 
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pxe-inventory-test-"));
@@ -163,6 +164,34 @@ pci: 1-1.4:1.0
 \t\t\t[V0] Vendor specific: PCIeGen6 x48
 \t\tEnd
 
+===PXEINV pcitopo===
+0000:06:00.0 0x030200 0x10de 0 /sys/devices/pci0000:00/0000:00:01.1/0000:01:00.0/0000:02:02.0/0000:04:00.0/0000:05:00.0/0000:06:00.0
+0000:16:00.0 0x030200 0x10de 0 /sys/devices/pci0000:10/0000:10:01.1/0000:11:00.0/0000:12:02.0/0000:14:00.0/0000:15:00.0/0000:16:00.0
+0000:66:00.0 0x030200 0x10de 1 /sys/devices/pci0000:60/0000:60:01.1/0000:61:00.0/0000:62:02.0/0000:64:00.0/0000:65:00.0/0000:66:00.0
+0000:73:00.0 0x020000 0x15b3 0 /sys/devices/pci0000:00/0000:00:01.1/0000:01:00.0/0000:02:00.0/0000:73:00.0
+0000:73:00.1 0x020000 0x15b3 0 /sys/devices/pci0000:00/0000:00:01.1/0000:01:00.0/0000:02:00.0/0000:73:00.1
+0000:51:00.0 0x020000 0x8086 0 /sys/devices/pci0000:50/0000:50:03.1/0000:51:00.0
+0000:53:00.0 0x030000 0x1a03 0 /sys/devices/pci0000:50/0000:50:03.3/0000:52:00.0/0000:53:00.0
+
+===PXEINV rdma===
+mlx5_0 0000:73:00.0
+mlx5_1 0000:73:00.1
+
+===PXEINV gputopo===
+\t\u001b[4mGPU0\tGPU1\tGPU2\tNIC0\tCPU Affinity\tNUMA Affinity\tGPU NUMA ID\u001b[0m
+GPU0\t X \tNV18\tNV18\tPXB\t0-63\t0\t\tN/A
+GPU1\tNV18\t X \tNV18\tNODE\t0-63\t0\t\tN/A
+GPU2\tNV18\tNV18\t X \tSYS\t64-127\t1\t\tN/A
+NIC0\tPXB\tNODE\tSYS\t X \t\t\t
+
+NIC Legend:
+
+  NIC0: mlx5_0
+
+===PXEINV numa===
+NUMA node0 CPU(s):                       0-63
+NUMA node1 CPU(s):                       64-127
+
 ===PXEINV end===
 `;
 
@@ -229,7 +258,7 @@ test("parses the in-system collection output into components", () => {
 });
 
 test("the collection script stays read-only and marks every section", () => {
-  for (const section of ["tools", "dmidecode", "bmc", "lsblk", "smart", "gpu", "net", "vpd", "end"]) {
+  for (const section of ["tools", "dmidecode", "bmc", "lsblk", "smart", "gpu", "net", "vpd", "pcitopo", "rdma", "gputopo", "numa", "end"]) {
     assert.match(INVENTORY_SCRIPT, new RegExp(`sec ${section}\\n`));
   }
   assert.doesNotMatch(INVENTORY_SCRIPT, /\b(rm|dd|mkfs|wipefs|reboot|shutdown)\b/);
@@ -275,6 +304,43 @@ const REDFISH: Record<string, RedfishDoc> = {
 };
 
 const fakeRedfish: RedfishGet = async (p) => REDFISH[p] ?? null;
+
+test("builds the GPU and NIC topology the way nvidia-smi topo -m names it", () => {
+  const { topology } = parseOsInventory(OS_OUTPUT);
+  assert.ok(topology);
+  assert.deepEqual(
+    topology.devices.map((d) => [d.kind, d.pci, d.name, d.numa, d.root]),
+    [
+      ["gpu", "0000:06:00.0", "GPU0", 0, "pci0000:00"],
+      ["gpu", "0000:16:00.0", "GPU1", 0, "pci0000:10"],
+      ["gpu", "0000:66:00.0", "GPU2", 1, "pci0000:60"],
+      ["nic", "0000:51:00.0", "eno1", 0, "pci0000:50"],
+      ["nic", "0000:73:00.0", "enp115s0f0np0", 0, "pci0000:00"],
+      ["nic", "0000:73:00.1", "mlx5_1", 0, "pci0000:00"],
+    ],
+    "ASPEED 显卡不算 GPU；没有网口名的用 RDMA 名",
+  );
+  const cx8 = topology.devices.find((d) => d.pci === "0000:73:00.0")!;
+  assert.deepEqual(cx8.rdma, ["mlx5_0"]);
+  assert.equal(cx8.sn, "NICSN0001");
+  assert.deepEqual(cx8.bridges, ["0000:00:01.1", "0000:01:00.0", "0000:02:00.0"]);
+  assert.deepEqual(topology.numaCpus, { "0": "0-63", "1": "64-127" });
+  assert.equal(topology.nvlinks.length, 3);
+
+  const dev = (pci: string) => topology.devices.find((d) => d.pci === pci)!;
+  const link = (a: string, b: string) => linkText(linkBetween(topology, dev(a), dev(b)));
+  assert.equal(link("0000:06:00.0", "0000:16:00.0"), "NV18");
+  assert.equal(link("0000:06:00.0", "0000:73:00.0"), "PXB", "同一个交换芯片下的 GPU 和网卡");
+  assert.equal(link("0000:73:00.0", "0000:73:00.1"), "PIX", "同一张卡的两个口");
+  assert.equal(link("0000:16:00.0", "0000:73:00.0"), "NODE");
+  assert.equal(link("0000:66:00.0", "0000:73:00.0"), "SYS");
+  assert.equal(link("0000:06:00.0", "0000:06:00.0"), "X");
+  const sibling = { ...dev("0000:51:00.0"), pci: "0000:52:00.0", bridges: ["0000:50:03.3"] };
+  assert.equal(linkText(linkBetween(topology, dev("0000:51:00.0"), sibling)), "PHB", "同一个根复合体的不同根端口");
+
+  assert.deepEqual(parseNvlinks("GPU0\t X \n"), []);
+  assert.equal(parseOsInventory(OS_OUTPUT.replace(/===PXEINV pcitopo===[\s\S]*?(?====PXEINV rdma)/, "")).topology, undefined);
+});
 
 test("walks Redfish across pages and maps it to components", async () => {
   const raw = await crawlRedfish(fakeRedfish);

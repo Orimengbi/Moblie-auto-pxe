@@ -404,6 +404,35 @@ export interface InventorySnapshot {
   changes?: HwChange[];
   /** 没装的工具、读不到的 Redfish 路径等，只提示不算失败。 */
   warnings: string[];
+  /** GPU 和网卡的 PCIe/NVLink 拓扑，只有系统内采集有。 */
+  topology?: Topology;
+}
+
+/** 拓扑图里的一个 PCIe 设备：一块 GPU，或网卡的一个 function（一个口）。 */
+export interface TopoDevice {
+  /** 0000:06:00.0 */
+  pci: string;
+  kind: "gpu" | "nic";
+  /** GPU0，或者网口名。 */
+  name: string;
+  model: string;
+  sn: string;
+  numa: number | null;
+  /** 根复合体，例如 pci0000:00。 */
+  root: string;
+  /** 从根端口往下到这个设备之前经过的桥。 */
+  bridges: string[];
+  netdevs: string[];
+  /** RDMA 设备名，例如 mlx5_0。 */
+  rdma: string[];
+}
+
+export interface Topology {
+  devices: TopoDevice[];
+  /** GPU 之间的 NVLink 条数，a、b 是 PCI 地址。 */
+  nvlinks: { a: string; b: string; count: number }[];
+  /** NUMA 节点号到 CPU 范围，例如 "0": "0-63"。 */
+  numaCpus: Record<string, string>;
 }
 
 /** 基准配置的一条：这一类、这个型号（和这些属性）应该有 count 个。firmware 填了就要求版本一致。 */
