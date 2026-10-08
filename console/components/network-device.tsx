@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { KIND_LABEL } from "@/lib/inventory";
 import type { InventorySnapshot, MonitorState, NetPort } from "@/lib/types";
+import { formatTime } from "@/lib/time";
 
 interface View {
   snapshot: InventorySnapshot | null;
@@ -96,7 +97,7 @@ export function NetworkDevice({ assetId }: { assetId: string }) {
             <dd className="text-xs">{uptimeText(snapshot.system?.uptime) || "—"}</dd>
             <dt className="text-muted-foreground">采集</dt>
             <dd className="text-xs">
-              {new Date(snapshot.at).toLocaleString("zh-CN")}，{snapshot.host}，物理口 {physical.length} 个，up {physical.filter((port) => operOf(port) === "up").length} 个
+              {formatTime(snapshot.at)}，{snapshot.host}，物理口 {physical.length} 个，up {physical.filter((port) => operOf(port) === "up").length} 个
             </dd>
           </dl>
           {snapshot.warnings.length ? <p className="text-xs text-muted-foreground">提示：{snapshot.warnings.join("；")}</p> : null}

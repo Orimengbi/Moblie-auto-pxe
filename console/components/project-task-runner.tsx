@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import type { RemoteFile, RemoteTask, TaskHostSource, TaskTargetStatus } from "@/lib/types";
+import { formatTime } from "@/lib/time";
 
 export const TARGET: Record<TaskTargetStatus, string> = {
   pending: "排队",
@@ -268,7 +269,7 @@ export function ProjectTaskRunner({
               </Badge>
               <span className="font-medium">{task.name}</span>
               <span className="text-xs text-muted-foreground">{counts(task)}</span>
-              <span className="text-xs text-muted-foreground">{new Date(task.createdAt).toLocaleString("zh-CN")}</span>
+              <span className="text-xs text-muted-foreground">{formatTime(task.createdAt)}</span>
               <Link href={`/tasks/${task.id}`} className="text-xs underline underline-offset-4">
                 详情
               </Link>

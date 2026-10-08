@@ -2,6 +2,7 @@ import { PART_KINDS, PART_STATUS } from "./asset-labels.ts";
 import { addEvent, getAsset } from "./assets.ts";
 import { db, transaction, type SqlValue } from "./db.ts";
 import { getSite } from "./racks.ts";
+import { assertDate, cleanText } from "./validate.ts";
 import type { HwChange, HwComponent, HwKind, Part, PartEvent, PartKind, PartStatus } from "./types.ts";
 
 /**
@@ -59,6 +60,7 @@ export function getPart(id: string): Part | null {
 /** 序列号不分大小写对（采集到的和手填的大小写常常不一样）。 */
 export function findPartBySn(sn: string): Part | null {
   if (!sn.trim()) return null;
+  // 走 parts_sn_upper 索引。
   const row = db().prepare("SELECT * FROM parts WHERE sn != '' AND UPPER(sn) = UPPER(?)").get(sn.trim());
   return row ? toPart(row) : null;
 }
@@ -78,9 +80,6 @@ export function listPartEvents(partId: string): PartEvent[] {
     .map((row) => ({ id: Number(row.id), partId: String(row.part_id), at: String(row.at), actor: String(row.actor), kind: String(row.kind), text: String(row.text), ticketId: String(row.ticket_id) }));
 }
 
-function cleanText(value: unknown, max: number): string {
-  return String(value ?? "").replace(/[\r\0]/g, "").trim().slice(0, max);
-}
 
 function assertKind(kind: unknown): PartKind {
   if (!Object.hasOwn(PART_KINDS, String(kind))) throw new Error("备件类型不对");
@@ -131,8 +130,7 @@ export function receiveParts(input: ReceiveInput, actor: string): Part[] {
   if (!Number.isInteger(quantity) || quantity < 1 || quantity > 1000) throw new Error("填序列号，或者填 1 到 1000 的数量");
   const repeated = sns.find((sn, index) => sns.findIndex((other) => other.toUpperCase() === sn.toUpperCase()) !== index);
   if (repeated) throw new Error(`序列号 ${repeated} 写了两遍`);
-  const warrantyEnd = cleanText(input.warrantyEnd, 10);
-  if (warrantyEnd && !/^\d{4}-\d{2}-\d{2}$/.test(warrantyEnd)) throw new Error("保修到期要写成 2026-10-08 这样的日期");
+  const warrantyEnd = assertDate(cleanText(input.warrantyEnd, 10), "保修到期");
   return transaction(db(), () => {
     const now = new Date().toISOString();
     const siteId = siteOrNull(input.siteId);
@@ -192,8 +190,7 @@ export function updatePart(id: string, input: PartEdit, actor: string): Part {
     if (input.supplier !== undefined) next.supplier = cleanText(input.supplier, 120);
     if (input.purchaseOrder !== undefined) next.purchaseOrder = cleanText(input.purchaseOrder, 120);
     if (input.warrantyEnd !== undefined) {
-      next.warrantyEnd = cleanText(input.warrantyEnd, 10);
-      if (next.warrantyEnd && !/^\d{4}-\d{2}-\d{2}$/.test(next.warrantyEnd)) throw new Error("保修到期要写成 2026-10-08 这样的日期");
+      next.warrantyEnd = assertDate(cleanText(input.warrantyEnd, 10), "保修到期");
     }
     if (input.note !== undefined) next.note = cleanText(input.note, 1000);
     if (!next.model) throw new Error("型号必填");

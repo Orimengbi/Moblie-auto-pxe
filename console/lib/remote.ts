@@ -167,6 +167,8 @@ export function startTask(task: RemoteTask): void {
     env: process.env,
   });
   child.unref();
+  // 子进程已经拿到了这个文件，父进程这边要关掉，不然每个任务漏一个句柄。
+  fs.closeSync(log);
 }
 
 export interface ExecResult {
@@ -183,14 +185,17 @@ export const defaultExec: Exec = (command, args, stdin, deadline, limit = OUTPUT
     const child = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"] });
     let output = "";
     let timedOut = false;
-    const keep = (chunk: Buffer) => {
-      output += chunk.toString("utf8");
+    const keep = (chunk: string) => {
+      output += chunk;
       if (output.length > limit * 2) output = output.slice(-limit);
     };
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill("SIGKILL");
     }, Math.max(0, deadline - Date.now()));
+    // 按 UTF-8 解码流，中文被切在两块之间时不会变成乱码。
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
     child.stdout.on("data", keep);
     child.stderr.on("data", keep);
     child.stdin.on("error", () => undefined);

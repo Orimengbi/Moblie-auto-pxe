@@ -37,7 +37,7 @@ test("asset tags follow the template and change as soon as it is saved", () => {
   // 手动编号优先，不能和别人的撞。
   assets.updateAsset(second.id, { tagOverride: "CORE-SW-1" }, "tester");
   assert.equal(assets.getAsset(second.id)?.tag, "CORE-SW-1");
-  assert.throws(() => assets.updateAsset(first.id, { tagOverride: "CORE-SW-1" }, "tester"), /已经是/);
+  assert.throws(() => assets.updateAsset(first.id, { tagOverride: "CORE-SW-1" }, "tester"), /CORE-SW-1 已经/);
 
   assert.throws(() => assets.deleteCustomer(acme.id), /还有 1 台/);
   assets.saveTagSettings(assets.DEFAULT_TAG_SETTINGS);
@@ -288,4 +288,43 @@ test("racks can be created several rows at a time and imported from a sheet", as
   assert.deepEqual([done.created, done.updated, done.errors], [2, 1, 3]);
   assert.equal(racks.listRacks(site.id).find((rack) => rack.name === "D01")?.powerKw, "10kW");
   assert.equal(racks.listRacks(site.id).find((rack) => rack.name === "D02")?.heightU, 52);
+});
+
+test("a failed commit does not leave later transactions broken", async () => {
+  const { db, transaction } = await import("./db.ts");
+  // 外键检查推迟到提交时：插一条指向不存在机柜的资产，COMMIT 才失败。
+  assert.throws(
+    () =>
+      transaction(db(), () => {
+        db().exec("PRAGMA defer_foreign_keys = ON");
+        db().prepare("UPDATE assets SET rack_id = 'no-such-rack' WHERE sn = 'SRV-001'").run();
+      }),
+    /FOREIGN KEY/,
+  );
+  assert.equal(assets.findAssetBySn("SRV-001")?.rackId, null, "失败的那次没写进去");
+  // 之后的事务（包括嵌套的）照常能用。
+  const made = assets.createAsset({ sn: "after-failed-commit" }, "alice");
+  assert.equal(assets.getAsset(made.id)?.sn, "AFTER-FAILED-COMMIT");
+});
+
+test("tags stay unique in both directions and dates must exist", async () => {
+  const { assertDate } = await import("./validate.ts");
+  const { formatTime } = await import("./time.ts");
+  // 先有人手动占了下一台按规则会得到的编号（占的这台自己也会用掉一个序号，所以是再下一个）。
+  const next = assets.listAssets().reduce((max, item) => Math.max(max, item.seq), 0) + 2;
+  const upcoming = assets.renderTag({ seq: next, type: "server", sn: "X", customerId: null, createdAt: new Date().toISOString(), tagOverride: "" }, assets.getTagSettings(), new Map());
+  assets.createAsset({ sn: "tag-squatter", tagOverride: upcoming }, "alice");
+  assert.throws(() => assets.createAsset({ sn: "tag-victim" }, "alice"), /已经手动指定给了 TAG-SQUATTER/);
+
+  assert.equal(assertDate("2028-02-29", "日期"), "2028-02-29");
+  assert.throws(() => assertDate("2026-13-45", "保修到期"), /保修到期要写成/);
+  assert.throws(() => assertDate("2026-02-30", "保修到期"), /保修到期要写成/);
+  assert.throws(() => assets.updateAsset(assets.findAssetBySn("TAG-SQUATTER")!.id, { warrantyEnd: "2026-02-30" }, "alice"), /保修到期/);
+  assert.equal(formatTime("2026-10-08T16:30:00Z", "short"), "10/09 00:30", "按北京时间显示");
+});
+
+test("xlsx downloads can have Chinese file names", async () => {
+  const { xlsxResponse } = await import("./api.ts");
+  const response = xlsxResponse([["a"]], "表", "plan-机房二.xlsx");
+  assert.match(response.headers.get("content-disposition") || "", /filename="plan-___\.xlsx"; filename\*=UTF-8''plan-%E6%9C%BA%E6%88%BF%E4%BA%8C\.xlsx/);
 });

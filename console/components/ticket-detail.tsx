@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { ASSET_STATUS, PART_KINDS, PART_STATUS, TICKET_KINDS, TICKET_PRIORITY, TICKET_STATUS } from "@/lib/asset-labels";
 import type { AssetStatus, HwComponent, HwKind, InventorySnapshot, Part, PartKind, Ticket, TicketLog, TicketStatus } from "@/lib/types";
+import { formatTime } from "@/lib/time";
 
 const SELECT = "h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm";
 
@@ -103,8 +104,8 @@ export function TicketDetail({ id }: { id: string }) {
           <span className="text-sm text-muted-foreground">没有关联资产</span>
         )}
         <span className="text-xs text-muted-foreground">
-          {ticket.reporter} 建于 {new Date(ticket.createdAt).toLocaleString("zh-CN")}
-          {ticket.resolvedAt ? ` · 解决于 ${new Date(ticket.resolvedAt).toLocaleString("zh-CN")}` : ""}
+          {ticket.reporter} 建于 {formatTime(ticket.createdAt)}
+          {ticket.resolvedAt ? ` · 解决于 ${formatTime(ticket.resolvedAt)}` : ""}
         </span>
       </div>
       <div className="flex flex-wrap gap-2">
@@ -215,7 +216,7 @@ export function TicketDetail({ id }: { id: string }) {
             {view.logs.map((entry) => (
               <li key={entry.id} className="grid gap-0.5 border-l-2 pl-3 text-sm">
                 <div className="flex flex-wrap gap-x-2 text-xs text-muted-foreground">
-                  <span>{new Date(entry.at).toLocaleString("zh-CN")}</span>
+                  <span>{formatTime(entry.at)}</span>
                   <span>{entry.actor}</span>
                   <span>{LOG_KIND[entry.kind] || entry.kind}</span>
                 </div>

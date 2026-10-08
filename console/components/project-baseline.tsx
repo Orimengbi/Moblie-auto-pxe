@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ATTR_LABEL, KIND_LABEL, KIND_ORDER, SOURCE_LABEL } from "@/lib/inventory";
 import type { Baseline, BaselineRule, HwKind } from "@/lib/types";
+import { formatTime } from "@/lib/time";
 
 /** 装机批次的基准配置：从一台好机器生成后，在这里改数量、固件要求，删掉不想检查的条目。 */
 export function ProjectBaseline({ projectId, baseline, matched, mismatched }: { projectId: string; baseline: Baseline | null; matched: number; mismatched: number }) {
@@ -64,7 +65,7 @@ export function ProjectBaseline({ projectId, baseline, matched, mismatched }: { 
   return (
     <div className="grid gap-3">
       <p className="text-sm text-muted-foreground">
-        按{SOURCE_LABEL[baseline.source]}采集检查{baseline.fromSn ? `，从 ${baseline.fromSn} 生成` : ""}，{new Date(baseline.updatedAt).toLocaleString("zh-CN")} 更新。
+        按{SOURCE_LABEL[baseline.source]}采集检查{baseline.fromSn ? `，从 ${baseline.fromSn} 生成` : ""}，{formatTime(baseline.updatedAt)} 更新。
         已采集的机器里 {matched} 台符合，{mismatched} 台不符合。型号按文字比（不分大小写），固件要求留空就不检查固件；基准里没有的类别不检查。
       </p>
       <div className="overflow-x-auto">

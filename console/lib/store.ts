@@ -1669,7 +1669,7 @@ async function reconcileOnce(projectId: string, options?: ReconcileOptions): Pro
 /** 这一行在对账期间被别处改过时，保留那边的状态，只补上对 BMC 做过的事和探测结果。 */
 function saveReconciled(row: ServerRow, base: string): Promise<boolean> {
   return withLock(() => {
-    const current = listServers().find((item) => item.id === row.id);
+    const current = readServer(row.id);
     if (!current) return false;
     const now = new Date().toISOString();
     if (current.updatedAt === base) {
@@ -1685,14 +1685,24 @@ function saveReconciled(row: ServerRow, base: string): Promise<boolean> {
       power: row.power,
       networkApplied: row.networkApplied,
       passwordChanged: row.passwordChanged,
+      // 这一轮已经让它从网卡启动了（断电重启过），要记住，不然下一轮又重启一次。
+      ...(row.stage === "ready" && current.stage !== "installing" ? { stage: row.stage, detail: row.detail } : {}),
       updatedAt: now,
     });
     return true;
   });
 }
 
+/** 按 id 直接读一行，不扫整个目录。 */
+function readServer(id: string): ServerRow | null {
+  if (!/^[0-9a-f-]{36}$/.test(id)) return null;
+  const row = readJson<ServerRow>(serverPath(id));
+  return row && row.sn && row.projectId ? hydrateServer(row) : null;
+}
+
 export function getServer(projectId: string, serverId: string): ServerRow | null {
-  return listServers().find((item) => item.projectId === projectId && item.id === serverId) || null;
+  const row = readServer(serverId);
+  return row?.projectId === projectId ? row : null;
 }
 
 /** 这台资产在装机批次里的行，新的在前。 */

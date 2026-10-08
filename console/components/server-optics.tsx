@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { groupModules, powerLevel, type OpticsModule } from "@/lib/optics";
 import type { OpticsPort, OpticsReading } from "@/lib/types";
+import { formatTime } from "@/lib/time";
 
 const COLUMNS = [
   { key: "port", label: "端口" },
@@ -128,7 +129,7 @@ export function ServerOptics({ row }: { row: { id: string; sn: string } }) {
       {reading ? (
         <>
           <p className="text-sm">
-            {new Date(reading.at).toLocaleString("zh-CN")} 从 <span className="font-mono">{reading.host}</span> 读到：{reading.ports.length ? summary(reading.ports) : "没有发现光模块"}。
+            {formatTime(reading.at)} 从 <span className="font-mono">{reading.host}</span> 读到：{reading.ports.length ? summary(reading.ports) : "没有发现光模块"}。
           </p>
           {reading.ports.length ? (
             <div className="overflow-x-auto">

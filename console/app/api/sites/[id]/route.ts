@@ -1,4 +1,5 @@
 import { audited, jsonError, readJson } from "@/lib/api";
+import { requireAdmin } from "@/lib/auth";
 import { deleteSite, getSite, updateSite, type SiteInput } from "@/lib/racks";
 
 export const dynamic = "force-dynamic";
@@ -17,6 +18,8 @@ export async function PATCH(request: Request, context: Context) {
 
 export async function DELETE(request: Request, context: Context) {
   try {
+    // 删除统一只有管理员能做。
+    requireAdmin(request);
     const { id } = await context.params;
     const site = getSite(id);
     await audited(request, { action: "删除机房", targetType: "site", targetId: id, targetLabel: site ? `${site.code} ${site.name}` : id }, () => deleteSite(id));

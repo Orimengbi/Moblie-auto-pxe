@@ -1,4 +1,4 @@
-import { jsonError } from "@/lib/api";
+import { audited, jsonError } from "@/lib/api";
 import { startExtract } from "@/lib/jobs";
 import { UploadConflict, appendUpload, discardUpload, uploadStatus } from "@/lib/uploads";
 
@@ -31,10 +31,11 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   }
 }
 
-export async function DELETE(_: Request, context: { params: Promise<{ id: string }> }) {
+/** 取消一个没传完的上传（删掉已经传上来的部分）。只是取消操作，不限管理员，但记审计。 */
+export async function DELETE(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await context.params;
-    discardUpload(id);
+    await audited(request, { action: "取消镜像上传", targetType: "image", targetId: id }, () => discardUpload(id));
     return Response.json({ ok: true });
   } catch (error) {
     return jsonError(error, 404);

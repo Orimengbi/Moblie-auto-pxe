@@ -1,5 +1,4 @@
-import { auditRequest, auditTask, jsonError, readJson } from "@/lib/api";
-import { requireUser } from "@/lib/auth";
+import { auditRequest, auditTask, jsonError, readJson, userOrResponse } from "@/lib/api";
 import { createTask, startTask, type TaskInput } from "@/lib/remote";
 import { listImages, listAllTasks, listProjects } from "@/lib/store";
 import type { TaskFeed, TaskSummary } from "@/lib/types";
@@ -40,7 +39,8 @@ export function GET() {
 
 /** 对选中的资产发起批量任务（脚本、采集硬件、交付清理）。从装机批次页发起时带 projectId。 */
 export async function POST(request: Request) {
-  const identity = requireUser(request);
+  const identity = userOrResponse(request);
+  if (identity instanceof Response) return identity;
   try {
     const task = createTask(await readJson<TaskInput>(request));
     startTask(task);

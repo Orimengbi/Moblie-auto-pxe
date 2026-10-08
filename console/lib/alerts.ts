@@ -3,6 +3,7 @@ import { addEvent, getAsset } from "./assets.ts";
 import { db, transaction, type SqlValue } from "./db.ts";
 import { createTicket } from "./tickets.ts";
 import type { Alert, AlertSeverity, AlertSource, AlertStatus, Ticket } from "./types.ts";
+import { formatTime } from "./time.ts";
 
 /**
  * 告警。监控每查一遍得出一组「发现」，和已有的告警对：
@@ -142,7 +143,7 @@ export function alertToTicket(id: number, actor: string): Ticket {
         title: alert.title,
         kind: "fault",
         priority: alert.severity === "critical" ? "high" : "normal",
-        description: `由告警转来（${new Date(alert.firstAt).toLocaleString("zh-CN")} 起，${alert.count} 次）\n${alert.detail}`,
+        description: `由告警转来（${formatTime(alert.firstAt)} 起，${alert.count} 次）\n${alert.detail}`,
       },
       actor,
     );

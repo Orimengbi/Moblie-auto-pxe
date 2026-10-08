@@ -16,6 +16,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import type { AssetRow } from "@/lib/asset-view";
 import { ASSET_STATUS, ASSET_TYPES, WARRANTY_LABEL } from "@/lib/asset-labels";
 import type { AssetStatus, Customer, RemoteFile, RemoteTask, Site } from "@/lib/types";
+import { formatTime } from "@/lib/time";
 
 const SELECT = "h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm";
 
@@ -48,7 +49,7 @@ const EMPTY: Filters = { q: "", site: "", status: "", customer: "", type: "", wa
 function hardwareText(row: AssetRow): string {
   const latest = [row.inventory.os?.at, row.inventory.bmc?.at].filter(Boolean).sort().pop();
   if (!latest) return "未采集";
-  return new Date(latest).toLocaleDateString("zh-CN");
+  return formatTime(latest, "date");
 }
 
 function matches(row: AssetRow, filters: Filters): boolean {

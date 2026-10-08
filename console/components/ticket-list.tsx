@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { OPEN_TICKET_STATUS, TICKET_KINDS, TICKET_PRIORITY, TICKET_STATUS } from "@/lib/asset-labels";
 import type { Ticket, TicketPriority } from "@/lib/types";
+import { formatTime } from "@/lib/time";
 
 const SELECT = "h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm";
 
@@ -109,7 +110,7 @@ export function TicketList({ tickets, me }: { tickets: TicketRow[]; me: string }
                 </TableCell>
                 <TableCell className="text-sm">{TICKET_STATUS[ticket.status]}</TableCell>
                 <TableCell className="text-sm">{ticket.assignee || <span className="text-muted-foreground">未指派</span>}</TableCell>
-                <TableCell className="text-xs whitespace-nowrap text-muted-foreground">{new Date(ticket.updatedAt).toLocaleString("zh-CN")}</TableCell>
+                <TableCell className="text-xs whitespace-nowrap text-muted-foreground">{formatTime(ticket.updatedAt)}</TableCell>
               </TableRow>
             ))}
           </TableBody>

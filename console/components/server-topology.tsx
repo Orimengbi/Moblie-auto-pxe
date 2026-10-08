@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { cardKey, LINK_LABEL, linkBetween, linkText, type LinkType } from "@/lib/topology";
 import type { InventorySnapshot, Topology, TopoDevice } from "@/lib/types";
+import { formatTime } from "@/lib/time";
 
 const LINK_CLASS: Record<LinkType, string> = {
   X: "bg-muted text-muted-foreground",
@@ -144,7 +145,7 @@ export function ServerTopology({ row }: { row: { id: string } }) {
       <div className="grid gap-1">
         <h3 className="font-medium">GPU / 网卡拓扑</h3>
         <p className="text-xs text-muted-foreground">
-          来自 {new Date(snapshot.at).toLocaleString("zh-CN")} 的系统内采集。PCIe 关系按 sysfs 里的上游路径算，和 nvidia-smi topo -m 的叫法一致；NVLink 取自 nvidia-smi。
+          来自 {formatTime(snapshot.at)} 的系统内采集。PCIe 关系按 sysfs 里的上游路径算，和 nvidia-smi topo -m 的叫法一致；NVLink 取自 nvidia-smi。
         </p>
       </div>
 

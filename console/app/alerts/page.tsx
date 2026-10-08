@@ -3,6 +3,7 @@ import { PageHeader } from "@/components/page-header";
 import { listAlerts } from "@/lib/alerts";
 import { listAssets } from "@/lib/assets";
 import { getMonitorSettings, listMonitorStates } from "@/lib/monitor";
+import { formatTime } from "@/lib/time";
 
 export const dynamic = "force-dynamic";
 
@@ -15,7 +16,7 @@ export default function AlertsPage() {
   const last = states.map((state) => state.bmcAt).sort().pop();
   const down = states.filter((state) => state.bmcAt && !state.bmcOk && watched.some((asset) => asset.id === state.assetId)).length;
   const summary = settings.enabled
-    ? `监控 ${watched.length} 台（${watched.filter((asset) => asset.bmcIp).length} 台有 BMC 地址），BMC 每 ${settings.bmcIntervalMin} 分钟查一次，系统内${settings.osIntervalMin ? `每 ${settings.osIntervalMin} 分钟` : "不查"}。${last ? `最近一次 ${new Date(last).toLocaleString("zh-CN")}。` : "还没查过。"}${down ? `${down} 台 BMC 现在连不上。` : ""}`
+    ? `监控 ${watched.length} 台（${watched.filter((asset) => asset.bmcIp).length} 台有 BMC 地址），BMC 每 ${settings.bmcIntervalMin} 分钟查一次，系统内${settings.osIntervalMin ? `每 ${settings.osIntervalMin} 分钟` : "不查"}。${last ? `最近一次 ${formatTime(last)}。` : "还没查过。"}${down ? `${down} 台 BMC 现在连不上。` : ""}`
     : "监控已关闭，在「设置」里打开。";
   const alerts = listAlerts().map((alert) => ({ ...alert, assetTag: byId.get(alert.assetId)?.tag || "", assetSn: byId.get(alert.assetId)?.sn || "" }));
   return (

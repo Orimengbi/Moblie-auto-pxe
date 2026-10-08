@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { AuditEntry } from "@/lib/types";
+import { formatTime } from "@/lib/time";
 
 /** 操作审计，新的在前，往下翻页。 */
 export function AuditLog() {
@@ -71,7 +72,7 @@ export function AuditLog() {
             ) : null}
             {entries.map((entry) => (
               <TableRow key={entry.id}>
-                <TableCell className="text-xs whitespace-nowrap">{new Date(entry.at).toLocaleString("zh-CN")}</TableCell>
+                <TableCell className="text-xs whitespace-nowrap">{formatTime(entry.at)}</TableCell>
                 <TableCell className="text-sm">{entry.actor}</TableCell>
                 <TableCell className="font-mono text-xs">{entry.ip}</TableCell>
                 <TableCell className={`text-sm ${entry.ok ? "" : "text-destructive"}`}>

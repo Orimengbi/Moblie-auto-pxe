@@ -912,6 +912,8 @@ export interface MonitorState {
   selLast: string;
   selRecent: SelEntry[];
   osAt: string;
+  /** 上次系统内检查成功的时间；Xid 从这里往后查，失败的那几次不算。 */
+  osOkAt: string;
   osOk: boolean;
   osError: string;
   gpus: GpuHealth[];

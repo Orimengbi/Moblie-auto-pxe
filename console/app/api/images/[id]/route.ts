@@ -1,4 +1,5 @@
 import { audited, jsonError } from "@/lib/api";
+import { requireAdmin } from "@/lib/auth";
 import { deleteImage, getImage } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
@@ -12,6 +13,8 @@ export async function GET(_: Request, context: { params: Promise<{ id: string }>
 
 export async function DELETE(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
+    // 删除统一只有管理员能做。
+    requireAdmin(request);
     const { id } = await context.params;
     const image = getImage(id);
     await audited(request, { action: "删除镜像", targetType: "image", targetId: id, targetLabel: image?.name || image?.filename }, () => deleteImage(id));

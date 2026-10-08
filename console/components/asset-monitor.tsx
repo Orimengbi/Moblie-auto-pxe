@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ALERT_SEVERITY, ALERT_STATUS } from "@/lib/asset-labels";
 import type { Alert, MonitorState } from "@/lib/types";
+import { formatTime } from "@/lib/time";
 
 interface View {
   state: MonitorState;
@@ -15,7 +16,7 @@ interface View {
 }
 
 function when(at: string): string {
-  return at ? new Date(at).toLocaleString("zh-CN") : "还没查过";
+  return at ? formatTime(at) : "还没查过";
 }
 
 /** 侧边栏「监控」：这台的告警、传感器（异常的在前）、最近的 BMC 事件、GPU 和硬盘。 */
@@ -86,7 +87,7 @@ export function AssetMonitor({ assetId }: { assetId: string }) {
               </div>
               <span className="text-xs break-all text-muted-foreground">{alert.detail}</span>
               <div className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
-                <span>{new Date(alert.firstAt).toLocaleString("zh-CN")}</span>
+                <span>{formatTime(alert.firstAt)}</span>
                 {alert.ticketId ? (
                   <Link href={`/tickets/${alert.ticketId}`} className="ml-2 underline underline-offset-4">
                     看工单

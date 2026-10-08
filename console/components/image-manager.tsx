@@ -10,6 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { formatBytes, fingerprintOf, percent, useUploads, type LiveUpload, type PendingUpload } from "@/components/upload-provider";
 import { ISO_ACCEPT, ISO_FORMATS_LABEL } from "@/lib/iso-name";
 import { FAMILY_LABEL, type ImageRecord } from "@/lib/types";
+import { formatTime } from "@/lib/time";
 
 export type { PendingUpload } from "@/components/upload-provider";
 
@@ -174,7 +175,7 @@ export function ImageManager({ images, uploads }: { images: ImageRecord[]; uploa
                 </div>
                 <p className="text-xs text-muted-foreground">
                   {formatBytes(item.offset)} / {formatBytes(item.size)}（{percent(item.offset, item.size)}%）
-                  {running ? "" : ` · 最后更新 ${new Date(item.updatedAt).toLocaleString("zh-CN")}`}
+                  {running ? "" : ` · 最后更新 ${formatTime(item.updatedAt)}`}
                   {!running && !live.hasFile(item.id) && !item.id.startsWith("failed-") ? " · 继续时需要重新选择这个文件" : ""}
                 </p>
                 {taskError ? <p className="text-xs text-destructive">{taskError}</p> : null}

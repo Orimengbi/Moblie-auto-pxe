@@ -1,24 +1,15 @@
-import { auditRequest, jsonError } from "@/lib/api";
-import { requireUser } from "@/lib/auth";
+import { auditRequest, jsonError, readSheetUpload, userOrResponse } from "@/lib/api";
 import { importRacks } from "@/lib/racks";
-import * as XLSX from "xlsx";
 
 export const dynamic = "force-dynamic";
 
 /** Excel 导入机柜。dryRun=1 只预览；siteId 是表里没有「机房」列时用的机房。 */
 export async function POST(request: Request) {
-  const identity = requireUser(request);
+  const identity = userOrResponse(request);
+  if (identity instanceof Response) return identity;
   try {
-    const form = await request.formData();
-    const file = form.get("file");
+    const { form, file, rows } = await readSheetUpload(request, { maxMB: 5, raw: false });
     const dryRun = form.get("dryRun") === "1";
-    if (!(file instanceof File)) throw new Error("请选择 Excel 文件");
-    if (file.size > 5 * 1024 * 1024) throw new Error("表格不能超过 5MB");
-    const buffer = Buffer.from(await file.arrayBuffer());
-    const book = file.name.toLowerCase().endsWith(".csv") ? XLSX.read(buffer.toString("utf8"), { type: "string", raw: true }) : XLSX.read(buffer, { type: "buffer" });
-    const sheet = book.Sheets[book.SheetNames[0]];
-    if (!sheet) throw new Error("Excel 里没有工作表");
-    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: "" }) as unknown[][];
     if (rows.length > 5001) throw new Error("一次最多导入 5000 行");
     const result = importRacks(rows, String(form.get("siteId") || "") || null, { dryRun });
     if (!dryRun) {

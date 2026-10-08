@@ -190,13 +190,15 @@ export async function powerStatus(host: string, username: string, password: stri
 
 /** timeoutMs 默认 20 秒；读整张传感器表（sdr）要给长一点。 */
 export async function defaultIpmiExec(host: string, username: string, password: string, args: string[], timeoutMs = 20000): Promise<IpmiExecResult> {
-  const file = path.join(os.tmpdir(), `pxe-ipmi-${process.pid}-${Date.now()}.pw`);
+  // 每次一个独立的临时目录：监控会在同一毫秒里并发查好几台，按时间起名会撞。
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pxe-ipmi-"));
+  const file = path.join(dir, "pw");
   fs.writeFileSync(file, password, { mode: 0o600 });
   try {
     // -v 让 ipmitool 说出登录失败的原因，见 ipmiFailure。
     return await runIpmitool(["-v", "-I", "lanplus", "-H", host, "-U", username, "-f", file, ...args], timeoutMs);
   } finally {
-    fs.rmSync(file, { force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 }
 

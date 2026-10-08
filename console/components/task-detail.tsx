@@ -6,6 +6,7 @@ import { HOST_SOURCE, TARGET } from "@/components/project-task-runner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { RemoteTask, TaskTargetStatus } from "@/lib/types";
+import { formatTime } from "@/lib/time";
 
 const KIND: Record<RemoteTask["kind"], string> = { script: "执行脚本", inventory: "采集硬件配置", revoke: "交付清理" };
 
@@ -44,8 +45,8 @@ export function TaskDetail({ initial, project, tags }: { initial: RemoteTask; pr
           {failed.length ? `，没成功 ${failed.length}` : ""}
         </span>
         <span className="text-muted-foreground">
-          {new Date(task.createdAt).toLocaleString("zh-CN")}
-          {task.finishedAt ? ` → ${new Date(task.finishedAt).toLocaleString("zh-CN")}` : ""}
+          {formatTime(task.createdAt)}
+          {task.finishedAt ? ` → ${formatTime(task.finishedAt)}` : ""}
         </span>
         <span className="text-muted-foreground">
           {project ? (

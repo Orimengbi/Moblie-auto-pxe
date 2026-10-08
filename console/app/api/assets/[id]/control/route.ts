@@ -1,13 +1,13 @@
-import { auditRequest, jsonError, readJson } from "@/lib/api";
+import { auditRequest, jsonError, readJson, userOrResponse } from "@/lib/api";
 import { getAsset } from "@/lib/assets";
-import { requireUser } from "@/lib/auth";
 import { controlAsset, type ServerControl } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
-  const identity = requireUser(request);
+  const identity = userOrResponse(request);
+  if (identity instanceof Response) return identity;
   const asset = getAsset(id);
   const input = await readJson<ServerControl>(request).catch(() => ({}) as ServerControl);
   const label = asset ? `${asset.tag} ${asset.sn}` : id;

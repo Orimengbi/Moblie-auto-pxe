@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ALERT_SEVERITY, ALERT_SOURCE, ALERT_STATUS } from "@/lib/asset-labels";
 import type { Alert } from "@/lib/types";
+import { formatTime } from "@/lib/time";
 
 const SELECT = "h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm";
 
@@ -22,7 +23,7 @@ export async function alertAction(id: number, action: "ack" | "resolve" | "ticke
 }
 
 function when(at: string): string {
-  return at ? new Date(at).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "";
+  return at ? formatTime(at, "short") : "";
 }
 
 /** 告警列表：默认只看没恢复的，严重的在前。每 30 秒刷新一次。 */

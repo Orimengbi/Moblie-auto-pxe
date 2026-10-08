@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { PART_KINDS, TICKET_PRIORITY, TICKET_STATUS } from "@/lib/asset-labels";
 import type { Part, Ticket } from "@/lib/types";
+import { formatTime } from "@/lib/time";
 
 /** 侧边栏「工单」：这台的工单，和登记装在这台上的备件。 */
 export function AssetTickets({ asset, onChanged }: { asset: { id: string; tag: string; sn: string; model: string }; onChanged?: () => void }) {
@@ -47,7 +48,7 @@ export function AssetTickets({ asset, onChanged }: { asset: { id: string; tag: s
               </Link>
               <Badge variant={priorityVariant(ticket.priority)}>{TICKET_PRIORITY[ticket.priority]}</Badge>
               <span className="text-xs text-muted-foreground">{TICKET_STATUS[ticket.status]}</span>
-              <span className="ml-auto text-xs text-muted-foreground">{new Date(ticket.updatedAt).toLocaleDateString("zh-CN")}</span>
+              <span className="ml-auto text-xs text-muted-foreground">{formatTime(ticket.updatedAt, "date")}</span>
             </div>
             <Link href={`/tickets/${ticket.id}`} className="underline-offset-4 hover:underline">
               {ticket.title}

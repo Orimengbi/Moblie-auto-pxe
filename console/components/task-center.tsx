@@ -7,6 +7,7 @@ import { ListChecks, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatBytes, percent, useUploads, type LiveUpload } from "@/components/upload-provider";
 import type { TaskFeed, TaskSummary } from "@/lib/types";
+import { formatTime } from "@/lib/time";
 
 type FloatKind = "upload" | "batch";
 type FloatPrefs = Record<FloatKind, boolean>;
@@ -103,7 +104,7 @@ function BatchItem({ task, onDismiss }: { task: TaskSummary; onDismiss?: () => v
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <span className="min-w-0 flex-1 truncate">
           {task.projectName || "资产"} · 成功 {task.ok}
-          {task.failed ? ` · 失败 ${task.failed}` : ""} · {new Date(task.createdAt).toLocaleString("zh-CN")}
+          {task.failed ? ` · 失败 ${task.failed}` : ""} · {formatTime(task.createdAt)}
         </span>
         <Link href={`/tasks/${task.id}`} className="shrink-0 underline-offset-4 hover:underline">
           查看

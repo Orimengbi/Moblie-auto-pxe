@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { AssetEvent, AuditEntry } from "@/lib/types";
+import { formatTime } from "@/lib/time";
 
 type Item = { key: string; at: string; who: string; title: string; text: string; ok: boolean };
 
@@ -54,7 +55,7 @@ export function AssetHistory({ assetId }: { assetId: string }) {
       {items.map((item) => (
         <li key={item.key} className="grid gap-0.5 border-l-2 pl-3 text-sm" style={{ borderColor: item.ok ? undefined : "var(--destructive)" }}>
           <div className="flex flex-wrap items-baseline gap-x-2 text-xs text-muted-foreground">
-            <span>{new Date(item.at).toLocaleString("zh-CN")}</span>
+            <span>{formatTime(item.at)}</span>
             {item.who ? <span>{item.who}</span> : null}
           </div>
           <div className={item.ok ? "font-medium" : "font-medium text-destructive"}>

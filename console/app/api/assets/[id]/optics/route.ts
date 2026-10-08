@@ -1,6 +1,5 @@
-import { auditRequest, jsonError } from "@/lib/api";
+import { auditRequest, jsonError, userOrResponse } from "@/lib/api";
 import { getAsset } from "@/lib/assets";
-import { requireUser } from "@/lib/auth";
 import { queryOptics } from "@/lib/remote";
 import { getOptics } from "@/lib/store";
 
@@ -20,7 +19,8 @@ export async function GET(_: Request, context: { params: Promise<{ id: string }>
 /** 现在 SSH 进系统查一次，一台二十来个口要十几秒。 */
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
-  const identity = requireUser(request);
+  const identity = userOrResponse(request);
+  if (identity instanceof Response) return identity;
   const asset = getAsset(id);
   try {
     const reading = await queryOptics(id);

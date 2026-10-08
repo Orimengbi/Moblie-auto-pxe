@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CHANGE_LABEL, changeDetail, SOURCE_LABEL } from "@/lib/inventory";
 import type { HwChange, InventoryMeta, InventorySource } from "@/lib/types";
+import { formatTime } from "@/lib/time";
 
 type Entry = InventoryMeta & { list: HwChange[] | null };
 
@@ -68,7 +69,7 @@ export function ServerChanges({ row }: { row: { id: string } }) {
         {shown.map((entry) => (
           <li key={entry.id} className="grid gap-1.5 rounded-lg border p-3">
             <div className="flex flex-wrap items-center gap-2 text-sm">
-              <span className="font-medium">{new Date(entry.at).toLocaleString("zh-CN")}</span>
+              <span className="font-medium">{formatTime(entry.at)}</span>
               <Badge variant="secondary">{SOURCE_LABEL[entry.source]}</Badge>
               <span className="font-mono text-xs text-muted-foreground">{entry.host}</span>
               <span className="text-xs text-muted-foreground">{entry.components} 个部件</span>

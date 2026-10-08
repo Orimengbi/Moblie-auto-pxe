@@ -1,4 +1,5 @@
 import { audited, jsonError, readJson } from "@/lib/api";
+import { requireAdmin } from "@/lib/auth";
 import { deleteRack, getRack, getSite, updateRack, type RackInput } from "@/lib/racks";
 
 export const dynamic = "force-dynamic";
@@ -22,6 +23,8 @@ export async function PATCH(request: Request, context: Context) {
 
 export async function DELETE(request: Request, context: Context) {
   try {
+    // 删除统一只有管理员能做。
+    requireAdmin(request);
     const { id } = await context.params;
     await audited(request, { action: "删除机柜", targetType: "rack", targetId: id, targetLabel: label(id) }, () => deleteRack(id));
     return Response.json({ ok: true });

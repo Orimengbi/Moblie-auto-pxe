@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ATTR_LABEL, KIND_LABEL, KIND_ORDER, SOURCE_LABEL } from "@/lib/inventory";
 import type { Baseline, BaselineIssue, HwComponent, HwKind, InventoryMeta, InventorySnapshot, InventorySource, RemoteTask } from "@/lib/types";
+import { formatTime } from "@/lib/time";
 
 interface View {
   history: InventoryMeta[];
@@ -27,7 +28,7 @@ const PART_COLUMNS = [
 const PART_KEYS = PART_COLUMNS.map((column) => column.key);
 
 function when(at: string): string {
-  return new Date(at).toLocaleString("zh-CN");
+  return formatTime(at);
 }
 
 function attrText(item: HwComponent): string {
@@ -105,7 +106,8 @@ export function ServerInventory({ projectId, row }: { projectId?: string; row: {
         setLoading(false);
       }
     },
-    [projectId, row],
+    // 只按 id：父组件每次刷新都会新建 row 对象，按对象比会反复重新加载。
+    [projectId, row.id],
   );
 
   useEffect(() => {

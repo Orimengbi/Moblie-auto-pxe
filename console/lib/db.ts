@@ -243,6 +243,10 @@ const MIGRATIONS: string[] = [
   ALTER TABLE assets ADD COLUMN snmp_profile_id TEXT REFERENCES snmp_profiles(id) ON DELETE SET NULL;
   ALTER TABLE monitor_state ADD COLUMN ports TEXT NOT NULL DEFAULT '[]';
   `,
+  `
+  ALTER TABLE monitor_state ADD COLUMN os_ok_at TEXT NOT NULL DEFAULT '';
+  CREATE INDEX parts_sn_upper ON parts(UPPER(sn)) WHERE sn != '';
+  `,
 ];
 
 let opened: { file: string; db: Database } | null = null;
@@ -279,17 +283,23 @@ let depth = 0;
 
 /** 嵌套调用时里层用 SAVEPOINT：里层失败只撤销里层，外层可以接着做或整个撤销（批量导入的预览就是整个撤销）。 */
 export function transaction<T>(database: Database, fn: () => T): T {
+  const outer = depth === 0;
   const name = `sp${depth}`;
-  database.exec(depth ? `SAVEPOINT ${name}` : "BEGIN IMMEDIATE");
+  database.exec(outer ? "BEGIN IMMEDIATE" : `SAVEPOINT ${name}`);
   depth++;
   try {
     const result = fn();
-    depth--;
-    database.exec(depth ? `RELEASE ${name}` : "COMMIT");
+    database.exec(outer ? "COMMIT" : `RELEASE ${name}`);
     return result;
   } catch (error) {
-    depth--;
-    database.exec(depth ? `ROLLBACK TO ${name}; RELEASE ${name}` : "ROLLBACK");
+    // 提交本身失败时 SQLite 可能已经自己回滚了，这里再回滚会报错；不能让它盖掉原来的错误。
+    try {
+      database.exec(outer ? "ROLLBACK" : `ROLLBACK TO ${name}; RELEASE ${name}`);
+    } catch {
+      // 已经没有事务可回滚。
+    }
     throw error;
+  } finally {
+    depth--;
   }
 }

@@ -1,4 +1,5 @@
 import { audited, jsonError, readJson } from "@/lib/api";
+import { requireAdmin } from "@/lib/auth";
 import { deleteProfile, getProfile, publicProfile, updateProfile, type ProfileInput } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
@@ -23,6 +24,8 @@ export async function PUT(request: Request, context: { params: Promise<{ id: str
 
 export async function DELETE(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
+    // 删除统一只有管理员能做。
+    requireAdmin(request);
     const { id } = await context.params;
     await audited(request, { action: "删除安装配置", targetType: "profile", targetId: id, targetLabel: getProfile(id)?.name }, () => deleteProfile(id));
     return Response.json({ ok: true });

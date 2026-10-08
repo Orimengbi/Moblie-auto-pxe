@@ -1,6 +1,7 @@
 import { ASSET_STATUS, ASSET_TYPES, renderTag, TAG_TOKEN as TOKEN, type WarrantyState } from "./asset-labels.ts";
 import { parseStatus, parseType, type SheetCells } from "./asset-sheet.ts";
 import { db, transaction, type SqlValue } from "./db.ts";
+import { assertDate } from "./validate.ts";
 import { findRack, getRack, listRacks, listSites, MAX_RACK_U, placeLabel } from "./racks.ts";
 import { assertIpv4, normalizeMac, normalizeSn } from "./net.ts";
 import type { Asset, AssetEvent, AssetStatus, AssetType, AuditEntry, Customer, PublicAsset, ServerRow, TagSettings } from "./types.ts";
@@ -269,8 +270,6 @@ export function assetBmcAccounts(asset: Pick<Asset, "bmcUser" | "bmcPassword" | 
 
 export type AssetInput = Partial<Omit<Asset, "id" | "seq" | "tag" | "createdAt" | "updatedAt">>;
 
-const DATE = /^\d{4}-\d{2}-\d{2}$/;
-
 function text(value: unknown, max: number): string {
   return String(value ?? "").replace(/[\r\0]/g, "").trim().slice(0, max);
 }
@@ -311,9 +310,7 @@ function cleanAssetInput(input: AssetInput, current: AssetRecord | null): Partia
   }
   for (const key of ["purchaseDate", "warrantyStart", "warrantyEnd"] as const) {
     if (!has(key)) continue;
-    const value = text(input[key], 10);
-    if (value && (!DATE.test(value) || Number.isNaN(Date.parse(value)))) throw new Error(`${FIELD_LABEL[key]}要写成 2026-10-08 这样的日期`);
-    out[key] = value;
+    out[key] = assertDate(text(input[key], 10), FIELD_LABEL[key] || key);
   }
   for (const key of ["bmcPassword", "bmcFallbackPassword"] as const) {
     if (has(key) && String(input[key])) out[key] = text(input[key], 64);
@@ -424,7 +421,15 @@ function blankAsset(id: string, sn: string, now: string): AssetRecord {
   return record;
 }
 
+/**
+ * 编号不能重复，两个方向都要查：我的编号（规则算的或手动的）不能是别人的手动编号；
+ * 我手动指定的编号也不能等于别人按规则算出来的。后一种要算所有资产的编号，只在有手动编号时做。
+ */
 function assertTagFree(record: AssetRecord): void {
+  const customer = record.customerId ? getCustomer(record.customerId) : null;
+  const tag = renderTag(record, getTagSettings(), new Map(customer ? [[customer.id, customer]] : []));
+  const manual = db().prepare("SELECT sn FROM assets WHERE tag_override = ? AND id != ?").get(tag, record.id);
+  if (manual) throw new Error(`编号 ${tag} 已经手动指定给了 ${manual.sn}`);
   if (!record.tagOverride) return;
   const clash = listAssets().find((item) => item.id !== record.id && item.tag === record.tagOverride);
   if (clash) throw new Error(`编号 ${record.tagOverride} 已经是 ${clash.sn} 的了`);

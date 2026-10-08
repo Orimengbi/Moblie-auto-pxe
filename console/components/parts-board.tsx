@@ -10,6 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { PART_KINDS, PART_STATUS } from "@/lib/asset-labels";
 import type { Part, PartEvent, PartKind, PartStatus, Site } from "@/lib/types";
+import { formatTime } from "@/lib/time";
 
 const SELECT = "h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm";
 
@@ -399,7 +400,7 @@ function PartDialog({ part, sites, onClose, onChanged }: { part: Part | null; si
                 {events.map((entry) => (
                   <li key={entry.id} className="grid gap-0.5 border-l-2 pl-3 text-sm">
                     <span className="text-xs text-muted-foreground">
-                      {new Date(entry.at).toLocaleString("zh-CN")} {entry.actor}
+                      {formatTime(entry.at)} {entry.actor}
                     </span>
                     <span>{entry.text}</span>
                   </li>

@@ -216,7 +216,7 @@ export function parseDisks(text: string): DiskHealth[] {
 // ---------- 状态 ----------
 
 function emptyState(assetId: string): MonitorState {
-  return { assetId, bmcAt: "", bmcOk: false, bmcError: "", bmcFailures: 0, sensors: [], selLast: "", selRecent: [], osAt: "", osOk: false, osError: "", gpus: [], disks: [], ports: [] };
+  return { assetId, bmcAt: "", bmcOk: false, bmcError: "", bmcFailures: 0, sensors: [], selLast: "", selRecent: [], osAt: "", osOkAt: "", osOk: false, osError: "", gpus: [], disks: [], ports: [] };
 }
 
 function parseJson<T>(value: unknown, fallback: T): T {
@@ -240,6 +240,7 @@ export function getMonitorState(assetId: string): MonitorState {
     selLast: String(row.sel_last),
     selRecent: parseJson(row.sel_recent, []),
     osAt: String(row.os_at),
+    osOkAt: String(row.os_ok_at ?? ""),
     osOk: Boolean(row.os_ok),
     osError: String(row.os_error),
     gpus: parseJson(row.gpus, []),
@@ -262,11 +263,11 @@ export function saveMonitorState(state: MonitorState): void {
 function saveState(state: MonitorState): void {
   db()
     .prepare(
-      `INSERT INTO monitor_state (asset_id, bmc_at, bmc_ok, bmc_error, bmc_failures, sensors, sel_last, sel_recent, os_at, os_ok, os_error, gpus, disks, ports)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO monitor_state (asset_id, bmc_at, bmc_ok, bmc_error, bmc_failures, sensors, sel_last, sel_recent, os_at, os_ok, os_error, gpus, disks, ports, os_ok_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(asset_id) DO UPDATE SET bmc_at = excluded.bmc_at, bmc_ok = excluded.bmc_ok, bmc_error = excluded.bmc_error, bmc_failures = excluded.bmc_failures,
          sensors = excluded.sensors, sel_last = excluded.sel_last, sel_recent = excluded.sel_recent, os_at = excluded.os_at, os_ok = excluded.os_ok,
-         os_error = excluded.os_error, gpus = excluded.gpus, disks = excluded.disks, ports = excluded.ports`,
+         os_error = excluded.os_error, gpus = excluded.gpus, disks = excluded.disks, ports = excluded.ports, os_ok_at = excluded.os_ok_at`,
     )
     .run(
       state.assetId,
@@ -283,6 +284,7 @@ function saveState(state: MonitorState): void {
       JSON.stringify(state.gpus),
       JSON.stringify(state.disks),
       JSON.stringify(state.ports),
+      state.osOkAt,
     );
 }
 
@@ -381,8 +383,10 @@ export async function checkOs(
   ssh: (host: string, script: string) => Promise<{ code: number | null; output: string }>,
 ): Promise<MonitorState> {
   const state = getMonitorState(asset.id);
-  const since = state.osAt ? Math.floor(Date.parse(state.osAt) / 1000) : Math.floor(Date.now() / 1000) - 3600;
-  state.osAt = new Date().toISOString();
+  // 从上次成功的那次往后查 Xid，SSH 失败的那几次之间的也不漏。
+  const since = state.osOkAt ? Math.floor(Date.parse(state.osOkAt) / 1000) : Math.floor(Date.now() / 1000) - 3600;
+  const startedAt = new Date().toISOString();
+  state.osAt = startedAt;
   const ran = await ssh(host, OS_MONITOR_SCRIPT(since));
   if (ran.code === 255 || !ran.output.includes("===PXEMON end")) {
     state.osOk = false;
@@ -391,6 +395,7 @@ export async function checkOs(
     return state;
   }
   state.osOk = true;
+  state.osOkAt = startedAt;
   state.osError = "";
   const findings: Finding[] = [];
   const gpu = parseGpus(ran.output);

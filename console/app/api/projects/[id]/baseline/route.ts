@@ -1,4 +1,5 @@
 import { audited, jsonError, readJson } from "@/lib/api";
+import { requireAdmin } from "@/lib/auth";
 import { baselineFromServer, deleteBaseline, getBaseline, getProject, saveBaseline } from "@/lib/store";
 import type { InventorySource } from "@/lib/types";
 
@@ -35,6 +36,8 @@ export async function PUT(request: Request, context: { params: Promise<{ id: str
 
 export async function DELETE(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
+    // 删除统一只有管理员能做。
+    requireAdmin(request);
     const { id } = await context.params;
     if (!getProject(id)) throw new Error("项目不存在");
     await audited(request, { action: "删除批次基准", targetType: "project", targetId: id, targetLabel: getProject(id)?.name }, () => deleteBaseline(id));

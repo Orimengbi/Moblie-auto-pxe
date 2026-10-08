@@ -1,7 +1,7 @@
-import { auditRequest, jsonError, readJson } from "@/lib/api";
+import { auditRequest, jsonError, readJson, userOrResponse } from "@/lib/api";
 import { assetRows } from "@/lib/asset-view";
 import { deleteAsset, getAsset, updateAsset, type AssetInput } from "@/lib/assets";
-import { requireAdmin, requireUser } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth";
 import { uplinksOf } from "@/lib/network";
 import { removeAssetFiles } from "@/lib/store";
 
@@ -18,7 +18,8 @@ export async function GET(_: Request, context: Context) {
 
 export async function PATCH(request: Request, context: Context) {
   const { id } = await context.params;
-  const identity = requireUser(request);
+  const identity = userOrResponse(request);
+  if (identity instanceof Response) return identity;
   try {
     const asset = updateAsset(id, await readJson<AssetInput>(request), identity.user.username);
     auditRequest(request, identity, { action: "修改资产", targetType: "asset", targetId: id, targetLabel: `${asset.tag} ${asset.sn}` });

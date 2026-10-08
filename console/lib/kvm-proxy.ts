@@ -516,7 +516,10 @@ function handleUpgrade(req: http.IncomingMessage, socket: Duplex, head: Buffer):
         rejectUnauthorized: false,
         agent: false,
       });
+      // BMC 卡住不回握手时别让浏览器一直挂着；握手成功后这个超时就不再管。
+      upstream.setTimeout(30_000, () => upstream.destroy(new Error("BMC 30 秒没有回应")));
       upstream.on("upgrade", (response, bmcSocket, bmcHead) => {
+        upstream.setTimeout(0);
         const lines = [`HTTP/1.1 ${response.statusCode} ${response.statusMessage}`];
         for (let i = 0; i < response.rawHeaders.length; i += 2) lines.push(`${response.rawHeaders[i]}: ${response.rawHeaders[i + 1]}`);
         socket.write(`${lines.join("\r\n")}\r\n\r\n`);

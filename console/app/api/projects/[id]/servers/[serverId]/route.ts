@@ -1,4 +1,5 @@
 import { audited, jsonError, readJson } from "@/lib/api";
+import { requireAdmin } from "@/lib/auth";
 import type { ServerCells } from "@/lib/server-sheet";
 import { deleteServer, getServer, publicServer, saveServer } from "@/lib/store";
 
@@ -17,6 +18,8 @@ export async function PUT(request: Request, context: { params: Promise<{ id: str
 
 export async function DELETE(request: Request, context: { params: Promise<{ id: string; serverId: string }> }) {
   try {
+    // 删除统一只有管理员能做。
+    requireAdmin(request);
     const { id, serverId } = await context.params;
     const row = getServer(id, serverId);
     await audited(request, { action: "从装机批次删掉一台", targetType: "asset", targetId: row?.assetId, targetLabel: row?.sn, detail: `批次 ${id}` }, () => deleteServer(id, serverId));

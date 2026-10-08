@@ -13,6 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { InstallState, InventoryStatus, IpmiLink, IpSource, PowerState, RemoteFile, RemoteTask, ServerImportReport, ServerRow, ServerStage, TaskHostSource } from "@/lib/types";
+import { formatTime } from "@/lib/time";
 
 const STAGE: Record<ServerStage, string> = {
   waiting: "等待发现",
@@ -62,7 +63,7 @@ function hardwareLabel(row: ServerListRow): string {
 
 function collectedLine(label: string, item: InventoryStatus["os"]): string {
   if (!item) return "";
-  const at = new Date(item.at).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+  const at = formatTime(item.at, "short");
   return `${label} ${at}${item.changes ? ` · ${item.changes} 处变化` : ""}`;
 }
 
@@ -285,7 +286,7 @@ export function ProjectServerList({
           </Button>
           <span className="text-xs">
             {enabled ? "批次开着，每 30 秒自动检查一次，密码不对的机器不自动重试。" : "批次关着，不自动检查；立即检查只读取状态，不改 BMC。"}
-            {checkedAt ? ` 上次检查 ${checkedAt.toLocaleTimeString("zh-CN")}` : ""}
+            {checkedAt ? ` 上次检查 ${formatTime(checkedAt, "time")}` : ""}
           </span>
           {rows.length ? (
             <>

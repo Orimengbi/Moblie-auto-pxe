@@ -6,6 +6,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { SOURCE_LABEL } from "@/lib/inventory";
 import { PORT_GROUP_LABEL, portSummary } from "@/lib/ports";
 import type { HwPort, InventorySnapshot, InventorySource, PortGroup } from "@/lib/types";
+import { formatTime } from "@/lib/time";
 
 const GROUPS: PortGroup[] = ["drive", "pcie", "net"];
 
@@ -155,7 +156,7 @@ export function ServerPorts({ row }: { row: { id: string } }) {
       {state === "ready" && snapshot && ports ? (
         <div className="grid gap-5">
           <p className="text-sm text-muted-foreground">
-            {SOURCE_LABEL[snapshot.source]}采集于 {new Date(snapshot.at).toLocaleString("zh-CN")}
+            {SOURCE_LABEL[snapshot.source]}采集于 {formatTime(snapshot.at)}
           </p>
           {GROUPS.map((group) => {
             const all = ports.filter((port) => port.group === group);
