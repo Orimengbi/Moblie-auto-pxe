@@ -458,7 +458,7 @@ export function ProjectServerList({
       <ServerSidebar projectId={projectId} row={sideRow} onClose={() => setSideId(null)} />
       <div className="grid gap-3 border-t pt-4">
         <h3 className="font-medium">批量任务</h3>
-        <ProjectTaskRunner projectId={projectId} picked={picked} installed={installed} all={rows.map((row) => row.id)} onPick={setPicked} files={files} tasks={tasks} />
+        <ProjectTaskRunner projectId={projectId} picked={picked} installed={installed} onPick={setPicked} files={files} tasks={tasks} />
       </div>
     </div>
   );

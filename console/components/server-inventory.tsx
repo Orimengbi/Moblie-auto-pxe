@@ -6,7 +6,7 @@ import { ResizeHandle, useColumnWidths } from "@/components/resizable-columns";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ATTR_LABEL, KIND_LABEL, KIND_ORDER, SOURCE_LABEL } from "@/lib/inventory";
-import type { Baseline, BaselineIssue, HwComponent, HwKind, InventoryMeta, InventorySnapshot, InventorySource } from "@/lib/types";
+import type { Baseline, BaselineIssue, HwComponent, HwKind, InventoryMeta, InventorySnapshot, InventorySource, RemoteTask } from "@/lib/types";
 
 interface View {
   history: InventoryMeta[];
@@ -85,6 +85,8 @@ export function ServerInventory({ projectId, row }: { projectId: string; row: { 
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
+  const [sources, setSources] = useState<InventorySource[]>(["os", "bmc"]);
+  const [collecting, setCollecting] = useState("");
 
   const load = useCallback(
     async (query: string) => {
@@ -109,6 +111,40 @@ export function ServerInventory({ projectId, row }: { projectId: string; row: { 
     setMessage("");
     void load("");
   }, [load]);
+
+  // 采集任务跑完前每 3 秒查一次，结束后重新读这台机器的配置。
+  useEffect(() => {
+    if (!collecting) return;
+    const timer = setInterval(async () => {
+      const response = await fetch(`/api/projects/${projectId}/tasks`).catch(() => null);
+      const tasks = ((await response?.json().catch(() => [])) || []) as RemoteTask[];
+      const task = tasks.find((item) => item.id === collecting);
+      if (task && task.status === "running") return;
+      setCollecting("");
+      const target = task?.targets[0];
+      if (target && target.status !== "ok") setError(`采集没有成功：${target.output.trim().split("\n").pop() || target.status}`);
+      else setMessage("采集完成");
+      router.refresh();
+      await load("");
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [collecting, projectId, load, router]);
+
+  async function collect() {
+    setError("");
+    setMessage("");
+    const response = await fetch(`/api/projects/${projectId}/tasks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kind: "inventory", sources, serverIds: [row.id], concurrency: 1, timeoutSec: 600 }),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      setError(body.error || "采集任务没有创建成功");
+      return;
+    }
+    setCollecting(body.id);
+  }
 
   const snapshot = view?.snapshot || null;
   const source: InventorySource = snapshot?.source || "os";
@@ -141,6 +177,22 @@ export function ServerInventory({ projectId, row }: { projectId: string; row: { 
         <p className="text-xs text-muted-foreground">系统内是 SSH 进系统读的，BMC 是从 Redfish 读的。和上一次采集比出的变化在「变更记录」里。</p>
       </div>
 
+      <div className="flex flex-wrap items-center gap-3 text-sm">
+        {(["os", "bmc"] as const).map((value) => (
+          <label key={value} className="flex items-center gap-1.5">
+            <input
+              type="checkbox"
+              checked={sources.includes(value)}
+              onChange={() => setSources((list) => (list.includes(value) ? list.filter((item) => item !== value) : [...list, value]))}
+            />
+            {value === "os" ? "系统内（SSH）" : "BMC（Redfish）"}
+          </label>
+        ))}
+        <Button type="button" size="sm" disabled={Boolean(collecting) || !sources.length} onClick={collect}>
+          {collecting ? "采集中，一两分钟" : "采集硬件配置"}
+        </Button>
+      </div>
+
       <div className="flex flex-wrap items-center gap-2">
         {(["os", "bmc"] as const).map((value) => (
           <Button key={value} type="button" size="sm" variant={source === value && snapshot ? "default" : "outline"} disabled={!hasSource(value) || loading} onClick={() => void load(`?source=${value}`)}>
@@ -171,7 +223,7 @@ export function ServerInventory({ projectId, row }: { projectId: string; row: { 
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
       {message ? <p className="text-sm text-muted-foreground">{message}</p> : null}
       {loading && !view ? <p className="text-sm text-muted-foreground">正在读取</p> : null}
-      {view && !snapshot ? <p className="text-sm text-muted-foreground">还没有采集过。在服务器列表下面的「采集硬件配置」里勾上这台机器采集。</p> : null}
+      {view && !snapshot ? <p className="text-sm text-muted-foreground">还没有采集过。点上面的「采集硬件配置」。</p> : null}
 
       {snapshot ? (
         <div className="grid gap-4">
