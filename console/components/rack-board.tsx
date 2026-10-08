@@ -310,29 +310,40 @@ function SiteDialog({ site, onClose, onSaved }: { site: Site | "new" | null; onC
   );
 }
 
-/** 「A01…A20、B01…B20（2 排 40 个）」，前缀写错时给提示。 */
-function batchPreview(prefix: string, from: number, to: number, pad: number): string {
-  const parts = prefix.split(/[,，、\s]+/).filter(Boolean);
-  const rows: string[] = [];
-  for (const part of parts.length ? parts : [""]) {
-    const range = /^([A-Za-z])-([A-Za-z])$/.exec(part);
-    if (range) for (let code = range[1].charCodeAt(0); code <= range[2].charCodeAt(0); code++) rows.push(String.fromCharCode(code));
-    else rows.push(part);
+/** 排的范围展开成排名：A 到 D → A、B、C、D；1 到 3 → 1、2、3。 */
+function rowNames(from: string, to: string): string[] | string {
+  const a = from.trim().toUpperCase();
+  const b = (to.trim() || a).toUpperCase();
+  if (/^[A-Z]$/.test(a) && /^[A-Z]$/.test(b)) {
+    if (b < a) return "排的范围反了";
+    return Array.from({ length: b.charCodeAt(0) - a.charCodeAt(0) + 1 }, (_, i) => String.fromCharCode(a.charCodeAt(0) + i));
   }
+  if (/^\d+$/.test(a) && /^\d+$/.test(b)) {
+    if (Number(b) < Number(a)) return "排的范围反了";
+    return Array.from({ length: Number(b) - Number(a) + 1 }, (_, i) => String(Number(a) + i).padStart(a.length, "0"));
+  }
+  if (a && a === b && /^[A-Z0-9._-]{1,16}$/.test(a)) return [a];
+  return "排写一个字母或数字，例如从 A 到 D";
+}
+
+/** 批量建的预览：每排一行列出起止机柜号，最多列 6 排。 */
+function batchPreview(rows: string[], from: number, to: number, pad: number): { lines: string[]; total: number } | string {
   if (!Number.isInteger(from) || !Number.isInteger(to) || to < from) return "编号范围不对";
   const name = (row: string, n: number) => `${row}${String(n).padStart(pad || 0, "0")}`;
-  const shown = rows.slice(0, 3).map((row) => `${name(row, from)}…${name(row, to)}`).join("、");
-  return `${shown}${rows.length > 3 ? " 等" : ""}（${rows.length} 排 ${rows.length * (to - from + 1)} 个）`;
+  const lines = rows.slice(0, 6).map((row) => `${row} 排：${name(row, from)}、${name(row, from + 1 <= to ? from + 1 : from)} … ${name(row, to)}`);
+  if (rows.length > 6) lines.push(`…… 还有 ${rows.length - 6} 排`);
+  return { lines, total: rows.length * (to - from + 1) };
 }
 
 function RackDialog({ rack, sites, siteId, onClose, onSaved }: { rack: Rack | "new" | null; sites: Site[]; siteId: string; onClose: () => void; onSaved: () => void }) {
   const editing = rack && rack !== "new" ? rack : null;
-  const [batch, setBatch] = useState(false);
-  const [form, setForm] = useState({ siteId: "", name: "", rowLabel: "", heightU: "42", powerKw: "", note: "", prefix: "A", from: "1", to: "10", pad: "2" });
+  const [batch, setBatch] = useState(true);
+  const [form, setForm] = useState({ siteId: "", name: "", rowLabel: "", heightU: "42", powerKw: "", note: "", rowFrom: "A", rowTo: "A", from: "1", to: "10", pad: "2" });
   const [error, setError] = useState("");
   useEffect(() => {
     if (!rack) return;
-    setBatch(false);
+    // 新建默认就是批量建，一个一个建的少。
+    setBatch(!editing);
     setError("");
     setForm((current) => ({
       ...current,
@@ -345,7 +356,8 @@ function RackDialog({ rack, sites, siteId, onClose, onSaved }: { rack: Rack | "n
     }));
   }, [rack, editing, siteId]);
 
-  const preview = batch ? batchPreview(form.prefix, Number(form.from), Number(form.to), Number(form.pad)) : "";
+  const rows = rowNames(form.rowFrom, form.rowTo);
+  const preview = typeof rows === "string" ? rows : batchPreview(rows, Number(form.from), Number(form.to), Number(form.pad));
 
   async function save(event: React.FormEvent) {
     event.preventDefault();
@@ -353,7 +365,7 @@ function RackDialog({ rack, sites, siteId, onClose, onSaved }: { rack: Rack | "n
     const result = editing
       ? await api(`/api/racks/${editing.id}`, "PATCH", { ...base, name: form.name })
       : batch
-        ? await api("/api/racks", "POST", { ...base, prefix: form.prefix, from: Number(form.from), to: Number(form.to), pad: Number(form.pad) })
+        ? await api("/api/racks", "POST", { ...base, prefix: Array.isArray(rows) ? rows.join(",") : "", from: Number(form.from), to: Number(form.to), pad: Number(form.pad) })
         : await api("/api/racks", "POST", { ...base, name: form.name });
     if (!result.ok) {
       setError(result.error);
@@ -371,7 +383,7 @@ function RackDialog({ rack, sites, siteId, onClose, onSaved }: { rack: Rack | "n
         <form onSubmit={save} className="grid gap-4">
           <DialogHeader>
             <DialogTitle>{editing ? `编辑机柜 ${editing.name}` : "新建机柜"}</DialogTitle>
-            <DialogDescription>{editing ? "改矮时不能低于已经放着的设备。" : "可以建一个，也可以按前缀加编号批量建：前缀写 A,B,C 或 A-H 就一次建多排。已经有的机柜号会跳过。很多排、每个柜子高度不一样的，用「Excel 导入」。"}</DialogDescription>
+            <DialogDescription>{editing ? "改矮时不能低于已经放着的设备。" : "批量建：选从第几排到第几排、每排编号从几到几，一次建好多排。已经有的机柜号会跳过。每个柜子高度、功率不一样的，用「Excel 导入机柜」。"}</DialogDescription>
           </DialogHeader>
           {!editing ? (
             <div className="flex gap-2">
@@ -394,9 +406,7 @@ function RackDialog({ rack, sites, siteId, onClose, onSaved }: { rack: Rack | "n
               </NativeSelect>
             </Labeled>
             {batch ? (
-              <Labeled label="前缀（一排一个）">
-                <Input {...field("prefix")} className="font-mono" placeholder="A，或 A,B,C，或 A-H" />
-              </Labeled>
+              <span />
             ) : (
               <Labeled label="机柜号">
                 <Input {...field("name")} required className="font-mono" placeholder="A01" />
@@ -404,20 +414,40 @@ function RackDialog({ rack, sites, siteId, onClose, onSaved }: { rack: Rack | "n
             )}
             {batch ? (
               <>
-                <Labeled label="编号从">
+                <Labeled label="从第几排">
+                  <Input {...field("rowFrom")} className="font-mono uppercase" placeholder="A" />
+                </Labeled>
+                <Labeled label="到第几排">
+                  <Input {...field("rowTo")} className="font-mono uppercase" placeholder="D" />
+                </Labeled>
+                <Labeled label="每排编号从">
                   <Input {...field("from")} type="number" min={0} />
                 </Labeled>
                 <Labeled label="到">
                   <Input {...field("to")} type="number" min={0} />
                 </Labeled>
-                <Labeled label="补零到几位">
+                <Labeled label="编号补零到几位">
                   <Input {...field("pad")} type="number" min={0} max={4} />
                 </Labeled>
-                <p className="self-end pb-2 font-mono text-sm text-muted-foreground">{preview}</p>
+                <span />
+                <div className="rounded-md bg-muted p-2 font-mono text-xs leading-5 sm:col-span-2">
+                  {typeof preview === "string" ? (
+                    <span className="text-destructive">{preview}</span>
+                  ) : (
+                    <>
+                      {preview.lines.map((line) => (
+                        <div key={line}>{line}</div>
+                      ))}
+                      <div className="mt-1 font-sans">
+                        共 {Array.isArray(rows) ? rows.length : 0} 排 {preview.total} 个机柜
+                      </div>
+                    </>
+                  )}
+                </div>
               </>
             ) : null}
             <Labeled label="列 / 排">
-              <Input {...field("rowLabel")} placeholder={batch ? "留空就用前缀" : "可留空，例如 A 列"} />
+              <Input {...field("rowLabel")} placeholder={batch ? "留空就用排名（A、B…）" : "可留空，例如 A 列"} />
             </Labeled>
             <Labeled label="高度（U）">
               <Input {...field("heightU")} type="number" min={1} max={60} required />
@@ -434,7 +464,7 @@ function RackDialog({ rack, sites, siteId, onClose, onSaved }: { rack: Rack | "n
             <Button type="button" variant="ghost" onClick={onClose}>
               取消
             </Button>
-            <Button type="submit">保存</Button>
+            <Button type="submit" disabled={batch && !editing && typeof preview === "string"}>{batch && !editing && typeof preview !== "string" ? `建 ${preview.total} 个机柜` : "保存"}</Button>
           </div>
         </form>
       </DialogContent>
