@@ -1,6 +1,7 @@
 import { ASSET_STATUS, ASSET_TYPES, renderTag, TAG_TOKEN as TOKEN, type WarrantyState } from "./asset-labels.ts";
 import { parseStatus, parseType, type SheetCells } from "./asset-sheet.ts";
 import { db, transaction, type SqlValue } from "./db.ts";
+import { findRack, getRack, listRacks, listSites, MAX_RACK_U, placeLabel } from "./racks.ts";
 import { assertIpv4, normalizeMac, normalizeSn } from "./net.ts";
 import type { Asset, AssetEvent, AssetStatus, AssetType, AuditEntry, Customer, PublicAsset, ServerRow, TagSettings } from "./types.ts";
 
@@ -151,6 +152,9 @@ const COLUMNS: [ColumnKey, string][] = [
   ["owner", "owner"],
   ["status", "status"],
   ["location", "location"],
+  ["rackId", "rack_id"],
+  ["uStart", "u_start"],
+  ["uHeight", "u_height"],
   ["bmcMac", "bmc_mac"],
   ["bmcIp", "bmc_ip"],
   ["bmcUser", "bmc_user"],
@@ -181,7 +185,10 @@ const FIELD_LABEL: Partial<Record<keyof Asset, string>> = {
   model: "型号",
   customerId: "归属客户",
   owner: "负责人",
-  location: "位置",
+  location: "位置备注",
+  rackId: "机柜",
+  uStart: "起始 U",
+  uHeight: "占用 U",
   bmcMac: "BMC MAC",
   bmcIp: "BMC 地址",
   bmcUser: "BMC 账号",
@@ -210,7 +217,9 @@ type AssetRecord = Omit<Asset, "tag">;
 function toAsset(row: Record<string, SqlValue>): AssetRecord {
   const asset = { id: String(row.id), seq: Number(row.seq), createdAt: String(row.created_at), updatedAt: String(row.updated_at) } as AssetRecord;
   for (const [key, column] of COLUMNS) {
-    (asset as unknown as Record<string, unknown>)[key] = key === "customerId" ? (row[column] ? String(row[column]) : null) : String(row[column] ?? "");
+    const value = row[column];
+    (asset as unknown as Record<string, unknown>)[key] =
+      key === "customerId" || key === "rackId" ? (value ? String(value) : null) : key === "uStart" ? (value === null || value === undefined ? null : Number(value)) : key === "uHeight" ? Number(value ?? 1) : String(value ?? "");
   }
   return asset;
 }
@@ -311,14 +320,59 @@ function cleanAssetInput(input: AssetInput, current: AssetRecord | null): Partia
     if (has(key)) out[key] = text(input[key], 120);
   }
   if (has("note")) out.note = text(input.note, 4000);
+  if (has("rackId")) {
+    const id = input.rackId ? String(input.rackId) : null;
+    if (id && !getRack(id)) throw new Error("选的机柜已经不存在，刷新页面再选");
+    out.rackId = id;
+    if (!id) out.uStart = null;
+  }
+  if (has("uHeight")) {
+    const height = Number(input.uHeight);
+    if (!Number.isInteger(height) || height < 0 || height > MAX_RACK_U) throw new Error(`占用 U 需要 0 到 ${MAX_RACK_U} 的整数，0 表示侧挂`);
+    out.uHeight = height;
+  }
+  if (has("uStart") && (out.rackId !== null || !has("rackId"))) {
+    const raw = input.uStart as unknown;
+    const start = raw === null || raw === "" ? null : Number(String(raw).replace(/^u/i, ""));
+    if (start !== null && (!Number.isInteger(start) || start < 1 || start > MAX_RACK_U)) throw new Error("起始 U 需要是 1 开始的整数");
+    out.uStart = start;
+  }
   const warrantyStart = out.warrantyStart ?? current?.warrantyStart ?? "";
   const warrantyEnd = out.warrantyEnd ?? current?.warrantyEnd ?? "";
   if (warrantyStart && warrantyEnd && warrantyEnd < warrantyStart) throw new Error("保修到期早于保修开始");
   return out;
 }
 
+/** 放进机柜的位置要在机柜高度以内，不能和同一机柜里别的设备重叠。侧挂（0U）不占 U 位。 */
+function assertPlacement(record: AssetRecord): void {
+  if (!record.rackId) {
+    if (record.uStart) throw new Error("没选机柜，不能填起始 U");
+    return;
+  }
+  if (record.uHeight === 0) record.uStart = null;
+  if (!record.uStart) return;
+  const rack = getRack(record.rackId);
+  if (!rack) throw new Error("机柜不存在");
+  const top = record.uStart + record.uHeight - 1;
+  if (top > rack.heightU) throw new Error(`机柜 ${rack.name} 只有 ${rack.heightU}U，放在 U${record.uStart} 占 ${record.uHeight}U 会到 U${top}`);
+  const other = db()
+    .prepare("SELECT sn, u_start, u_height FROM assets WHERE rack_id = ? AND id != ? AND u_start IS NOT NULL AND u_height > 0 AND u_start <= ? AND u_start + u_height - 1 >= ?")
+    .get(record.rackId, record.id, top, record.uStart);
+  if (other) {
+    const end = Number(other.u_start) + Number(other.u_height) - 1;
+    throw new Error(`机柜 ${rack.name} 的 U${other.u_start}${end > Number(other.u_start) ? `-U${end}` : ""} 已经放了 ${other.sn}`);
+  }
+}
+
+/** 放进机柜时还在「入库」的，自动改成「上架」；这次明确改了状态的不动。 */
+function autoRack(before: AssetRecord | null, next: AssetRecord, input: AssetInput): void {
+  if (next.rackId && next.rackId !== before?.rackId && next.status === "stock" && !input.status) next.status = "racked";
+}
+
 function describeChanges(before: AssetRecord, after: AssetRecord): string[] {
   const customers = new Map(listCustomers().map((item) => [item.id, item.name]));
+  const racks = new Map(listRacks().map((item) => [item.id, item]));
+  const sites = new Map(listSites().map((item) => [item.id, item]));
   const lines: string[] = [];
   for (const [key] of COLUMNS) {
     if (key === "status" || before[key] === after[key]) continue;
@@ -327,7 +381,12 @@ function describeChanges(before: AssetRecord, after: AssetRecord): string[] {
       lines.push(`${label}已更新`);
       continue;
     }
-    const show = (value: unknown) => (key === "customerId" ? (value ? customers.get(String(value)) || "已删除的客户" : "无") : String(value || "空"));
+    const show = (value: unknown) => {
+      if (key === "customerId") return value ? customers.get(String(value)) || "已删除的客户" : "无";
+      if (key === "rackId") return value ? placeLabel({ rackId: String(value), uStart: null, uHeight: 1 }, racks, sites) || "已删除的机柜" : "无";
+      if (key === "uStart" || key === "uHeight") return value === null || value === undefined ? "空" : String(value);
+      return String(value || "空");
+    };
     lines.push(`${label}：${show(before[key])} → ${show(after[key])}`);
   }
   return lines;
@@ -349,7 +408,7 @@ function writeAsset(record: AssetRecord): void {
 
 function blankAsset(id: string, sn: string, now: string): AssetRecord {
   const seq = Number(db().prepare("SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM assets").get()?.n ?? 1);
-  const record = { id, seq, createdAt: now, updatedAt: now, customerId: null, type: "server", status: "stock", sn } as AssetRecord;
+  const record = { id, seq, createdAt: now, updatedAt: now, customerId: null, rackId: null, uStart: null, uHeight: 1, type: "server", status: "stock", sn } as AssetRecord;
   for (const [key] of COLUMNS) if ((record as unknown as Record<string, unknown>)[key] === undefined) (record as unknown as Record<string, unknown>)[key] = "";
   return record;
 }
@@ -368,6 +427,8 @@ export function createAsset(input: AssetInput, actor: string): Asset {
     const record = { ...base, ...cleanAssetInput(input, null) } as AssetRecord;
     if (findAssetBySn(record.sn)) throw new Error(`序列号 ${record.sn} 已经入库了`);
     assertTagFree(record);
+    assertPlacement(record);
+    autoRack(null, record, input);
     insertAsset(record);
     addEvent(record.id, "status", `入库，状态「${ASSET_STATUS[record.status]}」`, actor);
     return getAsset(record.id)!;
@@ -385,6 +446,8 @@ export function updateAsset(id: string, input: AssetInput, actor: string): Asset
       const other = findAssetBySn(next.sn);
       if (other) throw new Error(`序列号 ${next.sn} 已经是另一台资产 ${other.tag} 的了`);
     }
+    assertPlacement(next);
+    autoRack(before, next, input);
     const changes = describeChanges(before, next);
     // 什么都没变就不写，免得更新时间跟着变。
     if (next.status === before.status && !changes.length) return current;
@@ -436,6 +499,7 @@ export function importAssets(records: { row: number; cells: SheetCells }[], acto
         if (first) throw new Error(`和第 ${first} 行是同一个序列号`);
         seen.set(sn, record.row);
         const input: AssetInput = {};
+        if (cells.site && !cells.rack) throw new Error("填了机房就要填机柜");
         for (const [field, value] of Object.entries(cells) as [keyof SheetCells, string][]) {
           if (field === "sn" || !value) continue;
           if (field === "type") {
@@ -446,6 +510,19 @@ export function importAssets(records: { row: number; cells: SheetCells }[], acto
             const status = parseStatus(value);
             if (!status) throw new Error(`状态「${value}」认不出，写 ${Object.values(ASSET_STATUS).join("、")} 之一`);
             input.status = status;
+          } else if (field === "site") {
+            continue;
+          } else if (field === "rack") {
+            if (["无", "-", "none"].includes(value.trim().toLowerCase())) {
+              input.rackId = null;
+              continue;
+            }
+            const rack = findRack(cells.site || "", value);
+            if (rack === "ambiguous") throw new Error(`好几个机房都有机柜 ${value}，在「机房」列写明是哪个`);
+            if (!rack) throw new Error(`${cells.site ? `机房「${cells.site}」里` : ""}没有机柜 ${value}，先在机房页建好`);
+            input.rackId = rack.id;
+          } else if (field === "uStart" || field === "uHeight") {
+            (input as Record<string, string>)[field] = value;
           } else if (field === "customer") {
             const id = findCustomer(value);
             if (id === undefined) throw new Error(`没有代码或名称是「${value}」的客户，先在客户页建好`);

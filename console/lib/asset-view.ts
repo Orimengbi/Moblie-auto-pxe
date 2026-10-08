@@ -1,4 +1,5 @@
 import { getCustomer, listAssets, listCustomers, publicAsset, warrantyState } from "./assets.ts";
+import { listRacks, listSites, placeLabel } from "./racks.ts";
 import { hostContext, resolveAssetHost, type HostContext } from "./remote.ts";
 import { getBaseline, inventoryStatus, listProjects, listServers } from "./store.ts";
 import type { Asset, Baseline, InventoryStatus, PublicAsset, TaskHostSource } from "./types.ts";
@@ -6,6 +7,9 @@ import type { Asset, Baseline, InventoryStatus, PublicAsset, TaskHostSource } fr
 /** 资产列表和详情页用的一行：资产本身加上归属客户、保修状态、系统地址、硬件采集情况、最近一次装机。 */
 export type AssetRow = PublicAsset & {
   customerName: string;
+  /** 「机房代码 / 机柜号 / U10-U17」，没放进机柜是空的。 */
+  place: string;
+  siteId: string;
   warranty: ReturnType<typeof warrantyState>;
   host: string;
   hostSource: TaskHostSource;
@@ -22,6 +26,8 @@ export function assetRows(assets: Asset[] = listAssets(), context: HostContext =
     if (!seen || row.updatedAt > seen.updatedAt) latest.set(row.assetId, row);
   }
   const baselines = new Map<string, Baseline | null>();
+  const racks = new Map(listRacks().map((item) => [item.id, item]));
+  const sites = new Map(listSites().map((item) => [item.id, item]));
   return assets.map((asset) => {
     const row = latest.get(asset.id);
     const found = resolveAssetHost(asset, context);
@@ -30,6 +36,8 @@ export function assetRows(assets: Asset[] = listAssets(), context: HostContext =
     return {
       ...publicAsset(asset),
       customerName: asset.customerId ? customers.get(asset.customerId) || "" : "",
+      place: placeLabel(asset, racks, sites),
+      siteId: (asset.rackId && racks.get(asset.rackId)?.siteId) || "",
       warranty: warrantyState(asset),
       host: found.host,
       hostSource: found.source,

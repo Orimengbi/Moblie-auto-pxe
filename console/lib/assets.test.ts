@@ -199,3 +199,60 @@ test("excel import previews, then creates and updates by serial number", async (
   assert.equal(cleared.updated, 1);
   assert.equal(assets.getAsset(existing.id)?.customerId, null);
 });
+
+test("racks hold assets in U slots without overlap and moving in marks them racked", async () => {
+  const racks = await import("./racks.ts");
+  const site = racks.createSite({ code: "sz1", name: "深圳一号" });
+  assert.equal(site.code, "SZ1");
+  const made = racks.createRacks({ siteId: site.id, prefix: "A", from: 1, to: 3, pad: 2, heightU: 42 });
+  assert.deepEqual(made.created.map((rack) => rack.name), ["A01", "A02", "A03"]);
+  assert.deepEqual(racks.createRacks({ siteId: site.id, prefix: "A", from: 3, to: 4, pad: 2 }).skipped, ["A03"], "已经有的跳过");
+  assert.deepEqual(racks.listRacks(site.id).map((rack) => rack.name), ["A01", "A02", "A03", "A04"]);
+  const a01 = made.created[0];
+
+  const gpu = assets.createAsset({ sn: "rack-gpu", rackId: a01.id, uStart: 10, uHeight: 8 }, "alice");
+  assert.equal(gpu.status, "racked", "放进机柜自动上架");
+  assert.ok(assets.listEvents(gpu.id).length >= 1);
+  assert.throws(() => assets.createAsset({ sn: "rack-clash", rackId: a01.id, uStart: 17, uHeight: 2 }, "alice"), /U10-U17 已经放了 RACK-GPU/);
+  assert.throws(() => assets.createAsset({ sn: "rack-top", rackId: a01.id, uStart: 41, uHeight: 4 }, "alice"), /只有 42U/);
+  assert.throws(() => assets.createAsset({ sn: "rack-nou", uStart: 3 }, "alice"), /没选机柜/);
+  const below = assets.createAsset({ sn: "rack-below", rackId: a01.id, uStart: 8, uHeight: 2, status: "active" }, "alice");
+  assert.equal(below.status, "active", "明确给了状态就不自动改");
+  const pdu = assets.createAsset({ sn: "rack-pdu", type: "pdu", rackId: a01.id, uStart: 5, uHeight: 0 }, "alice");
+  assert.equal(pdu.uStart, null, "侧挂不占 U 位");
+
+  // 挪到别的机柜，时间线里写清楚从哪到哪。
+  assets.updateAsset(below.id, { rackId: made.created[1].id, uStart: 1 }, "bob");
+  const moved = assets.listEvents(below.id).find((event) => event.kind === "edit")!;
+  assert.match(moved.text, /机柜：SZ1 \/ A01 → SZ1 \/ A02/);
+  assert.match(moved.text, /起始 U：8 → 1/);
+
+  // 改矮不能挤掉设备；有设备的机柜和有机柜的机房不能删。
+  assert.throws(() => racks.updateRack(a01.id, { siteId: site.id, name: "A01", heightU: 16 }), /放到了 U17/);
+  assert.equal(racks.updateRack(a01.id, { siteId: site.id, name: "A01", heightU: 20 }).heightU, 20);
+  assert.throws(() => racks.deleteRack(a01.id), /还有 2 台/);
+  assert.throws(() => racks.deleteSite(site.id), /还有 4 个机柜/);
+
+  // Excel：按机房和机柜号放，导出的位置能原样导回来。
+  const { parseAssetTable, assetsToRows } = await import("./asset-sheet.ts");
+  const imported = assets.importAssets(
+    [
+      { row: 2, cells: { sn: "rack-xl", site: "SZ1", rack: "A03", uStart: "U20", uHeight: "2" } },
+      { row: 3, cells: { sn: "rack-xl2", rack: "Z99" } },
+      { row: 4, cells: { sn: "rack-xl3", site: "SZ1" } },
+      { row: 5, cells: { sn: "RACK-GPU", rack: "无" } },
+    ],
+    "alice",
+  );
+  assert.deepEqual(imported.rows.map((row) => row.action), ["create", "error", "error", "update"]);
+  assert.match(imported.rows[1].message, /没有机柜 Z99/);
+  assert.match(imported.rows[2].message, /填了机房就要填机柜/);
+  const xl = assets.findAssetBySn("RACK-XL")!;
+  assert.deepEqual([xl.rackId, xl.uStart, xl.uHeight], [made.created[2].id, 20, 2]);
+  assert.equal(assets.getAsset(gpu.id)?.rackId, null, "写「无」移出机柜");
+  assert.equal(assets.getAsset(gpu.id)?.uStart, null);
+  const rows = assetsToRows(assets.listAssets(), assets.listCustomers(), racks.listRacks(), racks.listSites());
+  const round = assets.importAssets(parseAssetTable(rows).records, "alice", { dryRun: true });
+  assert.equal(round.errors, 0, JSON.stringify(round.rows.filter((row) => row.action === "error")));
+  assert.equal(round.updated + round.created, 0);
+});

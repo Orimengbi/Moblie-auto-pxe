@@ -15,6 +15,7 @@ function groups(role: string): { title: string; links: NavLink[] }[] {
       links: [
         { href: "/", label: "总览" },
         { href: "/assets", label: "资产" },
+        { href: "/racks", label: "机房" },
         { href: "/customers", label: "客户" },
       ],
     },

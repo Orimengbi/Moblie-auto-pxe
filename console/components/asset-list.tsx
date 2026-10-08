@@ -15,7 +15,7 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { AssetRow } from "@/lib/asset-view";
 import { ASSET_STATUS, ASSET_TYPES, WARRANTY_LABEL } from "@/lib/asset-labels";
-import type { AssetStatus, Customer, RemoteFile, RemoteTask } from "@/lib/types";
+import type { AssetStatus, Customer, RemoteFile, RemoteTask, Site } from "@/lib/types";
 
 const SELECT = "h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm";
 
@@ -26,6 +26,7 @@ const COLUMNS = [
   { key: "model", label: "厂商 / 型号" },
   { key: "customer", label: "归属" },
   { key: "status", label: "状态" },
+  { key: "place", label: "位置" },
   { key: "bmc", label: "BMC" },
   { key: "host", label: "系统地址" },
   { key: "warranty", label: "保修" },
@@ -35,13 +36,14 @@ const COLUMNS = [
 
 interface Filters {
   q: string;
+  site: string;
   status: string;
   customer: string;
   type: string;
   warranty: string;
 }
 
-const EMPTY: Filters = { q: "", status: "", customer: "", type: "", warranty: "" };
+const EMPTY: Filters = { q: "", site: "", status: "", customer: "", type: "", warranty: "" };
 
 function hardwareText(row: AssetRow): string {
   const latest = [row.inventory.os?.at, row.inventory.bmc?.at].filter(Boolean).sort().pop();
@@ -52,11 +54,12 @@ function hardwareText(row: AssetRow): string {
 function matches(row: AssetRow, filters: Filters): boolean {
   if (filters.status && row.status !== filters.status) return false;
   if (filters.type && row.type !== filters.type) return false;
+  if (filters.site === "none" ? row.rackId : filters.site && row.siteId !== filters.site) return false;
   if (filters.customer === "none" ? row.customerId : filters.customer && row.customerId !== filters.customer) return false;
   if (filters.warranty && !(row.warranty === "expired" || row.warranty === "expiring")) return false;
   const needle = filters.q.trim().toLowerCase();
   if (!needle) return true;
-  return [row.tag, row.sn, row.vendor, row.model, row.customerName, row.owner, row.location, row.bmcIp, row.host, row.hostname, row.purchaseOrder, row.note]
+  return [row.tag, row.sn, row.vendor, row.model, row.customerName, row.owner, row.place, row.location, row.bmcIp, row.host, row.hostname, row.purchaseOrder, row.note]
     .join(" ")
     .toLowerCase()
     .includes(needle);
@@ -66,12 +69,14 @@ function matches(row: AssetRow, filters: Filters): boolean {
 export function AssetList({
   rows,
   customers,
+  sites,
   files,
   tasks,
   bmcPort,
 }: {
   rows: AssetRow[];
   customers: Customer[];
+  sites: Site[];
   files: RemoteFile[];
   tasks: RemoteTask[];
   bmcPort: string;
@@ -168,6 +173,15 @@ export function AssetList({
           {customers.map((customer) => (
             <option key={customer.id} value={customer.id}>
               {customer.code} · {customer.name}
+            </option>
+          ))}
+        </select>
+        <select className={SELECT} value={filters.site} onChange={(event) => setFilter("site", event.target.value)}>
+          <option value="">全部机房</option>
+          <option value="none">没放进机柜的</option>
+          {sites.map((site) => (
+            <option key={site.id} value={site.id}>
+              {site.code} · {site.name}
             </option>
           ))}
         </select>
@@ -320,7 +334,10 @@ export function AssetList({
                   </TableCell>
                   <TableCell>
                     <Badge variant={row.status === "repair" ? "destructive" : row.status === "active" ? "default" : "outline"}>{ASSET_STATUS[row.status]}</Badge>
-                    {row.location ? <span className="mt-1 block text-xs text-muted-foreground">{row.location}</span> : null}
+                  </TableCell>
+                  <TableCell className="font-mono text-xs">
+                    {row.place || <span className="font-sans text-muted-foreground">—</span>}
+                    {row.location ? <span className="mt-1 block font-sans text-muted-foreground">{row.location}</span> : null}
                   </TableCell>
                   <TableCell className="font-mono text-xs">{row.bmcIp || "—"}</TableCell>
                   <TableCell className="font-mono text-xs" title={row.hostSource ? HOST_SOURCE[row.hostSource] : undefined}>
@@ -369,7 +386,7 @@ export function AssetList({
       <ServerPowerDialog targets={powerTargets} onClose={() => setPowerTargets([])} />
       {consoleRow ? <RemoteConsole row={consoleRow} port={bmcPort} onClose={() => setConsoleRow(null)} /> : null}
       <ServerSidebar
-        row={sideRow ? { id: sideRow.id, sn: sideRow.sn, description: [sideRow.tag, ASSET_STATUS[sideRow.status], sideRow.customerName, [sideRow.vendor, sideRow.model].filter(Boolean).join(" ")].filter(Boolean).join(" · ") } : null}
+        row={sideRow ? { id: sideRow.id, sn: sideRow.sn, description: [sideRow.tag, ASSET_STATUS[sideRow.status], sideRow.place, sideRow.customerName, [sideRow.vendor, sideRow.model].filter(Boolean).join(" ")].filter(Boolean).join(" · ") } : null}
         onClose={() => setSideId(null)}
         onChanged={() => router.refresh()}
       />

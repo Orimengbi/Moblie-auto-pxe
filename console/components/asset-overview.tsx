@@ -62,7 +62,8 @@ export function AssetOverview({ assetId, onChanged }: { assetId: string; onChang
         items={[
           ["归属客户", asset.customerName || "无（自有）"],
           ["负责人", asset.owner],
-          ["位置", asset.location],
+          ["机柜位置", asset.place, true],
+          ["位置备注", asset.location],
         ]}
       />
       <Block

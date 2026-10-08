@@ -611,7 +611,13 @@ export interface Asset {
   /** 负责人。 */
   owner: string;
   status: AssetStatus;
+  /** 位置备注：机柜之外的补充说明。 */
   location: string;
+  rackId: string | null;
+  /** 最下面占的那个 U（U1 在最底下）。在机柜里但没定 U 位时是 null。 */
+  uStart: number | null;
+  /** 占几个 U，0 表示侧挂（竖装 PDU 等），不占 U 位。 */
+  uHeight: number;
   bmcMac: string;
   bmcIp: string;
   bmcUser: string;
@@ -668,4 +674,30 @@ export interface TagSettings {
   /** 没有归属客户时 {customer} 填什么。 */
   noCustomer: string;
   typeCodes: Record<AssetType, string>;
+}
+
+/** 机房。 */
+export interface Site {
+  id: string;
+  code: string;
+  name: string;
+  address: string;
+  note: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Rack {
+  id: string;
+  siteId: string;
+  /** 机柜号，在同一个机房里唯一，例如 A01。 */
+  name: string;
+  /** 列或排，例如 A 列。 */
+  rowLabel: string;
+  heightU: number;
+  /** 额定功率，自由填写，例如 12kW。 */
+  powerKw: string;
+  note: string;
+  createdAt: string;
+  updatedAt: string;
 }

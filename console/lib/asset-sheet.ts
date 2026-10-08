@@ -1,5 +1,5 @@
 import { ASSET_STATUS, ASSET_TYPES } from "./asset-labels.ts";
-import type { Asset, AssetStatus, AssetType, Customer } from "./types.ts";
+import type { Asset, AssetStatus, AssetType, Customer, Rack, Site } from "./types.ts";
 
 /**
  * 资产的 Excel：模板、导出和导入用同一套列。导入时按序列号对上已有资产，只改填了的格子；
@@ -15,6 +15,10 @@ export type SheetField =
   | "customer"
   | "owner"
   | "location"
+  | "site"
+  | "rack"
+  | "uStart"
+  | "uHeight"
   | "tagOverride"
   | "bmcMac"
   | "bmcIp"
@@ -44,7 +48,11 @@ export const SHEET_COLUMNS: { field: SheetField; header: string; aliases: string
   { field: "model", header: "型号", aliases: ["model", "机型"] },
   { field: "customer", header: "归属客户", aliases: ["客户", "归属", "客户代码"] },
   { field: "owner", header: "负责人", aliases: [] },
-  { field: "location", header: "位置", aliases: ["机房位置", "机柜"] },
+  { field: "site", header: "机房", aliases: ["机房代码", "idc", "数据中心"] },
+  { field: "rack", header: "机柜", aliases: ["机柜号", "rack"] },
+  { field: "uStart", header: "起始U", aliases: ["u位", "起始u位", "ustart"] },
+  { field: "uHeight", header: "占用U", aliases: ["高度u", "u数", "uheight"] },
+  { field: "location", header: "位置备注", aliases: ["位置", "机房位置"] },
   { field: "tagOverride", header: "手动编号", aliases: ["资产编号（手动）"] },
   { field: "bmcMac", header: "BMC MAC", aliases: ["ipmimac", "bmcmac地址", "ipmimac地址"] },
   { field: "bmcIp", header: "BMC 地址", aliases: ["bmcip", "ipmi地址", "ipmiip"] },
@@ -143,8 +151,10 @@ export function parseStatus(value: string): AssetStatus | null {
 }
 
 /** 导出：表头一行，一台一行，最前面加「编号」列给人看。不带密码。 */
-export function assetsToRows(assets: Asset[], customers: Customer[]): string[][] {
+export function assetsToRows(assets: Asset[], customers: Customer[], racks: Rack[] = [], sites: Site[] = []): string[][] {
   const byId = new Map(customers.map((item) => [item.id, item]));
+  const rackById = new Map(racks.map((item) => [item.id, item]));
+  const siteById = new Map(sites.map((item) => [item.id, item]));
   const columns = SHEET_COLUMNS.filter((column) => column.field !== "bmcPassword" && column.field !== "bmcFallbackPassword");
   return [
     ["编号", ...columns.map((column) => column.header)],
@@ -154,6 +164,11 @@ export function assetsToRows(assets: Asset[], customers: Customer[]): string[][]
         if (column.field === "type") return ASSET_TYPES[asset.type];
         if (column.field === "status") return ASSET_STATUS[asset.status];
         if (column.field === "customer") return asset.customerId ? byId.get(asset.customerId)?.code || "" : "";
+        const rack = asset.rackId ? rackById.get(asset.rackId) : undefined;
+        if (column.field === "site") return rack ? siteById.get(rack.siteId)?.code || "" : "";
+        if (column.field === "rack") return rack?.name || "";
+        if (column.field === "uStart") return asset.uStart ? String(asset.uStart) : "";
+        if (column.field === "uHeight") return String(asset.uHeight);
         return String(asset[column.field as keyof Asset] ?? "");
       }),
     ]),
@@ -167,6 +182,10 @@ export const TEMPLATE_EXAMPLE: Partial<Record<SheetField, string>> = {
   vendor: "Gigabyte",
   model: "G894-SD3",
   customer: "示例：客户代码或名称，留空不改，写「自有」清空",
+  site: "机房代码",
+  rack: "A01",
+  uStart: "10",
+  uHeight: "2",
   bmcMac: "aa:bb:cc:dd:ee:10",
   bmcIp: "192.168.100.21",
   bmcUser: "admin",

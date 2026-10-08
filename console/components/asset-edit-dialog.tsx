@@ -6,7 +6,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { ASSET_STATUS, ASSET_TYPES } from "@/lib/asset-labels";
-import type { AssetStatus, AssetType, Customer, PublicAsset } from "@/lib/types";
+import type { AssetStatus, AssetType, Customer, PublicAsset, Rack, Site } from "@/lib/types";
 
 /** 表单里的值都按文字存，密码留空表示不改。 */
 type Form = {
@@ -19,6 +19,10 @@ type Form = {
   customerId: string;
   owner: string;
   location: string;
+  siteId: string;
+  rackId: string;
+  uStart: string;
+  uHeight: string;
   bmcMac: string;
   bmcIp: string;
   bmcUser: string;
@@ -51,6 +55,10 @@ function formOf(asset: PublicAsset | null): Form {
     customerId: asset?.customerId || "",
     owner: asset?.owner || "",
     location: asset?.location || "",
+    siteId: "",
+    rackId: asset?.rackId || "",
+    uStart: asset?.uStart ? String(asset.uStart) : "",
+    uHeight: String(asset?.uHeight ?? 1),
     bmcMac: asset?.bmcMac || "",
     bmcIp: asset?.bmcIp || "",
     bmcUser: asset?.bmcUser || "",
@@ -93,11 +101,22 @@ export function AssetEditDialog({
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
   const creating = !asset;
+  const [sites, setSites] = useState<Site[]>([]);
+  const [racks, setRacks] = useState<Rack[]>([]);
 
   useEffect(() => {
     if (!open) return;
     setForm(formOf(asset));
     setError("");
+    // 机房和机柜打开时现取，免得每个用到这个对话框的页面都要传。
+    void Promise.all([fetch("/api/sites").then((r) => r.json()), fetch("/api/racks").then((r) => r.json())])
+      .then(([siteList, rackList]: [Site[], Rack[]]) => {
+        setSites(siteList);
+        setRacks(rackList);
+        const rack = rackList.find((item) => item.id === asset?.rackId);
+        setForm((current) => ({ ...current, siteId: rack?.siteId || siteList[0]?.id || "" }));
+      })
+      .catch(() => undefined);
   }, [open, asset]);
 
   function field(key: keyof Form) {
@@ -111,7 +130,9 @@ export function AssetEditDialog({
     event.preventDefault();
     setPending(true);
     setError("");
-    const body = { ...form, customerId: form.customerId || null };
+    const { siteId, ...rest } = form;
+    void siteId;
+    const body = { ...rest, customerId: form.customerId || null, rackId: form.rackId || null, uStart: form.rackId && form.uStart ? Number(form.uStart) : null, uHeight: Number(form.uHeight || 1) };
     const response = await fetch(creating ? "/api/assets" : `/api/assets/${asset.id}`, {
       method: creating ? "POST" : "PATCH",
       headers: { "content-type": "application/json" },
@@ -185,8 +206,40 @@ export function AssetEditDialog({
             <Labeled label="负责人">
               <Input {...field("owner")} />
             </Labeled>
-            <Labeled label="位置">
-              <Input {...field("location")} placeholder="机房 / 机柜 / U 位" />
+          </Group>
+
+          <Group title="位置">
+            <Labeled label="机房">
+              <select className={SELECT} value={form.siteId} onChange={(event) => setForm({ ...form, siteId: event.target.value, rackId: "", uStart: "" })}>
+                {sites.length ? null : <option value="">还没有机房</option>}
+                {sites.map((site) => (
+                  <option key={site.id} value={site.id}>
+                    {site.code} · {site.name}
+                  </option>
+                ))}
+              </select>
+            </Labeled>
+            <Labeled label="机柜">
+              <select className={SELECT} value={form.rackId} onChange={(event) => setForm({ ...form, rackId: event.target.value, uStart: event.target.value ? form.uStart : "" })}>
+                <option value="">不在机柜里</option>
+                {racks
+                  .filter((rack) => rack.siteId === form.siteId)
+                  .map((rack) => (
+                    <option key={rack.id} value={rack.id}>
+                      {rack.name}（{rack.heightU}U）
+                    </option>
+                  ))}
+              </select>
+            </Labeled>
+            <span />
+            <Labeled label="起始 U">
+              <Input {...field("uStart")} type="number" min={1} disabled={!form.rackId || form.uHeight === "0"} placeholder="最下面那个 U" />
+            </Labeled>
+            <Labeled label="占用 U">
+              <Input {...field("uHeight")} type="number" min={0} max={60} placeholder="0 表示侧挂" />
+            </Labeled>
+            <Labeled label="位置备注">
+              <Input {...field("location")} placeholder="可留空，例如 后侧、冷通道" />
             </Labeled>
           </Group>
 

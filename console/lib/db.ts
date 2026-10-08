@@ -99,6 +99,33 @@ const MIGRATIONS: string[] = [
   CREATE INDEX audit_at ON audit_log(at);
   CREATE INDEX audit_target ON audit_log(target_id, at);
   `,
+  `
+  CREATE TABLE sites (
+    id TEXT PRIMARY KEY,
+    code TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    address TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE TABLE racks (
+    id TEXT PRIMARY KEY,
+    site_id TEXT NOT NULL REFERENCES sites(id),
+    name TEXT NOT NULL,
+    row_label TEXT NOT NULL DEFAULT '',
+    height_u INTEGER NOT NULL,
+    power_kw TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (site_id, name)
+  );
+  ALTER TABLE assets ADD COLUMN rack_id TEXT REFERENCES racks(id) ON DELETE SET NULL;
+  ALTER TABLE assets ADD COLUMN u_start INTEGER;
+  ALTER TABLE assets ADD COLUMN u_height INTEGER NOT NULL DEFAULT 1;
+  CREATE INDEX assets_rack ON assets(rack_id);
+  `,
 ];
 
 let opened: { file: string; db: Database } | null = null;
