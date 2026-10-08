@@ -9,4 +9,6 @@ export async function register() {
   refreshDiskImageBoot();
   const made = ensureServerAssets();
   if (made) console.log(`[assets] 按装机批次里的服务器补建了 ${made} 台资产`);
+  const { startMonitor } = await import("./lib/monitor-runner");
+  startMonitor();
 }

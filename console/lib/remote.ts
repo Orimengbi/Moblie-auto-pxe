@@ -227,6 +227,11 @@ function sshOptions(): string[] {
   ];
 }
 
+/** 用控制台的密钥以 root SSH 进一台机器跑一段 bash。监控用。 */
+export function runSsh(host: string, script: string, timeoutMs = 120_000, exec: Exec = defaultExec): Promise<ExecResult> {
+  return exec("ssh", [...sshOptions(), `root@${host}`, "bash -s"], script, Date.now() + timeoutMs, INVENTORY_OUTPUT_LIMIT);
+}
+
 function shq(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }

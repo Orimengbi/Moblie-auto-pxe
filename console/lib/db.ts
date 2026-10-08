@@ -188,6 +188,43 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX ticket_logs_ticket ON ticket_logs(ticket_id, id);
   `,
+  `
+  CREATE TABLE alerts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+    key TEXT NOT NULL,
+    source TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    title TEXT NOT NULL,
+    detail TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL,
+    sticky INTEGER NOT NULL DEFAULT 0,
+    count INTEGER NOT NULL DEFAULT 1,
+    first_at TEXT NOT NULL,
+    last_at TEXT NOT NULL,
+    acked_by TEXT NOT NULL DEFAULT '',
+    acked_at TEXT NOT NULL DEFAULT '',
+    resolved_by TEXT NOT NULL DEFAULT '',
+    resolved_at TEXT NOT NULL DEFAULT '',
+    ticket_id TEXT NOT NULL DEFAULT ''
+  );
+  CREATE INDEX alerts_open ON alerts(status, asset_id, key);
+  CREATE TABLE monitor_state (
+    asset_id TEXT PRIMARY KEY REFERENCES assets(id) ON DELETE CASCADE,
+    bmc_at TEXT NOT NULL DEFAULT '',
+    bmc_ok INTEGER NOT NULL DEFAULT 0,
+    bmc_error TEXT NOT NULL DEFAULT '',
+    bmc_failures INTEGER NOT NULL DEFAULT 0,
+    sensors TEXT NOT NULL DEFAULT '[]',
+    sel_last TEXT NOT NULL DEFAULT '',
+    sel_recent TEXT NOT NULL DEFAULT '[]',
+    os_at TEXT NOT NULL DEFAULT '',
+    os_ok INTEGER NOT NULL DEFAULT 0,
+    os_error TEXT NOT NULL DEFAULT '',
+    gpus TEXT NOT NULL DEFAULT '[]',
+    disks TEXT NOT NULL DEFAULT '[]'
+  );
+  `,
 ];
 
 let opened: { file: string; db: Database } | null = null;

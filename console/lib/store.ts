@@ -1707,6 +1707,7 @@ export function removeAssetFiles(assetId: string): void {
   if (!/^[0-9a-f-]{36}$/.test(assetId)) return;
   fs.rmSync(inventoryDir(assetId), { recursive: true, force: true });
   fs.rmSync(opticsPath(assetId), { force: true });
+  fs.rmSync(path.join(dataDir(), "monitor", `${assetId}.sdr`), { force: true });
 }
 
 export interface ServerControl {

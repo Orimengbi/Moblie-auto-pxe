@@ -188,25 +188,26 @@ export async function powerStatus(host: string, username: string, password: stri
   return parsePowerStatus(result.stdout);
 }
 
-export async function defaultIpmiExec(host: string, username: string, password: string, args: string[]): Promise<IpmiExecResult> {
+/** timeoutMs 默认 20 秒；读整张传感器表（sdr）要给长一点。 */
+export async function defaultIpmiExec(host: string, username: string, password: string, args: string[], timeoutMs = 20000): Promise<IpmiExecResult> {
   const file = path.join(os.tmpdir(), `pxe-ipmi-${process.pid}-${Date.now()}.pw`);
   fs.writeFileSync(file, password, { mode: 0o600 });
   try {
     // -v 让 ipmitool 说出登录失败的原因，见 ipmiFailure。
-    return await runIpmitool(["-v", "-I", "lanplus", "-H", host, "-U", username, "-f", file, ...args]);
+    return await runIpmitool(["-v", "-I", "lanplus", "-H", host, "-U", username, "-f", file, ...args], timeoutMs);
   } finally {
     fs.rmSync(file, { force: true });
   }
 }
 
-function runIpmitool(args: string[]): Promise<IpmiExecResult> {
+function runIpmitool(args: string[], timeoutMs: number): Promise<IpmiExecResult> {
   return new Promise((resolve, reject) => {
     const child = spawn("ipmitool", args, { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
-    }, 20000);
+    }, timeoutMs);
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {

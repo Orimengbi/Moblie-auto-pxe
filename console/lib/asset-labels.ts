@@ -1,4 +1,4 @@
-import type { Asset, AssetStatus, AssetType, Customer, PartKind, PartStatus, TagSettings, TicketKind, TicketPriority, TicketStatus } from "./types.ts";
+import type { AlertSeverity, AlertSource, AlertStatus, Asset, AssetStatus, AssetType, Customer, PartKind, PartStatus, TagSettings, TicketKind, TicketPriority, TicketStatus } from "./types.ts";
 
 /** 页面和服务端共用的名称。这个文件不碰数据库，客户端组件可以直接引用。 */
 export const ASSET_TYPES: Record<AssetType, string> = {
@@ -89,3 +89,7 @@ export const TICKET_STATUS: Record<TicketStatus, string> = {
 
 /** 还没解决的工单状态。 */
 export const OPEN_TICKET_STATUS: TicketStatus[] = ["open", "processing", "waiting"];
+
+export const ALERT_SEVERITY: Record<AlertSeverity, string> = { critical: "严重", warning: "警告" };
+export const ALERT_STATUS: Record<AlertStatus, string> = { active: "告警中", acked: "已确认", resolved: "已恢复" };
+export const ALERT_SOURCE: Record<AlertSource, string> = { sensor: "传感器", sel: "BMC 事件", bmc: "BMC", gpu: "GPU", xid: "GPU Xid", disk: "硬盘" };

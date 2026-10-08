@@ -776,3 +776,94 @@ export interface TicketLog {
   kind: string;
   text: string;
 }
+
+export type AlertSeverity = "warning" | "critical";
+/** active 告警中，acked 已确认（还在但有人知道了），resolved 已恢复或已处理。 */
+export type AlertStatus = "active" | "acked" | "resolved";
+/** sensor BMC 传感器，sel BMC 事件日志，bmc BMC 连不上，gpu 显卡，xid 驱动报的 Xid，disk 硬盘。 */
+export type AlertSource = "sensor" | "sel" | "bmc" | "gpu" | "xid" | "disk";
+
+export interface Alert {
+  id: number;
+  assetId: string;
+  /** 去重用：同一台、同一个 key 没恢复前只有一条。 */
+  key: string;
+  source: AlertSource;
+  severity: AlertSeverity;
+  title: string;
+  detail: string;
+  status: AlertStatus;
+  /** 事件类（SEL、Xid）不会自己恢复，要人处理；状态类条件消失就自动恢复。 */
+  sticky: boolean;
+  count: number;
+  firstAt: string;
+  lastAt: string;
+  ackedBy: string;
+  ackedAt: string;
+  resolvedBy: string;
+  resolvedAt: string;
+  ticketId: string;
+}
+
+/** 一个传感器的读数。status 是 ipmitool 给的：ok、nc、cr、nr、ns 等。 */
+export interface SensorReading {
+  name: string;
+  status: string;
+  reading: string;
+  severity: AlertSeverity | null;
+}
+
+export interface SelEntry {
+  id: string;
+  at: string;
+  sensor: string;
+  event: string;
+  direction: string;
+  severity: AlertSeverity | "info";
+}
+
+export interface GpuHealth {
+  index: string;
+  bus: string;
+  serial: string;
+  temperature: number | null;
+  eccUncorrected: number | null;
+}
+
+export interface DiskHealth {
+  name: string;
+  /** PASSED、FAILED、OK 或读不到时的原文。 */
+  health: string;
+  ok: boolean;
+}
+
+export interface MonitorState {
+  assetId: string;
+  bmcAt: string;
+  bmcOk: boolean;
+  bmcError: string;
+  bmcFailures: number;
+  sensors: SensorReading[];
+  selLast: string;
+  selRecent: SelEntry[];
+  osAt: string;
+  osOk: boolean;
+  osError: string;
+  gpus: GpuHealth[];
+  disks: DiskHealth[];
+}
+
+export interface MonitorSettings {
+  enabled: boolean;
+  /** 读 BMC 传感器和事件日志的间隔。 */
+  bmcIntervalMin: number;
+  /** SSH 进系统查 GPU 和硬盘的间隔，0 表示不查。 */
+  osIntervalMin: number;
+  /** 哪些状态的资产要监控。 */
+  statuses: AssetStatus[];
+  gpuTempWarn: number;
+  /** 不报的传感器名，逗号分开，可以用 * 通配。 */
+  ignoreSensors: string;
+  /** BMC 连续几次连不上才报。 */
+  bmcFailuresToAlert: number;
+}
