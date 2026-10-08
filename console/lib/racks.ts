@@ -1,6 +1,6 @@
 import { assertCodeFree, countWhere, db, runOrPreview, transaction, type SqlValue } from "./db.ts";
 import { cleanCode, cleanName, cleanText } from "./validate.ts";
-import type { Rack, Site } from "./types.ts";
+import type { Rack, RackFacing, Site } from "./types.ts";
 
 /** 机房和机柜。资产放在哪个机柜、哪几个 U 记在资产上（rack_id、u_start、u_height），这里只管机房和机柜本身。 */
 
@@ -27,6 +27,9 @@ function toRack(row: Record<string, SqlValue>): Rack {
     heightU: Number(row.height_u),
     powerKw: String(row.power_kw),
     note: String(row.note),
+    posX: row.pos_x === null || row.pos_x === undefined ? null : Number(row.pos_x),
+    posY: row.pos_y === null || row.pos_y === undefined ? null : Number(row.pos_y),
+    facing: (["up", "down"].includes(String(row.facing)) ? String(row.facing) : "") as RackFacing,
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
@@ -107,7 +110,7 @@ function rackHeight(value: unknown): number {
   return height;
 }
 
-function cleanRack(input: RackInput, id: string | null): Omit<Rack, "id" | "createdAt" | "updatedAt"> {
+function cleanRack(input: RackInput, id: string | null): Omit<Rack, "id" | "createdAt" | "updatedAt" | "posX" | "posY" | "facing"> {
   const site = getSite(String(input.siteId ?? ""));
   if (!site) throw new Error("选的机房不存在");
   const name = String(input.name ?? "").trim();
@@ -130,7 +133,7 @@ function cleanRack(input: RackInput, id: string | null): Omit<Rack, "id" | "crea
   };
 }
 
-function insertRack(clean: Omit<Rack, "id" | "createdAt" | "updatedAt">): Rack {
+function insertRack(clean: Omit<Rack, "id" | "createdAt" | "updatedAt" | "posX" | "posY" | "facing">): Rack {
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
   db()
@@ -325,4 +328,43 @@ export function cachedRackFinder(): (siteText: string, rackName: string) => Rack
     if (matches.length > 1) return "ambiguous";
     return matches[0] || null;
   };
+}
+
+export const MAX_FLOOR = 200;
+
+export interface LayoutItem {
+  id: string;
+  /** 都给 null 表示回到自动排布。 */
+  x: number | null;
+  y: number | null;
+  facing?: RackFacing;
+}
+
+/**
+ * 保存一个机房的俯视图布局。只改给了的机柜；两个机柜不能占同一格。
+ */
+export function saveLayout(siteId: string, items: LayoutItem[]): Rack[] {
+  if (!getSite(siteId)) throw new Error("机房不存在");
+  return transaction(db(), () => {
+    const racks = new Map(listRacks(siteId).map((rack) => [rack.id, rack]));
+    const now = new Date().toISOString();
+    for (const item of items) {
+      const rack = racks.get(item.id);
+      if (!rack) throw new Error("布局里有不属于这个机房的机柜，刷新页面再改");
+      const placed = item.x !== null && item.y !== null;
+      if (placed && (![item.x, item.y].every((value) => Number.isInteger(value) && value! >= 0 && value! < MAX_FLOOR))) throw new Error(`机柜 ${rack.name} 的位置不对`);
+      const facing = item.facing ?? rack.facing;
+      if (!["", "up", "down"].includes(facing)) throw new Error("朝向只能是上、下或不设");
+      racks.set(rack.id, { ...rack, posX: placed ? item.x : null, posY: placed ? item.y : null, facing });
+      db().prepare("UPDATE racks SET pos_x = ?, pos_y = ?, facing = ?, updated_at = ? WHERE id = ?").run(placed ? item.x : null, placed ? item.y : null, facing, now, rack.id);
+    }
+    const taken = new Map<string, string>();
+    for (const rack of racks.values()) {
+      if (rack.posX === null || rack.posY === null) continue;
+      const key = `${rack.posX},${rack.posY}`;
+      if (taken.has(key)) throw new Error(`机柜 ${taken.get(key)} 和 ${rack.name} 放在了同一格`);
+      taken.set(key, rack.name);
+    }
+    return listRacks(siteId);
+  });
 }

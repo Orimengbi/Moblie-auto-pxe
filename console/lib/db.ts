@@ -247,6 +247,11 @@ const MIGRATIONS: string[] = [
   ALTER TABLE monitor_state ADD COLUMN os_ok_at TEXT NOT NULL DEFAULT '';
   CREATE INDEX parts_sn_upper ON parts(UPPER(sn)) WHERE sn != '';
   `,
+  `
+  ALTER TABLE racks ADD COLUMN pos_x INTEGER;
+  ALTER TABLE racks ADD COLUMN pos_y INTEGER;
+  ALTER TABLE racks ADD COLUMN facing TEXT NOT NULL DEFAULT '';
+  `,
 ];
 
 let opened: { file: string; db: Database } | null = null;

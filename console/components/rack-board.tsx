@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ImportDialog } from "@/components/import-dialog";
+import { RackFloor } from "@/components/rack-floor";
 import { ServerSidebar } from "@/components/server-sidebar";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Button } from "@/components/ui/button";
@@ -12,7 +13,7 @@ import { Textarea } from "@/components/ui/textarea";
 import type { AssetRow } from "@/lib/asset-view";
 import { ASSET_STATUS } from "@/lib/asset-labels";
 import type { RackImportRow } from "@/lib/racks";
-import type { AssetStatus, Rack, Site } from "@/lib/types";
+import type { AlertSeverity, AssetStatus, Rack, Site } from "@/lib/types";
 import { Labeled } from "@/components/ui/labeled";
 import { api } from "@/lib/client-api";
 
@@ -26,7 +27,7 @@ function tone(status: AssetStatus): string {
 }
 
 /** 机房页：选一个机房，它的机柜并排显示，U1 在最下面。点设备看资产，点空 U 位放一台进去。 */
-export function RackBoard({ sites, racks, assets }: { sites: Site[]; racks: Rack[]; assets: AssetRow[] }) {
+export function RackBoard({ sites, racks, assets, alerts }: { sites: Site[]; racks: Rack[]; assets: AssetRow[]; alerts: Record<string, AlertSeverity> }) {
   const router = useRouter();
   const search = useSearchParams();
   const [siteId, setSiteId] = useState("");
@@ -35,6 +36,34 @@ export function RackBoard({ sites, racks, assets }: { sites: Site[]; racks: Rack
   const [rackForm, setRackForm] = useState<Rack | "new" | null>(null);
   const [placing, setPlacing] = useState<{ rack: Rack; u: number } | null>(null);
   const [importing, setImporting] = useState(false);
+  const [view, setView] = useState<"front" | "floor">("front");
+  const [focusRack, setFocusRack] = useState<string | null>(null);
+
+  // 正视图还是俯视图，这个浏览器记住上次的。
+  useEffect(() => {
+    try {
+      if (localStorage.getItem("pxe-rack-view") === "floor") setView("floor");
+    } catch {
+      // 读不到就用正视图。
+    }
+  }, []);
+
+  function chooseView(next: "front" | "floor") {
+    setView(next);
+    try {
+      localStorage.setItem("pxe-rack-view", next);
+    } catch {
+      // 存不了也能切。
+    }
+  }
+
+  // 从俯视图点进来：切到正视图，滚到那个机柜并闪一下。
+  useEffect(() => {
+    if (!focusRack || view !== "front") return;
+    document.getElementById(`rack-${focusRack}`)?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
+    const timer = setTimeout(() => setFocusRack(null), 2000);
+    return () => clearTimeout(timer);
+  }, [focusRack, view]);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -114,7 +143,15 @@ export function RackBoard({ sites, racks, assets }: { sites: Site[]; racks: Rack
             <Button type="button" size="xs" variant="ghost" onClick={() => void removeSite(site)}>
               删除机房
             </Button>
-            <Button type="button" size="sm" variant="outline" className="ml-auto" onClick={() => setImporting(true)}>
+            <span className="ml-auto flex gap-1">
+              <Button type="button" size="sm" variant={view === "front" ? "default" : "outline"} onClick={() => chooseView("front")}>
+                正视图
+              </Button>
+              <Button type="button" size="sm" variant={view === "floor" ? "default" : "outline"} onClick={() => chooseView("floor")}>
+                俯视图
+              </Button>
+            </span>
+            <Button type="button" size="sm" variant="outline" onClick={() => setImporting(true)}>
               Excel 导入机柜
             </Button>
             <Button type="button" size="sm" onClick={() => setRackForm("new")}>
@@ -123,12 +160,26 @@ export function RackBoard({ sites, racks, assets }: { sites: Site[]; racks: Rack
           </div>
           {siteRacks.length === 0 ? (
             <p className="text-sm text-muted-foreground">这个机房还没有机柜。点「新建机柜」，可以一次建一排，例如 A01 到 A20。</p>
+          ) : view === "floor" ? (
+            <RackFloor
+              key={siteId}
+              siteId={siteId}
+              racks={siteRacks}
+              assets={assets}
+              alerts={alerts}
+              onOpenRack={(rackId) => {
+                setFocusRack(rackId);
+                chooseView("front");
+              }}
+              onSaved={() => router.refresh()}
+            />
           ) : (
             <div className="flex gap-4 overflow-x-auto pb-4">
               {siteRacks.map((rack) => (
                 <RackColumn
                   key={rack.id}
                   rack={rack}
+                  focused={focusRack === rack.id}
                   assets={byRack.get(rack.id) || []}
                   used={usedU(rack)}
                   selected={sideId}
@@ -161,6 +212,7 @@ export function RackBoard({ sites, racks, assets }: { sites: Site[]; racks: Rack
 
 function RackColumn({
   rack,
+  focused,
   assets,
   used,
   selected,
@@ -170,6 +222,7 @@ function RackColumn({
   onDelete,
 }: {
   rack: Rack;
+  focused: boolean;
   assets: AssetRow[];
   used: number;
   selected: string | null;
@@ -185,7 +238,7 @@ function RackColumn({
   const units = Array.from({ length: rack.heightU }, (_, index) => rack.heightU - index);
 
   return (
-    <section className="grid w-60 shrink-0 content-start gap-2" data-server-row>
+    <section id={`rack-${rack.id}`} className={`grid w-60 shrink-0 content-start gap-2 rounded-md transition-shadow ${focused ? "ring-2 ring-primary ring-offset-4" : ""}`} data-server-row>
       <header className="grid gap-0.5">
         <div className="flex items-baseline gap-2">
           <h3 className="font-mono font-semibold">{rack.name}</h3>

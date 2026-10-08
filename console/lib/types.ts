@@ -763,9 +763,16 @@ export interface Rack {
   /** 额定功率，自由填写，例如 12kW。 */
   powerKw: string;
   note: string;
+  /** 俯视图里的格子位置，没摆过是 null（按列/排自动排）。 */
+  posX: number | null;
+  posY: number | null;
+  /** 正面朝哪边：up 朝上、down 朝下，空表示没设。 */
+  facing: RackFacing;
   createdAt: string;
   updatedAt: string;
 }
+
+export type RackFacing = "" | "up" | "down";
 
 /** 备件类型：硬件采集的部件类别，加上风扇、线缆和其他。 */
 export type PartKind = "cpu" | "memory" | "disk" | "gpu" | "nic" | "transceiver" | "psu" | "board" | "fan" | "cable" | "other";

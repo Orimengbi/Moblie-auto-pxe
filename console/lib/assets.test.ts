@@ -328,3 +328,24 @@ test("xlsx downloads can have Chinese file names", async () => {
   const response = xlsxResponse([["a"]], "表", "plan-机房二.xlsx");
   assert.match(response.headers.get("content-disposition") || "", /filename="plan-___\.xlsx"; filename\*=UTF-8''plan-%E6%9C%BA%E6%88%BF%E4%BA%8C\.xlsx/);
 });
+
+test("rack floor layout auto-places by row and saves positions without overlap", async () => {
+  const racks = await import("./racks.ts");
+  const { floorPositions } = await import("./floor.ts");
+  const site = racks.createSite({ code: "FL1", name: "俯视图机房" });
+  racks.createRacks({ siteId: site.id, prefix: "A,B", from: 1, to: 3, pad: 2 });
+  const list = racks.listRacks(site.id);
+  const auto = floorPositions(list);
+  const at = (name: string) => auto.get(list.find((rack) => rack.name === name)!.id);
+  assert.deepEqual([at("A01"), at("A03"), at("B01")], [{ x: 0, y: 0, auto: true }, { x: 2, y: 0, auto: true }, { x: 0, y: 2, auto: true }], "一排一行，排之间空一行");
+  const a1 = list.find((rack) => rack.name === "A01")!;
+  const b1 = list.find((rack) => rack.name === "B01")!;
+  racks.saveLayout(site.id, [{ id: a1.id, x: 5, y: 7, facing: "up" }]);
+  const moved = racks.listRacks(site.id);
+  assert.deepEqual([moved.find((r) => r.id === a1.id)?.posX, moved.find((r) => r.id === a1.id)?.posY, moved.find((r) => r.id === a1.id)?.facing], [5, 7, "up"]);
+  const after = floorPositions(moved);
+  assert.ok([...after.values()].filter((p) => p.auto).every((p) => p.y >= 9), "没摆过的放到摆好的下面");
+  assert.throws(() => racks.saveLayout(site.id, [{ id: b1.id, x: 5, y: 7 }]), /同一格/);
+  racks.saveLayout(site.id, [{ id: a1.id, x: null, y: null }]);
+  assert.equal(racks.listRacks(site.id).find((r) => r.id === a1.id)?.posX, null, "回到自动排布");
+});
