@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { AssetEditDialog } from "@/components/asset-edit-dialog";
+import { AssetImportDialog } from "@/components/asset-import-dialog";
 import { HOST_SOURCE, ProjectTaskRunner } from "@/components/project-task-runner";
 import { RemoteConsole } from "@/components/remote-console";
 import { ResizeHandle, useColumnWidths } from "@/components/resizable-columns";
@@ -81,6 +82,7 @@ export function AssetList({
   const [picked, setPicked] = useState<string[]>([]);
   const [sideId, setSideId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [powerTargets, setPowerTargets] = useState<AssetRow[]>([]);
   const [consoleRow, setConsoleRow] = useState<AssetRow | null>(null);
   const [bulkStatus, setBulkStatus] = useState("");
@@ -186,9 +188,17 @@ export function AssetList({
             清除筛选
           </Button>
         ) : null}
-        <Button type="button" size="sm" className="ml-auto" onClick={() => setCreating(true)}>
-          资产入库
-        </Button>
+        <div className="ml-auto flex gap-2">
+          <Button type="button" size="sm" variant="outline" onClick={() => window.location.assign("/api/assets/export")}>
+            导出 Excel
+          </Button>
+          <Button type="button" size="sm" variant="outline" onClick={() => setImporting(true)}>
+            Excel 导入
+          </Button>
+          <Button type="button" size="sm" onClick={() => setCreating(true)}>
+            资产入库
+          </Button>
+        </div>
       </div>
 
       <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
@@ -245,7 +255,7 @@ export function AssetList({
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
 
       {rows.length === 0 ? (
-        <p className="text-sm text-muted-foreground">还没有资产。点「资产入库」一台台录，或者在装机批次里上传服务器表，表里的机器会自动入库。</p>
+        <p className="text-sm text-muted-foreground">还没有资产。点「资产入库」一台台录，用「Excel 导入」批量导入，或者在装机批次里上传服务器表，表里的机器会自动入库。</p>
       ) : (
         <div className="overflow-x-auto">
           <Table className={columnWidths.tableClassName} style={columnWidths.tableStyle}>
@@ -355,6 +365,7 @@ export function AssetList({
           setSideId(asset.id);
         }}
       />
+      <AssetImportDialog open={importing} onClose={() => setImporting(false)} onDone={() => router.refresh()} />
       <ServerPowerDialog targets={powerTargets} onClose={() => setPowerTargets([])} />
       {consoleRow ? <RemoteConsole row={consoleRow} port={bmcPort} onClose={() => setConsoleRow(null)} /> : null}
       <ServerSidebar

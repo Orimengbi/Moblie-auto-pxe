@@ -131,14 +131,21 @@ function migrate(database: Database): void {
   }
 }
 
+let depth = 0;
+
+/** 嵌套调用时里层用 SAVEPOINT：里层失败只撤销里层，外层可以接着做或整个撤销（批量导入的预览就是整个撤销）。 */
 export function transaction<T>(database: Database, fn: () => T): T {
-  database.exec("BEGIN IMMEDIATE");
+  const name = `sp${depth}`;
+  database.exec(depth ? `SAVEPOINT ${name}` : "BEGIN IMMEDIATE");
+  depth++;
   try {
     const result = fn();
-    database.exec("COMMIT");
+    depth--;
+    database.exec(depth ? `RELEASE ${name}` : "COMMIT");
     return result;
   } catch (error) {
-    database.exec("ROLLBACK");
+    depth--;
+    database.exec(depth ? `ROLLBACK TO ${name}; RELEASE ${name}` : "ROLLBACK");
     throw error;
   }
 }

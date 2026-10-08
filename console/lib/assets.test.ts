@@ -130,3 +130,72 @@ test("audit entries can be searched and paged", () => {
   assert.equal(page.length, 2);
   assert.ok(assets.listAudit({ before: page[1].id }).every((entry) => entry.id < page[1].id));
 });
+
+test("excel import previews, then creates and updates by serial number", async () => {
+  const XLSX = await import("xlsx");
+  const { parseAssetTable, assetsToRows, normalizeDate } = await import("./asset-sheet.ts");
+  assets.createCustomer({ code: "BETA", name: "Beta 智算" });
+  const existing = assets.createAsset({ sn: "imp-old", vendor: "Dell", owner: "张三" }, "alice");
+
+  // 用真的 xlsx 走一遍：日期单元格读出来是序列号，要换回日期。
+  const sheet = XLSX.utils.aoa_to_sheet([
+    ["说明：下面是资产"],
+    ["序列号*", "类型", "状态", "归属客户", "型号", "保修到期", "采购日期", "BMC 密码", "颜色"],
+    ["imp-new-1", "交换机", "在用", "beta", "SN4600", new Date(Date.UTC(2028, 0, 31)), "2026/3/5", "pw1", "红"],
+    ["IMP-OLD", "", "维修中", "Beta 智算", "R760", "", "", "", ""],
+    ["imp-bad", "冰箱", "", "", "", "", "", "", ""],
+    ["imp-new-1", "", "", "", "", "", "", "", ""],
+    ["imp-nocust", "", "", "Gamma", "", "", "", "", ""],
+    ["", "", "", "", "", "", "", "", ""],
+    ["imp-date", "", "", "", "", "2026/13/40", "", "", ""],
+  ]);
+  const book = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(book, sheet, "资产");
+  const read = XLSX.read(XLSX.write(book, { type: "buffer", bookType: "xlsx" }), { type: "buffer" });
+  const rows = XLSX.utils.sheet_to_json(read.Sheets[read.SheetNames[0]], { header: 1, raw: true, defval: "" }) as unknown[][];
+  const parsed = parseAssetTable(rows);
+  assert.equal(parsed.error, undefined);
+  assert.deepEqual(parsed.ignored, ["颜色"]);
+  assert.equal(parsed.records[0].row, 3, "行号按 Excel 里的算");
+  assert.equal(parsed.records[0].cells.warrantyEnd, "2028-01-31");
+  assert.equal(parsed.records[0].cells.purchaseDate, "2026-03-05");
+  assert.equal(normalizeDate("2026年1月2日"), "2026-01-02");
+
+  const before = assets.listAssets().length;
+  const preview = assets.importAssets(parsed.records, "alice", { dryRun: true });
+  assert.deepEqual([preview.created, preview.updated, preview.unchanged, preview.errors], [1, 1, 0, 4]);
+  assert.equal(assets.listAssets().length, before, "预览不写入");
+  assert.equal(assets.getAsset(existing.id)?.status, "stock");
+  const messages = preview.rows.filter((row) => row.action === "error").map((row) => `${row.row} ${row.message}`);
+  assert.match(messages.join("\n"), /5 类型「冰箱」认不出/);
+  assert.match(messages.join("\n"), /6 和第 3 行是同一个序列号/);
+  assert.match(messages.join("\n"), /7 没有代码或名称是「Gamma」的客户/);
+  assert.match(messages.join("\n"), /9 保修到期要写成/);
+  assert.match(preview.rows.find((row) => row.sn === "IMP-OLD")!.message, /状态：入库 → 维修中[\s\S]*型号：空 → R760/);
+
+  const done = assets.importAssets(parsed.records, "alice");
+  assert.deepEqual([done.created, done.updated, done.errors], [1, 1, 4]);
+  const created = assets.findAssetBySn("IMP-NEW-1")!;
+  assert.equal(created.type, "switch");
+  assert.equal(created.status, "active");
+  assert.equal(created.bmcPassword, "pw1");
+  assert.equal(created.warrantyEnd, "2028-01-31");
+  const updated = assets.getAsset(existing.id)!;
+  assert.equal(updated.owner, "张三", "空格子不改");
+  assert.equal(updated.model, "R760");
+  assert.equal(assets.findAssetBySn("IMP-BAD"), null, "出错的行不入库");
+
+  // 再导一次同样的表：没有变化。导出的表能原样导回来。
+  assert.equal(assets.importAssets(parsed.records, "alice").updated, 0);
+  const exported = assetsToRows(assets.listAssets(), assets.listCustomers());
+  assert.equal(exported[0][0], "编号");
+  assert.ok(!exported[0].includes("BMC 密码"), "导出不带密码");
+  const round = assets.importAssets(parseAssetTable(exported).records, "alice", { dryRun: true });
+  assert.equal(round.errors, 0);
+  assert.equal(round.updated + round.created, 0, "导出再导入什么都不变");
+
+  // 写「自有」清空归属。
+  const cleared = assets.importAssets([{ row: 2, cells: { sn: "IMP-OLD", customer: "自有" } }], "alice");
+  assert.equal(cleared.updated, 1);
+  assert.equal(assets.getAsset(existing.id)?.customerId, null);
+});

@@ -1,4 +1,5 @@
 import { ASSET_STATUS, ASSET_TYPES, renderTag, TAG_TOKEN as TOKEN, type WarrantyState } from "./asset-labels.ts";
+import { parseStatus, parseType, type SheetCells } from "./asset-sheet.ts";
 import { db, transaction, type SqlValue } from "./db.ts";
 import { assertIpv4, normalizeMac, normalizeSn } from "./net.ts";
 import type { Asset, AssetEvent, AssetStatus, AssetType, AuditEntry, Customer, PublicAsset, ServerRow, TagSettings } from "./types.ts";
@@ -384,13 +385,105 @@ export function updateAsset(id: string, input: AssetInput, actor: string): Asset
       const other = findAssetBySn(next.sn);
       if (other) throw new Error(`序列号 ${next.sn} 已经是另一台资产 ${other.tag} 的了`);
     }
+    const changes = describeChanges(before, next);
+    // 什么都没变就不写，免得更新时间跟着变。
+    if (next.status === before.status && !changes.length) return current;
     assertTagFree(next);
     writeAsset(next);
     if (next.status !== before.status) addEvent(id, "status", `状态：${ASSET_STATUS[before.status]} → ${ASSET_STATUS[next.status]}`, actor);
-    const changes = describeChanges(before, next);
     if (changes.length) addEvent(id, "edit", changes.join("\n"), actor);
     return getAsset(id)!;
   });
+}
+
+export interface ImportRowResult {
+  row: number;
+  sn: string;
+  action: "create" | "update" | "same" | "error";
+  message: string;
+}
+
+export interface ImportResult {
+  created: number;
+  updated: number;
+  unchanged: number;
+  errors: number;
+  rows: ImportRowResult[];
+}
+
+class DryRun extends Error {}
+
+/**
+ * Excel 批量导入。按序列号对上已有资产就改填了的格子，没有就入库。一行出错只撤销这一行，别的照常。
+ * dryRun 时整个撤销，只返回会发生什么，给页面预览。
+ */
+export function importAssets(records: { row: number; cells: SheetCells }[], actor: string, options: { dryRun?: boolean } = {}): ImportResult {
+  const result: ImportResult = { created: 0, updated: 0, unchanged: 0, errors: 0, rows: [] };
+  const customers = listCustomers();
+  const findCustomer = (value: string): string | null | undefined => {
+    const key = value.trim().toLowerCase();
+    if (["自有", "无", "-", "none"].includes(key)) return null;
+    return customers.find((item) => item.code.toLowerCase() === key || item.name.toLowerCase() === key)?.id;
+  };
+  const seen = new Map<string, number>();
+  const run = () => {
+    for (const record of records) {
+      const cells = record.cells;
+      let sn = cells.sn || "";
+      try {
+        sn = normalizeSn(sn);
+        const first = seen.get(sn);
+        if (first) throw new Error(`和第 ${first} 行是同一个序列号`);
+        seen.set(sn, record.row);
+        const input: AssetInput = {};
+        for (const [field, value] of Object.entries(cells) as [keyof SheetCells, string][]) {
+          if (field === "sn" || !value) continue;
+          if (field === "type") {
+            const type = parseType(value);
+            if (!type) throw new Error(`类型「${value}」认不出，写 ${Object.values(ASSET_TYPES).join("、")} 之一`);
+            input.type = type;
+          } else if (field === "status") {
+            const status = parseStatus(value);
+            if (!status) throw new Error(`状态「${value}」认不出，写 ${Object.values(ASSET_STATUS).join("、")} 之一`);
+            input.status = status;
+          } else if (field === "customer") {
+            const id = findCustomer(value);
+            if (id === undefined) throw new Error(`没有代码或名称是「${value}」的客户，先在客户页建好`);
+            input.customerId = id;
+          } else {
+            (input as Record<string, string>)[field] = value;
+          }
+        }
+        transaction(db(), () => {
+          const existing = findAssetBySn(sn);
+          if (!existing) {
+            createAsset({ ...input, sn }, actor);
+            result.created++;
+            result.rows.push({ row: record.row, sn, action: "create", message: "" });
+            return;
+          }
+          const after = updateAsset(existing.id, input, actor);
+          const lines = [
+            ...(after.status !== existing.status ? [`状态：${ASSET_STATUS[existing.status]} → ${ASSET_STATUS[after.status]}`] : []),
+            ...describeChanges(existing, after),
+          ];
+          if (lines.length) result.updated++;
+          else result.unchanged++;
+          result.rows.push({ row: record.row, sn, action: lines.length ? "update" : "same", message: lines.join("\n") });
+        });
+      } catch (error) {
+        result.errors++;
+        result.rows.push({ row: record.row, sn, action: "error", message: error instanceof Error ? error.message : "这一行不对" });
+      }
+    }
+    if (options.dryRun) throw new DryRun();
+  };
+  try {
+    transaction(db(), run);
+  } catch (error) {
+    if (!(error instanceof DryRun)) throw error;
+  }
+  return result;
 }
 
 export function deleteAsset(id: string): Asset {
