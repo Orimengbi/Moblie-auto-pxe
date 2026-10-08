@@ -19,14 +19,16 @@ export const KIND_LABEL: Record<HwKind, string> = {
   nic: "网卡",
   transceiver: "光模块",
   psu: "电源",
+  fan: "风扇",
   firmware: "固件",
 };
 
-export const KIND_ORDER: HwKind[] = ["system", "board", "cpu", "memory", "gpu", "disk", "nic", "transceiver", "psu", "firmware"];
+export const KIND_ORDER: HwKind[] = ["system", "board", "cpu", "memory", "gpu", "disk", "nic", "transceiver", "psu", "fan", "firmware"];
 
 export const SOURCE_LABEL: Record<InventorySource, string> = {
   os: "系统内",
   bmc: "BMC",
+  snmp: "SNMP",
 };
 
 /** 属性的中文名和单位，页面显示用。没列出的按原名显示。 */

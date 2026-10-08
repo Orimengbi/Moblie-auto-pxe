@@ -92,4 +92,4 @@ export const OPEN_TICKET_STATUS: TicketStatus[] = ["open", "processing", "waitin
 
 export const ALERT_SEVERITY: Record<AlertSeverity, string> = { critical: "严重", warning: "警告" };
 export const ALERT_STATUS: Record<AlertStatus, string> = { active: "告警中", acked: "已确认", resolved: "已恢复" };
-export const ALERT_SOURCE: Record<AlertSource, string> = { sensor: "传感器", sel: "BMC 事件", bmc: "BMC", gpu: "GPU", xid: "GPU Xid", disk: "硬盘" };
+export const ALERT_SOURCE: Record<AlertSource, string> = { sensor: "传感器", sel: "BMC 事件", bmc: "BMC", gpu: "GPU", xid: "GPU Xid", disk: "硬盘", snmp: "SNMP", port: "端口" };

@@ -30,6 +30,8 @@ export type SheetField =
   | "osAddress"
   | "osNetmask"
   | "bootMac"
+  | "mgmtIp"
+  | "snmpProfile"
   | "purchaseSupplier"
   | "purchaseOrder"
   | "purchaseDate"
@@ -64,6 +66,8 @@ export const SHEET_COLUMNS: { field: SheetField; header: string; aliases: string
   { field: "osAddress", header: "系统地址", aliases: ["系统ip", "业务ip", "业务地址"] },
   { field: "osNetmask", header: "系统掩码", aliases: ["业务掩码"] },
   { field: "bootMac", header: "装机网卡 MAC", aliases: ["pxemac", "装机mac"] },
+  { field: "mgmtIp", header: "管理地址", aliases: ["管理ip", "管理口ip", "mgmtip"] },
+  { field: "snmpProfile", header: "SNMP 凭据", aliases: ["snmp"] },
   { field: "purchaseSupplier", header: "供应商", aliases: [] },
   { field: "purchaseOrder", header: "采购单号", aliases: ["合同号", "采购合同", "订单号"] },
   { field: "purchaseDate", header: "采购日期", aliases: ["购买日期"] },
@@ -151,7 +155,8 @@ export function parseStatus(value: string): AssetStatus | null {
 }
 
 /** 导出：表头一行，一台一行，最前面加「编号」列给人看。不带密码。 */
-export function assetsToRows(assets: Asset[], customers: Customer[], racks: Rack[] = [], sites: Site[] = []): string[][] {
+export function assetsToRows(assets: Asset[], customers: Customer[], racks: Rack[] = [], sites: Site[] = [], snmpProfiles: { id: string; name: string }[] = []): string[][] {
+  const profileById = new Map(snmpProfiles.map((item) => [item.id, item.name]));
   const byId = new Map(customers.map((item) => [item.id, item]));
   const rackById = new Map(racks.map((item) => [item.id, item]));
   const siteById = new Map(sites.map((item) => [item.id, item]));
@@ -169,6 +174,7 @@ export function assetsToRows(assets: Asset[], customers: Customer[], racks: Rack
         if (column.field === "rack") return rack?.name || "";
         if (column.field === "uStart") return asset.uStart ? String(asset.uStart) : "";
         if (column.field === "uHeight") return String(asset.uHeight);
+        if (column.field === "snmpProfile") return asset.snmpProfileId ? profileById.get(asset.snmpProfileId) || "" : "";
         return String(asset[column.field as keyof Asset] ?? "");
       }),
     ]),

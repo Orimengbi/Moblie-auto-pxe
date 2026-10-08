@@ -162,6 +162,8 @@ const COLUMNS: [ColumnKey, string][] = [
   ["bmcFallbackUser", "bmc_fallback_user"],
   ["bmcFallbackPassword", "bmc_fallback_password"],
   ["bootMac", "boot_mac"],
+  ["mgmtIp", "mgmt_ip"],
+  ["snmpProfileId", "snmp_profile_id"],
   ["osAddress", "os_address"],
   ["osNetmask", "os_netmask"],
   ["hostname", "hostname"],
@@ -196,6 +198,8 @@ const FIELD_LABEL: Partial<Record<keyof Asset, string>> = {
   bmcFallbackUser: "BMC 备用账号",
   bmcFallbackPassword: "BMC 备用密码",
   bootMac: "装机网卡 MAC",
+  mgmtIp: "管理地址",
+  snmpProfileId: "SNMP 凭据",
   osAddress: "系统地址",
   osNetmask: "系统掩码",
   hostname: "主机名",
@@ -219,7 +223,7 @@ function toAsset(row: Record<string, SqlValue>): AssetRecord {
   for (const [key, column] of COLUMNS) {
     const value = row[column];
     (asset as unknown as Record<string, unknown>)[key] =
-      key === "customerId" || key === "rackId" ? (value ? String(value) : null) : key === "uStart" ? (value === null || value === undefined ? null : Number(value)) : key === "uHeight" ? Number(value ?? 1) : String(value ?? "");
+      key === "customerId" || key === "rackId" || key === "snmpProfileId" ? (value ? String(value) : null) : key === "uStart" ? (value === null || value === undefined ? null : Number(value)) : key === "uHeight" ? Number(value ?? 1) : String(value ?? "");
   }
   return asset;
 }
@@ -301,6 +305,7 @@ function cleanAssetInput(input: AssetInput, current: AssetRecord | null): Partia
     ["bmcIp", "BMC 地址"],
     ["osAddress", "系统地址"],
     ["osNetmask", "系统掩码"],
+    ["mgmtIp", "管理地址"],
   ] as const) {
     if (has(key)) out[key] = input[key] ? assertIpv4(String(input[key]), label) : "";
   }
@@ -320,6 +325,11 @@ function cleanAssetInput(input: AssetInput, current: AssetRecord | null): Partia
     if (has(key)) out[key] = text(input[key], 120);
   }
   if (has("note")) out.note = text(input.note, 4000);
+  if (has("snmpProfileId")) {
+    const id = input.snmpProfileId ? String(input.snmpProfileId) : null;
+    if (id && !db().prepare("SELECT id FROM snmp_profiles WHERE id = ?").get(id)) throw new Error("选的 SNMP 凭据已经不存在");
+    out.snmpProfileId = id;
+  }
   if (has("rackId")) {
     const id = input.rackId ? String(input.rackId) : null;
     if (id && !getRack(id)) throw new Error("选的机柜已经不存在，刷新页面再选");
@@ -383,6 +393,7 @@ function describeChanges(before: AssetRecord, after: AssetRecord): string[] {
     }
     const show = (value: unknown) => {
       if (key === "customerId") return value ? customers.get(String(value)) || "已删除的客户" : "无";
+      if (key === "snmpProfileId") return value ? String(db().prepare("SELECT name FROM snmp_profiles WHERE id = ?").get(String(value))?.name ?? "已删除的凭据") : "无";
       if (key === "rackId") return value ? placeLabel({ rackId: String(value), uStart: null, uHeight: 1 }, racks, sites) || "已删除的机柜" : "无";
       if (key === "uStart" || key === "uHeight") return value === null || value === undefined ? "空" : String(value);
       return String(value || "空");
@@ -408,7 +419,7 @@ function writeAsset(record: AssetRecord): void {
 
 function blankAsset(id: string, sn: string, now: string): AssetRecord {
   const seq = Number(db().prepare("SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM assets").get()?.n ?? 1);
-  const record = { id, seq, createdAt: now, updatedAt: now, customerId: null, rackId: null, uStart: null, uHeight: 1, type: "server", status: "stock", sn } as AssetRecord;
+  const record = { id, seq, createdAt: now, updatedAt: now, customerId: null, snmpProfileId: null, rackId: null, uStart: null, uHeight: 1, type: "server", status: "stock", sn } as AssetRecord;
   for (const [key] of COLUMNS) if ((record as unknown as Record<string, unknown>)[key] === undefined) (record as unknown as Record<string, unknown>)[key] = "";
   return record;
 }
@@ -521,6 +532,14 @@ export function importAssets(records: { row: number; cells: SheetCells }[], acto
             if (rack === "ambiguous") throw new Error(`好几个机房都有机柜 ${value}，在「机房」列写明是哪个`);
             if (!rack) throw new Error(`${cells.site ? `机房「${cells.site}」里` : ""}没有机柜 ${value}，先在机房页建好`);
             input.rackId = rack.id;
+          } else if (field === "snmpProfile") {
+            if (["无", "-", "none"].includes(value.trim().toLowerCase())) {
+              input.snmpProfileId = null;
+              continue;
+            }
+            const profile = db().prepare("SELECT id FROM snmp_profiles WHERE name = ?").get(value.trim());
+            if (!profile) throw new Error(`没有叫「${value}」的 SNMP 凭据，先在设置里建好`);
+            input.snmpProfileId = String(profile.id);
           } else if (field === "uStart" || field === "uHeight") {
             (input as Record<string, string>)[field] = value;
           } else if (field === "customer") {

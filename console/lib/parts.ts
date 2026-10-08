@@ -273,6 +273,7 @@ const KIND_FROM_HW: Partial<Record<HwKind, PartKind>> = {
   transceiver: "transceiver",
   psu: "psu",
   board: "board",
+  fan: "fan",
 };
 
 export function partKindOf(kind: HwKind): PartKind | null {

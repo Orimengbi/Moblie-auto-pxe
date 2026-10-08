@@ -10,8 +10,10 @@ import { ASSET_STATUS, ASSET_TYPES, WARRANTY_LABEL } from "@/lib/asset-labels";
 import type { Customer } from "@/lib/types";
 
 /** 侧边栏「概况」：资产的资料，按块显示，可以编辑。 */
+type Uplink = { switchId: string; switchTag: string; port: string; remotePort: string; oper: string };
+
 export function AssetOverview({ assetId, onChanged }: { assetId: string; onChanged?: () => void }) {
-  const [asset, setAsset] = useState<AssetRow | null>(null);
+  const [asset, setAsset] = useState<(AssetRow & { uplinks?: Uplink[] }) | null>(null);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [error, setError] = useState("");
   const [editing, setEditing] = useState(false);
@@ -66,6 +68,28 @@ export function AssetOverview({ assetId, onChanged }: { assetId: string; onChang
           ["位置备注", asset.location],
         ]}
       />
+      {asset.type !== "server" ? (
+        <Block
+          title="网络管理"
+          items={[
+            ["管理地址", asset.mgmtIp, true],
+            ["SNMP", asset.snmpProfileId ? "已配置凭据" : "没配"],
+          ]}
+        />
+      ) : null}
+      {asset.uplinks?.length ? (
+        <section className="grid gap-1.5">
+          <h4 className="text-xs font-medium tracking-wide text-muted-foreground">上联（交换机 LLDP 看到的）</h4>
+          <ul className="grid gap-0.5 text-sm">
+            {asset.uplinks.map((link) => (
+              <li key={`${link.switchId}-${link.port}`} className="font-mono text-xs">
+                {link.remotePort || "?"} → {link.switchTag} {link.port}
+                <span className={link.oper === "up" ? "text-muted-foreground" : "text-destructive"}> {link.oper}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
       <Block
         title="BMC"
         items={[

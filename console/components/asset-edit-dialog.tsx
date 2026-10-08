@@ -6,7 +6,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { ASSET_STATUS, ASSET_TYPES } from "@/lib/asset-labels";
-import type { AssetStatus, AssetType, Customer, PublicAsset, Rack, Site } from "@/lib/types";
+import type { AssetStatus, AssetType, Customer, PublicAsset, PublicSnmpProfile, Rack, Site } from "@/lib/types";
 
 /** 表单里的值都按文字存，密码留空表示不改。 */
 type Form = {
@@ -30,6 +30,8 @@ type Form = {
   bmcFallbackUser: string;
   bmcFallbackPassword: string;
   bootMac: string;
+  mgmtIp: string;
+  snmpProfileId: string;
   osAddress: string;
   osNetmask: string;
   hostname: string;
@@ -66,6 +68,8 @@ function formOf(asset: PublicAsset | null): Form {
     bmcFallbackUser: asset?.bmcFallbackUser || "",
     bmcFallbackPassword: "",
     bootMac: asset?.bootMac || "",
+    mgmtIp: asset?.mgmtIp || "",
+    snmpProfileId: asset?.snmpProfileId || "",
     osAddress: asset?.osAddress || "",
     osNetmask: asset?.osNetmask || "",
     hostname: asset?.hostname || "",
@@ -103,11 +107,16 @@ export function AssetEditDialog({
   const creating = !asset;
   const [sites, setSites] = useState<Site[]>([]);
   const [racks, setRacks] = useState<Rack[]>([]);
+  const [profiles, setProfiles] = useState<PublicSnmpProfile[]>([]);
 
   useEffect(() => {
     if (!open) return;
     setForm(formOf(asset));
     setError("");
+    void fetch("/api/snmp-profiles")
+      .then((response) => response.json())
+      .then((list: PublicSnmpProfile[]) => setProfiles(Array.isArray(list) ? list : []))
+      .catch(() => undefined);
     // 机房和机柜打开时现取，免得每个用到这个对话框的页面都要传。
     void Promise.all([fetch("/api/sites").then((r) => r.json()), fetch("/api/racks").then((r) => r.json())])
       .then(([siteList, rackList]: [Site[], Rack[]]) => {
@@ -132,7 +141,7 @@ export function AssetEditDialog({
     setError("");
     const { siteId, ...rest } = form;
     void siteId;
-    const body = { ...rest, customerId: form.customerId || null, rackId: form.rackId || null, uStart: form.rackId && form.uStart ? Number(form.uStart) : null, uHeight: Number(form.uHeight || 1) };
+    const body = { ...rest, snmpProfileId: form.snmpProfileId || null, customerId: form.customerId || null, rackId: form.rackId || null, uStart: form.rackId && form.uStart ? Number(form.uStart) : null, uHeight: Number(form.uHeight || 1) };
     const response = await fetch(creating ? "/api/assets" : `/api/assets/${asset.id}`, {
       method: creating ? "POST" : "PATCH",
       headers: { "content-type": "application/json" },
@@ -242,6 +251,25 @@ export function AssetEditDialog({
               <Input {...field("location")} placeholder="可留空，例如 后侧、冷通道" />
             </Labeled>
           </Group>
+
+          {form.type !== "server" ? (
+            <Group title="网络管理（SNMP）">
+              <Labeled label="管理地址">
+                <Input {...field("mgmtIp")} className="font-mono" placeholder="交换机、PDU 的管理 IP" />
+              </Labeled>
+              <Labeled label="SNMP 凭据">
+                <select className={SELECT} {...field("snmpProfileId")}>
+                  <option value="">不用 SNMP</option>
+                  {profiles.map((profile) => (
+                    <option key={profile.id} value={profile.id}>
+                      {profile.name}（{profile.version}）
+                    </option>
+                  ))}
+                </select>
+              </Labeled>
+              <span className="self-end pb-2 text-xs text-muted-foreground">{profiles.length ? "" : "凭据在「设置 → SNMP 凭据」里建"}</span>
+            </Group>
+          ) : null}
 
           <Group title="BMC">
             <Labeled label="BMC MAC">

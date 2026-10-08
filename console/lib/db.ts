@@ -225,6 +225,24 @@ const MIGRATIONS: string[] = [
     disks TEXT NOT NULL DEFAULT '[]'
   );
   `,
+  `
+  CREATE TABLE snmp_profiles (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    version TEXT NOT NULL,
+    community TEXT NOT NULL DEFAULT '',
+    username TEXT NOT NULL DEFAULT '',
+    auth_proto TEXT NOT NULL DEFAULT '',
+    auth_pass TEXT NOT NULL DEFAULT '',
+    priv_proto TEXT NOT NULL DEFAULT '',
+    priv_pass TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  ALTER TABLE assets ADD COLUMN mgmt_ip TEXT NOT NULL DEFAULT '';
+  ALTER TABLE assets ADD COLUMN snmp_profile_id TEXT REFERENCES snmp_profiles(id) ON DELETE SET NULL;
+  ALTER TABLE monitor_state ADD COLUMN ports TEXT NOT NULL DEFAULT '[]';
+  `,
 ];
 
 let opened: { file: string; db: Database } | null = null;

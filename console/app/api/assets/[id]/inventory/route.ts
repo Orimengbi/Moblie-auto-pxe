@@ -21,7 +21,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     const source = url.searchParams.get("source");
     const snapshot = wanted
       ? getInventory(id, wanted)
-      : source === "os" || source === "bmc"
+      : source === "os" || source === "bmc" || source === "snmp"
         ? latestInventory(id, source)
         : latestInventory(id, "os") || latestInventory(id, "bmc");
     const projectId = url.searchParams.get("project") || serversOfAsset(id)[0]?.projectId || "";

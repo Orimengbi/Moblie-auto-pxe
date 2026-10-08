@@ -46,7 +46,7 @@ export function ServerChanges({ row }: { row: { id: string } }) {
         </p>
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        {(["all", "os", "bmc"] as const).map((value) => (
+        {(["all", "os", "bmc", "snmp"] as const).map((value) => (
           <Button key={value} type="button" size="sm" variant={source === value ? "default" : "outline"} onClick={() => setSource(value)}>
             {value === "all" ? "全部" : SOURCE_LABEL[value]}
           </Button>

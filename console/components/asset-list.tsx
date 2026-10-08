@@ -339,7 +339,10 @@ export function AssetList({
                     {row.place || <span className="font-sans text-muted-foreground">—</span>}
                     {row.location ? <span className="mt-1 block font-sans text-muted-foreground">{row.location}</span> : null}
                   </TableCell>
-                  <TableCell className="font-mono text-xs">{row.bmcIp || "—"}</TableCell>
+                  <TableCell className="font-mono text-xs">
+                    {row.bmcIp || (row.mgmtIp ? "" : "—")}
+                    {row.mgmtIp ? <span className="block">管理 {row.mgmtIp}</span> : null}
+                  </TableCell>
                   <TableCell className="font-mono text-xs" title={row.hostSource ? HOST_SOURCE[row.hostSource] : undefined}>
                     {row.host || "—"}
                   </TableCell>
@@ -386,7 +389,7 @@ export function AssetList({
       <ServerPowerDialog targets={powerTargets} onClose={() => setPowerTargets([])} />
       {consoleRow ? <RemoteConsole row={consoleRow} port={bmcPort} onClose={() => setConsoleRow(null)} /> : null}
       <ServerSidebar
-        row={sideRow ? { id: sideRow.id, sn: sideRow.sn, tag: sideRow.tag, description: [sideRow.tag, ASSET_STATUS[sideRow.status], sideRow.place, sideRow.customerName, [sideRow.vendor, sideRow.model].filter(Boolean).join(" ")].filter(Boolean).join(" · ") } : null}
+        row={sideRow ? { id: sideRow.id, sn: sideRow.sn, tag: sideRow.tag, type: sideRow.type, description: [sideRow.tag, ASSET_STATUS[sideRow.status], sideRow.place, sideRow.customerName, [sideRow.vendor, sideRow.model].filter(Boolean).join(" ")].filter(Boolean).join(" · ") } : null}
         onClose={() => setSideId(null)}
         onChanged={() => router.refresh()}
       />

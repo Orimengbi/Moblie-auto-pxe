@@ -1988,7 +1988,7 @@ export async function deleteFile(id: string): Promise<void> {
 
 /** 每台机器、每个来源留下的采集次数。 */
 const INVENTORY_KEEP = 30;
-const SNAPSHOT_ID = /^\d{8}T\d{9}Z-(os|bmc)-[0-9a-f]{6}$/;
+const SNAPSHOT_ID = /^\d{8}T\d{9}Z-(os|bmc|snmp)-[0-9a-f]{6}$/;
 const HW_KINDS = Object.keys(KIND_LABEL) as HwKind[];
 
 /** 采集记录的文件名按时间排序，新的在后。 */

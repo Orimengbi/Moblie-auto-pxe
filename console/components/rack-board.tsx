@@ -153,7 +153,7 @@ export function RackBoard({ sites, racks, assets }: { sites: Site[]; racks: Rack
       <RackDialog rack={rackForm} sites={sites} siteId={siteId} onClose={() => setRackForm(null)} onSaved={() => router.refresh()} />
       <PlaceDialog target={placing} assets={assets} occupied={placing ? byRack.get(placing.rack.id) || [] : []} onClose={() => setPlacing(null)} onSaved={() => router.refresh()} />
       <ServerSidebar
-        row={sideRow ? { id: sideRow.id, sn: sideRow.sn, tag: sideRow.tag, description: [sideRow.tag, ASSET_STATUS[sideRow.status], sideRow.place, [sideRow.vendor, sideRow.model].filter(Boolean).join(" ")].filter(Boolean).join(" · ") } : null}
+        row={sideRow ? { id: sideRow.id, sn: sideRow.sn, tag: sideRow.tag, type: sideRow.type, description: [sideRow.tag, ASSET_STATUS[sideRow.status], sideRow.place, [sideRow.vendor, sideRow.model].filter(Boolean).join(" ")].filter(Boolean).join(" · ") } : null}
         onClose={() => setSideId(null)}
         onChanged={() => router.refresh()}
       />

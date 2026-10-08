@@ -2,6 +2,7 @@ import { auditRequest, jsonError, readJson } from "@/lib/api";
 import { assetRows } from "@/lib/asset-view";
 import { deleteAsset, getAsset, updateAsset, type AssetInput } from "@/lib/assets";
 import { requireAdmin, requireUser } from "@/lib/auth";
+import { uplinksOf } from "@/lib/network";
 import { removeAssetFiles } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
@@ -12,7 +13,7 @@ export async function GET(_: Request, context: Context) {
   const { id } = await context.params;
   const asset = getAsset(id);
   if (!asset) return jsonError(new Error("资产不存在"), 404);
-  return Response.json(assetRows([asset])[0]);
+  return Response.json({ ...assetRows([asset])[0], uplinks: uplinksOf(id) });
 }
 
 export async function PATCH(request: Request, context: Context) {

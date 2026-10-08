@@ -216,7 +216,7 @@ export function parseDisks(text: string): DiskHealth[] {
 // ---------- 状态 ----------
 
 function emptyState(assetId: string): MonitorState {
-  return { assetId, bmcAt: "", bmcOk: false, bmcError: "", bmcFailures: 0, sensors: [], selLast: "", selRecent: [], osAt: "", osOk: false, osError: "", gpus: [], disks: [] };
+  return { assetId, bmcAt: "", bmcOk: false, bmcError: "", bmcFailures: 0, sensors: [], selLast: "", selRecent: [], osAt: "", osOk: false, osError: "", gpus: [], disks: [], ports: [] };
 }
 
 function parseJson<T>(value: unknown, fallback: T): T {
@@ -244,6 +244,7 @@ export function getMonitorState(assetId: string): MonitorState {
     osError: String(row.os_error),
     gpus: parseJson(row.gpus, []),
     disks: parseJson(row.disks, []),
+    ports: parseJson(row.ports, []),
   };
 }
 
@@ -254,14 +255,18 @@ export function listMonitorStates(): MonitorState[] {
     .map((row) => getMonitorState(String(row.asset_id)));
 }
 
+export function saveMonitorState(state: MonitorState): void {
+  saveState(state);
+}
+
 function saveState(state: MonitorState): void {
   db()
     .prepare(
-      `INSERT INTO monitor_state (asset_id, bmc_at, bmc_ok, bmc_error, bmc_failures, sensors, sel_last, sel_recent, os_at, os_ok, os_error, gpus, disks)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO monitor_state (asset_id, bmc_at, bmc_ok, bmc_error, bmc_failures, sensors, sel_last, sel_recent, os_at, os_ok, os_error, gpus, disks, ports)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(asset_id) DO UPDATE SET bmc_at = excluded.bmc_at, bmc_ok = excluded.bmc_ok, bmc_error = excluded.bmc_error, bmc_failures = excluded.bmc_failures,
          sensors = excluded.sensors, sel_last = excluded.sel_last, sel_recent = excluded.sel_recent, os_at = excluded.os_at, os_ok = excluded.os_ok,
-         os_error = excluded.os_error, gpus = excluded.gpus, disks = excluded.disks`,
+         os_error = excluded.os_error, gpus = excluded.gpus, disks = excluded.disks, ports = excluded.ports`,
     )
     .run(
       state.assetId,
@@ -277,6 +282,7 @@ function saveState(state: MonitorState): void {
       state.osError,
       JSON.stringify(state.gpus),
       JSON.stringify(state.disks),
+      JSON.stringify(state.ports),
     );
 }
 

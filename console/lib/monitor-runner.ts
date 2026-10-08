@@ -1,5 +1,6 @@
 import { getAsset, listAssets } from "./assets.ts";
-import { checkBmc, checkOs, getMonitorSettings, getMonitorState, monitored } from "./monitor.ts";
+import { checkBmc, checkOs, getMonitorSettings, getMonitorState, monitored, saveMonitorState } from "./monitor.ts";
+import { checkNetwork, collectNetwork } from "./network.ts";
 import { hostContext, resolveAssetHost, runSsh } from "./remote.ts";
 import { latestInventory } from "./store.ts";
 import type { Asset, MonitorSettings, MonitorState } from "./types.ts";
@@ -18,10 +19,33 @@ function expectedGpus(assetId: string): number {
   return snapshot ? snapshot.components.filter((item) => item.kind === "gpu" && /nvidia/i.test(`${item.vendor} ${item.model}`)).length : 0;
 }
 
+/** 交换机、PDU 这类：有管理地址和 SNMP 凭据，走 SNMP。 */
+export function isNetworkDevice(asset: Asset): boolean {
+  return asset.type !== "server" && Boolean(asset.mgmtIp && asset.snmpProfileId);
+}
+
 export async function checkAsset(asset: Asset, settings: MonitorSettings, parts: { bmc: boolean; os: boolean }): Promise<MonitorState> {
   if (running.has(asset.id)) throw new Error("这台正在检查，稍等");
   running.add(asset.id);
   try {
+    if (isNetworkDevice(asset)) {
+      // 网络设备：短间隔看端口，长间隔重新采一遍部件、光模块和 LLDP。
+      if (parts.bmc) await checkNetwork(asset, settings);
+      if (parts.os) {
+        const state = getMonitorState(asset.id);
+        state.osAt = new Date().toISOString();
+        try {
+          await collectNetwork(asset.id);
+          state.osOk = true;
+          state.osError = "";
+        } catch (error) {
+          state.osOk = false;
+          state.osError = error instanceof Error ? error.message : "采集失败";
+        }
+        saveMonitorState({ ...getMonitorState(asset.id), osAt: state.osAt, osOk: state.osOk, osError: state.osError });
+      }
+      return getMonitorState(asset.id);
+    }
     if (parts.bmc) await checkBmc(asset, settings);
     if (parts.os) {
       const { host } = resolveAssetHost(asset, hostContext());
@@ -50,8 +74,9 @@ async function tick(): Promise<void> {
     for (const asset of listAssets()) {
       if (!monitored(asset, settings) || running.has(asset.id)) continue;
       const state = getMonitorState(asset.id);
-      const bmc = Boolean(asset.bmcIp) && due(state.bmcAt, settings.bmcIntervalMin, now);
-      const os = settings.osIntervalMin > 0 && (Boolean(asset.osAddress) || Boolean(asset.bootMac)) && due(state.osAt, settings.osIntervalMin, now);
+      const network = isNetworkDevice(asset);
+      const bmc = (network || Boolean(asset.bmcIp)) && due(state.bmcAt, settings.bmcIntervalMin, now);
+      const os = settings.osIntervalMin > 0 && (network || Boolean(asset.osAddress) || Boolean(asset.bootMac)) && due(state.osAt, settings.osIntervalMin, now);
       if (bmc || os) queue.push({ asset, bmc, os });
     }
     const worker = async () => {

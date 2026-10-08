@@ -364,10 +364,10 @@ export interface RemoteTask {
 }
 
 /** 硬件部件的类别。firmware 是 BIOS、BMC、CPLD 这类只有版本号的固件。 */
-export type HwKind = "system" | "board" | "cpu" | "memory" | "disk" | "gpu" | "nic" | "transceiver" | "psu" | "firmware";
+export type HwKind = "system" | "board" | "cpu" | "memory" | "disk" | "gpu" | "nic" | "transceiver" | "psu" | "fan" | "firmware";
 
-/** os：SSH 进系统里用 dmidecode 等工具读；bmc：从 BMC 的 Redfish 读。两边的槽位名不一样，不互相比。 */
-export type InventorySource = "os" | "bmc";
+/** os：SSH 进系统里用 dmidecode 等工具读；bmc：从 BMC 的 Redfish 读；snmp：网络设备用 SNMP 读。各来源的槽位名不一样，不互相比。 */
+export type InventorySource = "os" | "bmc" | "snmp";
 
 /** 一个部件。slot 在同一台机器、同一来源里是稳定的位置名，比如 DIMM_P0_A0、P0、nvme0n1、GPU 的 PCI 地址。 */
 export interface HwComponent {
@@ -414,7 +414,69 @@ export interface InventorySnapshot {
   topology?: Topology;
   /** 盘位、PCIe 插槽、网口和各自的占用情况。这个功能上线前的采集没有。 */
   ports?: HwPort[];
+  /** 网络设备的端口，只有 snmp 来源有。 */
+  netPorts?: NetPort[];
+  /** 网络设备的系统信息，只有 snmp 来源有。 */
+  system?: NetSystem;
 }
+
+export interface NetSystem {
+  name: string;
+  descr: string;
+  objectId: string;
+  /** 秒。 */
+  uptime: number | null;
+}
+
+/** LLDP 看到的对端。能对上资产时带上资产 id 和编号。 */
+export interface NetNeighbor {
+  sysName: string;
+  portId: string;
+  portDesc: string;
+  chassisId: string;
+  assetId?: string;
+  assetTag?: string;
+}
+
+/** 网络设备的一个端口。 */
+export interface NetPort {
+  index: number;
+  name: string;
+  descr: string;
+  /** 端口描述（ifAlias），常写对端。 */
+  alias: string;
+  admin: "up" | "down" | "testing" | "";
+  oper: "up" | "down" | "testing" | "unknown" | "dormant" | "notPresent" | "lowerLayerDown" | "";
+  /** Mb/s。 */
+  speed: number | null;
+  mtu: number | null;
+  inErrors: number | null;
+  outErrors: number | null;
+  /** 只看物理口：以太网（6）、InfiniBand（199）等。 */
+  physical: boolean;
+  neighbor?: NetNeighbor;
+  transceiver?: { model: string; sn: string; vendor: string };
+}
+
+export type SnmpVersion = "v2c" | "v3";
+
+export interface SnmpProfile {
+  id: string;
+  name: string;
+  version: SnmpVersion;
+  community: string;
+  username: string;
+  /** MD5、SHA、SHA-256 等，空表示不认证。 */
+  authProto: string;
+  authPass: string;
+  /** DES、AES 等，空表示不加密。 */
+  privProto: string;
+  privPass: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type PublicSnmpProfile = Omit<SnmpProfile, "community" | "authPass" | "privPass"> & { hasCommunity: boolean; hasAuthPass: boolean; hasPrivPass: boolean };
 
 export type PortGroup = "drive" | "pcie" | "net";
 
@@ -626,6 +688,9 @@ export interface Asset {
   bmcFallbackUser: string;
   bmcFallbackPassword: string;
   bootMac: string;
+  /** 网络设备、PDU 的管理地址，SNMP 走它。 */
+  mgmtIp: string;
+  snmpProfileId: string | null;
   osAddress: string;
   osNetmask: string;
   hostname: string;
@@ -781,7 +846,7 @@ export type AlertSeverity = "warning" | "critical";
 /** active 告警中，acked 已确认（还在但有人知道了），resolved 已恢复或已处理。 */
 export type AlertStatus = "active" | "acked" | "resolved";
 /** sensor BMC 传感器，sel BMC 事件日志，bmc BMC 连不上，gpu 显卡，xid 驱动报的 Xid，disk 硬盘。 */
-export type AlertSource = "sensor" | "sel" | "bmc" | "gpu" | "xid" | "disk";
+export type AlertSource = "sensor" | "sel" | "bmc" | "gpu" | "xid" | "disk" | "snmp" | "port";
 
 export interface Alert {
   id: number;
@@ -851,6 +916,8 @@ export interface MonitorState {
   osError: string;
   gpus: GpuHealth[];
   disks: DiskHealth[];
+  /** 网络设备上次读到的端口状态和错包数，用来比出掉线和错包增长。 */
+  ports: { name: string; admin: string; oper: string; inErrors: number | null; outErrors: number | null; neighbor: string }[];
 }
 
 export interface MonitorSettings {

@@ -5,6 +5,7 @@ import { AssetHistory } from "@/components/asset-history";
 import { AssetMonitor } from "@/components/asset-monitor";
 import { AssetOverview } from "@/components/asset-overview";
 import { AssetTickets } from "@/components/asset-tickets";
+import { NetworkDevice } from "@/components/network-device";
 import { ServerChanges } from "@/components/server-changes";
 import { ServerInventory } from "@/components/server-inventory";
 import { ServerOptics } from "@/components/server-optics";
@@ -19,13 +20,19 @@ interface Row {
   sn: string;
   /** 资产编号，新建工单时显示。 */
   tag?: string;
+  /** 资产类型。不是服务器时换成网络设备的标签页。 */
+  type?: string;
   /** 标题后面的一行说明。 */
   description: string;
 }
 
-type Tab = "overview" | "monitor" | "tickets" | "hardware" | "changes" | "ports" | "topology" | "optics" | "history";
+type Tab = "overview" | "netports" | "monitor" | "tickets" | "hardware" | "changes" | "ports" | "topology" | "optics" | "history";
+
+/** 网络设备只有这几页：服务器的硬件、接口、拓扑、光模块页对它没意义。 */
+const NETWORK_TABS: Tab[] = ["overview", "netports", "changes", "monitor", "tickets", "history"];
 
 const TABS: [Tab, string][] = [
+  ["netports", "端口"],
   ["overview", "概况"],
   ["monitor", "监控"],
   ["tickets", "工单"],
@@ -44,6 +51,9 @@ const TABS: [Tab, string][] = [
 export function ServerSidebar({ projectId, row, initialTab = "overview", onClose, onChanged }: { projectId?: string; row: Row | null; initialTab?: Tab; onClose: () => void; onChanged?: () => void }) {
   // 换一台机器时停在同一个标签上，方便一台台对比。
   const [tab, setTab] = useState<Tab>(initialTab);
+  const network = Boolean(row?.type && row.type !== "server");
+  const tabs = TABS.filter(([value]) => (network ? NETWORK_TABS.includes(value) : value !== "netports"));
+  const current = tabs.some(([value]) => value === tab) ? tab : "overview";
   return (
     <Sheet
       open={Boolean(row)}
@@ -63,23 +73,24 @@ export function ServerSidebar({ projectId, row, initialTab = "overview", onClose
               <SheetTitle className="font-mono">{row.sn}</SheetTitle>
               <SheetDescription>{row.description}</SheetDescription>
               <div className="mt-2 flex flex-wrap gap-1">
-                {TABS.map(([value, label]) => (
-                  <Button key={value} type="button" size="sm" variant={tab === value ? "default" : "ghost"} onClick={() => setTab(value)}>
+                {tabs.map(([value, label]) => (
+                  <Button key={value} type="button" size="sm" variant={current === value ? "default" : "ghost"} onClick={() => setTab(value)}>
                     {label}
                   </Button>
                 ))}
               </div>
             </SheetHeader>
             <SheetBody>
-              {tab === "overview" ? <AssetOverview key={row.id} assetId={row.id} onChanged={onChanged} /> : null}
-              {tab === "monitor" ? <AssetMonitor key={row.id} assetId={row.id} /> : null}
-              {tab === "tickets" ? <AssetTickets key={row.id} asset={{ id: row.id, tag: row.tag || row.sn, sn: row.sn, model: "" }} onChanged={onChanged} /> : null}
-              {tab === "hardware" ? <ServerInventory key={row.id} projectId={projectId} row={row} /> : null}
-              {tab === "changes" ? <ServerChanges key={row.id} row={row} /> : null}
-              {tab === "ports" ? <ServerPorts key={row.id} row={row} /> : null}
-              {tab === "topology" ? <ServerTopology key={row.id} row={row} /> : null}
-              {tab === "optics" ? <ServerOptics key={row.id} row={row} /> : null}
-              {tab === "history" ? <AssetHistory key={row.id} assetId={row.id} /> : null}
+              {current === "netports" ? <NetworkDevice key={row.id} assetId={row.id} /> : null}
+              {current === "overview" ? <AssetOverview key={row.id} assetId={row.id} onChanged={onChanged} /> : null}
+              {current === "monitor" ? <AssetMonitor key={row.id} assetId={row.id} /> : null}
+              {current === "tickets" ? <AssetTickets key={row.id} asset={{ id: row.id, tag: row.tag || row.sn, sn: row.sn, model: "" }} onChanged={onChanged} /> : null}
+              {current === "hardware" ? <ServerInventory key={row.id} projectId={projectId} row={row} /> : null}
+              {current === "changes" ? <ServerChanges key={row.id} row={row} /> : null}
+              {current === "ports" ? <ServerPorts key={row.id} row={row} /> : null}
+              {current === "topology" ? <ServerTopology key={row.id} row={row} /> : null}
+              {current === "optics" ? <ServerOptics key={row.id} row={row} /> : null}
+              {current === "history" ? <AssetHistory key={row.id} assetId={row.id} /> : null}
             </SheetBody>
           </>
         ) : null}
