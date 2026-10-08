@@ -103,7 +103,10 @@ export function ProjectTaskRunner({
   const [pending, setPending] = useState(false);
   const [uploading, setUploading] = useState("");
   const [sources, setSources] = useState<InventorySource[]>(["os", "bmc"]);
+  const [showAllTasks, setShowAllTasks] = useState(false);
   const running = tasks.some((task) => task.status === "running");
+  // 默认只显示最近 3 条，执行中的任务始终显示。
+  const shownTasks = showAllTasks ? tasks : tasks.filter((task, index) => index < 3 || task.status === "running");
 
   useEffect(() => {
     if (!running) return;
@@ -276,7 +279,7 @@ export function ProjectTaskRunner({
       <div className="grid gap-3">
         <p className="text-sm font-medium">最近的任务</p>
         {tasks.length === 0 ? <p className="text-sm text-muted-foreground">还没有执行过任务。</p> : null}
-        {tasks.map((task) => (
+        {shownTasks.map((task) => (
           <details key={task.id} className="rounded-lg border p-3" open={task.status === "running"}>
             <summary className="flex cursor-pointer flex-wrap items-center gap-2 text-sm">
               <Badge variant={task.status === "running" ? "outline" : task.targets.every((target) => target.status === "ok") ? "default" : "destructive"}>
@@ -322,6 +325,11 @@ export function ProjectTaskRunner({
             </div>
           </details>
         ))}
+        {tasks.length > 3 && (showAllTasks || tasks.length > shownTasks.length) ? (
+          <Button type="button" variant="ghost" size="sm" className="w-fit" onClick={() => setShowAllTasks((value) => !value)}>
+            {showAllTasks ? "收起" : `显示其余 ${tasks.length - shownTasks.length} 条`}
+          </Button>
+        ) : null}
       </div>
     </div>
   );
