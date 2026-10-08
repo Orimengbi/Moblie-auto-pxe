@@ -1,7 +1,8 @@
 import type { RedfishDoc, RedfishRaw } from "./redfish.ts";
 import { OPTICS_BODY, opticsComponents, parseOptics } from "./optics.ts";
+import { parseOsPorts, PORTS_BODY } from "./ports.ts";
 import { buildTopology } from "./topology.ts";
-import type { BaselineIssue, BaselineRule, HwChange, HwComponent, HwKind, InventorySource, Topology } from "./types.ts";
+import type { BaselineIssue, BaselineRule, HwChange, HwComponent, HwKind, HwPort, InventorySource, Topology } from "./types.ts";
 
 /**
  * 整机硬件清单：系统里采集的脚本和解析、Redfish 文档到部件的转换、两次采集的比对、基准配置。
@@ -144,7 +145,7 @@ sec numa
 lscpu 2>/dev/null | grep -E '^NUMA node[0-9]+ CPU'
 sec optics
 ${OPTICS_BODY}
-sec end
+${PORTS_BODY}sec end
 `;
 
 const PLACEHOLDER =
@@ -282,7 +283,7 @@ function jsonOrNull<T>(text: string | undefined): T | null {
 const PCI_ADDRESS = /^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]$/i;
 
 /** 解析 INVENTORY_SCRIPT 的输出。 */
-export function parseOsInventory(text: string): { components: HwComponent[]; warnings: string[]; topology?: Topology } {
+export function parseOsInventory(text: string): { components: HwComponent[]; warnings: string[]; topology?: Topology; ports: HwPort[] } {
   const sections = splitSections(text);
   const components: HwComponent[] = [];
   const warnings: string[] = [];
@@ -437,7 +438,7 @@ export function parseOsInventory(text: string): { components: HwComponent[]; war
   }
 
   components.push(...opticsComponents(parseOptics(sections.get("optics") || "")));
-  return { components, warnings, topology: buildTopology(sections, components) };
+  return { components, warnings, topology: buildTopology(sections, components), ports: parseOsPorts(sections, components, parseDmidecode) };
 }
 
 function rfStr(doc: RedfishDoc | undefined, key: string): string {

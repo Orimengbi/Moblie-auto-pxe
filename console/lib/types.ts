@@ -406,6 +406,31 @@ export interface InventorySnapshot {
   warnings: string[];
   /** GPU 和网卡的 PCIe/NVLink 拓扑，只有系统内采集有。 */
   topology?: Topology;
+  /** 盘位、PCIe 插槽、网口和各自的占用情况。这个功能上线前的采集没有。 */
+  ports?: HwPort[];
+}
+
+export type PortGroup = "drive" | "pcie" | "net";
+
+/** 机器上的一个接口：一个盘位、一个 PCIe 插槽或一个网口。 */
+export interface HwPort {
+  group: PortGroup;
+  /** 槽位或网口名，例如 Slot 3、ata2、ens1f0。 */
+  name: string;
+  /** 规格，例如 PCIe Gen5 x16、SAS/SATA 背板、U.2 NVMe。 */
+  type: string;
+  /** true 占用，false 空闲，null 读不出来。网口按有没有链路算。 */
+  used: boolean | null;
+  /** 插在上面的东西：盘或卡的型号、盘符。 */
+  device: string;
+  /** 网口的链路：up 有链路，down 没链路，disabled 口没启用。 */
+  link?: "up" | "down" | "disabled" | "";
+  speed?: string;
+  ips?: string[];
+  /** 网口加入的 bond 或网桥。 */
+  master?: string;
+  mac?: string;
+  note?: string;
 }
 
 /** 一个网口上的光模块和它当时的收发光。twin-port 模块的两个口会读到同一个序列号。 */

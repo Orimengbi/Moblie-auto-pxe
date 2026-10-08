@@ -18,6 +18,10 @@ export interface RedfishRaw {
   chassis: RedfishDoc[];
   pcieDevices: RedfishDoc[];
   networkAdapters: RedfishDoc[];
+  /** 各机箱的 PCIeSlots 文档，一个文档里的 Slots 列着这个机箱的全部插槽。 */
+  pcieSlots: RedfishDoc[];
+  /** 网卡的口，_adapter 是所属网卡的型号或编号。 */
+  networkPorts: RedfishDoc[];
   powerSupplies: RedfishDoc[];
   managers: RedfishDoc[];
   firmware: RedfishDoc[];
@@ -146,6 +150,8 @@ export async function crawlRedfish(get: RedfishGet): Promise<RedfishRaw> {
     chassis: [],
     pcieDevices: [],
     networkAdapters: [],
+    pcieSlots: [],
+    networkPorts: [],
     powerSupplies: [],
     managers: [],
     firmware: [],
@@ -168,6 +174,8 @@ export async function crawlRedfish(get: RedfishGet): Promise<RedfishRaw> {
   await eachLimit(raw.chassis, 4, async (chassis) => {
     raw.pcieDevices.push(...(await collection(get, link(chassis, "PCIeDevices"), errors)));
     raw.networkAdapters.push(...(await collection(get, link(chassis, "NetworkAdapters"), errors)));
+    const slots = await optional(get, link(chassis, "PCIeSlots"), errors);
+    if (slots) raw.pcieSlots.push(slots);
     // 新的 BMC 用 PowerSubsystem/PowerSupplies，旧的把电源列在 Power 里。
     const subsystem = link(chassis, "PowerSubsystem");
     const fromSubsystem = subsystem ? await collection(get, link(await optional(get, subsystem, errors), "PowerSupplies"), errors) : [];
@@ -180,12 +188,19 @@ export async function crawlRedfish(get: RedfishGet): Promise<RedfishRaw> {
     }
   });
 
+  // 网卡的口：新的 BMC 在 Ports 下，旧的在 NetworkPorts 下。HGX 会把同一块卡列两遍，口按 @odata.id 去重。
+  await eachLimit(raw.networkAdapters, 4, async (adapter) => {
+    const ports = link(adapter, "Ports") || link(adapter, "NetworkPorts");
+    const name = typeof adapter.Model === "string" && adapter.Model.trim() ? adapter.Model.trim() : String(adapter.Id || "");
+    for (const port of await collection(get, ports, errors)) raw.networkPorts.push({ ...port, _adapter: name });
+  });
+
   raw.managers = await collection(get, link(root, "Managers") || "/redfish/v1/Managers", errors);
   const update = await optional(get, link(root, "UpdateService"), errors);
   raw.firmware = await collection(get, link(update, "FirmwareInventory"), errors);
 
   // 同一个部件可能从不同的链接读到两次（比如 PCIe 设备挂在两个机箱下），按 @odata.id 去重。
-  for (const key of ["processors", "memory", "drives", "pcieDevices", "networkAdapters", "firmware"] as const) {
+  for (const key of ["processors", "memory", "drives", "pcieDevices", "networkAdapters", "pcieSlots", "networkPorts", "firmware"] as const) {
     const seen = new Set<string>();
     raw[key] = raw[key].filter((doc) => {
       const id = String(doc["@odata.id"] || "");

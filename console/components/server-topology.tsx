@@ -123,7 +123,7 @@ export function ServerTopology({ projectId, row }: { projectId: string; row: { i
     return (
       <p className="text-sm text-muted-foreground">
         {snapshot ? "最近一次系统内采集没有拓扑数据：可能是这个功能上线前采集的，或者机器上没有 GPU 和网卡。" : "这台机器还没有系统内采集。"}
-        在服务器列表下面的「采集硬件配置」里勾上「系统内（SSH）」再采集一次。拓扑只能从系统里读，BMC 采集没有。
+        在「硬件配置」标签里勾上「系统内（SSH）」再采集一次。拓扑只能从系统里读，BMC 采集没有。
       </p>
     );
   }

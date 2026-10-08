@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { parseLeases, type Lease } from "./dnsmasq.ts";
 import { describeChange, INVENTORY_SCRIPT, parseOsInventory, redfishComponents, summarizeComponents } from "./inventory.ts";
+import { portSummary, redfishPorts } from "./ports.ts";
 import { listLocalIpv4, sameSubnet } from "./net.ts";
 import { sshKeyPath, taskPath } from "./paths.ts";
 import { OPTICS_SCRIPT, parseOptics } from "./optics.ts";
@@ -23,7 +24,7 @@ import {
   saveOptics,
   writeTask,
 } from "./store.ts";
-import type { HwChange, InventorySource, OpticsReading, Machine, NicPlan, RemoteTask, ServerRow, TaskHostSource, TaskKind, TaskTarget, TaskTargetStatus } from "./types.ts";
+import type { HwChange, HwPort, InventorySource, OpticsReading, Machine, NicPlan, RemoteTask, ServerRow, TaskHostSource, TaskKind, TaskTarget, TaskTargetStatus } from "./types.ts";
 
 const OUTPUT_LIMIT = 16000;
 /** 采集脚本的原始输出要整段解析，不能像普通任务那样只留结尾。 */
@@ -301,6 +302,10 @@ function withDeadline<T>(work: Promise<T>, deadline: number, label: string): Pro
  * 采集一台机器的硬件：SSH 进系统跑采集脚本，再读 BMC 的 Redfish，两边各存一次。
  * 有一边成功就把结果存下；要读的两边都成功才算成功。
  */
+function portLines(ports: HwPort[]): string[] {
+  return (["drive", "pcie", "net"] as const).map((group) => `  ${portSummary(ports, group)}`);
+}
+
 export async function collectInventory(
   task: Pick<RemoteTask, "projectId" | "timeoutSec" | "inventorySources">,
   target: Pick<TaskTarget, "serverId" | "host" | "sn">,
@@ -338,9 +343,10 @@ export async function collectInventory(
           components: parsed.components,
           warnings: parsed.warnings,
           ...(parsed.topology ? { topology: parsed.topology } : {}),
+          ports: parsed.ports,
         });
         ok++;
-        lines.push(`系统内（${target.host}）：`, ...summarizeComponents(parsed.components).map((line) => `  ${line}`), ...changeLines(saved.changes), ...parsed.warnings.map((line) => `  提示：${line}`));
+        lines.push(`系统内（${target.host}）：`, ...summarizeComponents(parsed.components).map((line) => `  ${line}`), ...portLines(parsed.ports), ...changeLines(saved.changes), ...parsed.warnings.map((line) => `  提示：${line}`));
       }
     }
   }
@@ -360,6 +366,7 @@ export async function collectInventory(
           const raw = await withDeadline(crawlRedfish(redfish(row.bmcIp, account.user, account.password)), deadline, "读 Redfish ");
           reached = true;
           const components = redfishComponents(raw);
+          const ports = redfishPorts(raw);
           const warnings = raw.errors.length ? [`有 ${raw.errors.length} 个 Redfish 路径没读到，例如 ${raw.errors[0]}`] : [];
           const saved = await saveInventory({
             serverId: target.serverId,
@@ -370,10 +377,11 @@ export async function collectInventory(
             host: row.bmcIp,
             components,
             warnings,
+            ports,
           });
           ok++;
           done = true;
-          lines.push(`BMC（${row.bmcIp}）：`, ...summarizeComponents(components).map((line) => `  ${line}`), ...changeLines(saved.changes), ...warnings.map((line) => `  提示：${line}`));
+          lines.push(`BMC（${row.bmcIp}）：`, ...summarizeComponents(components).map((line) => `  ${line}`), ...portLines(ports), ...changeLines(saved.changes), ...warnings.map((line) => `  提示：${line}`));
           break;
         } catch (error) {
           failure = error instanceof Error ? error.message : "读取失败";

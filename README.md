@@ -144,6 +144,8 @@ npm run dev
 
 服务器列表的「硬件」一列显示有没有采集、是否符合基准、最近一次的变化数。点列表里的一行，右边滑出这台机器的侧边栏：「硬件配置」看明细、基准检查和历史上某一次的配置，「变更记录」按时间列出每次采集比出的变化，可以按来源筛、只看有变化的。
 
+侧边栏的「接口」列出硬盘位、PCIe 插槽和网口有没有在用，跟着硬件采集一起读，可以只看空闲的。系统内：PCIe 插槽和 M.2 槽按 BIOS 的插槽表（`dmidecode -t 9`）列，再按总线地址找插着的设备，BIOS 报空闲但找到了设备的按占用算；盘位来自背板的 SES（`/sys/class/enclosure`）、板载 SATA 口和 PCIe 热插拔槽（装着 NVMe 的算盘位；同一批热插拔槽里有 NVMe 时，空槽也按 NVMe 盘位算），对不上盘位的盘（直连、RAID 卡后面的等）单独列出；背板不报 SES 的机器看不到空盘位。网口不判断占用，链路、速率、IP 和所属 bond 都列出来，IB 模式没有网口名的口按 RDMA 设备列。BMC：Chassis 的 PCIeSlots、Storage 里的盘位（有的 BMC 会列空盘位）和网卡的 Ports，各家 BMC 给的多少不一。这个功能上线前的采集没有接口数据，要重新采一次。
+
 侧边栏的「GPU / 网卡拓扑」画出 NUMA 节点 → 根复合体 → PCIe 交换芯片 → GPU 和网卡的树，下面是 GPU 到 GPU、GPU 到每张网卡的连接矩阵（NV#、PIX、PXB、PHB、NODE、SYS，和 `nvidia-smi topo -m` 的叫法一样）。PCIe 关系按 sysfs 里每个设备的上游路径算，没有 GPU 的机器也能看网卡之间的关系，`nvidia-smi` 不列的网卡也在里面；NVLink 条数取自 `nvidia-smi topo -m`。拓扑只有系统内采集才有，这个功能上线前的采集要重新采一次。
 
 光模块的型号、厂商、序列号、固件、规格和波长在系统内采集时一起记进硬件明细（类别「光模块」，按序列号一个模块一条，twin-port 模块接的两个口都记在这一条的槽位里），也参与变化比对和基准检查。NVIDIA/Mellanox 网卡用 `mlxlink` 读（系统里要有 MFT 或 mstflint 带的 mlxlink，CMIS 的 OSFP/QSFP-DD 也能解），其他网卡用 `ethtool -m`；旧版 ethtool 解不了 CMIS 模块，只会提示读不到。
