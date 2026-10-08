@@ -8,8 +8,8 @@ export default function ProjectsPage() {
   return (
     <div>
       <PageHeader
-        title="项目"
-        description="新建项目只建立目录。进入项目后再填写安装设置、DHCP 和 IPMI。打开一个项目的开关，装机就使用那一套配置，其他项目同时关掉。开关改变后，在小主机上执行 docker compose restart dnsmasq，地址池才会换过来。"
+        title="装机批次"
+        description="一个批次是一次装机：一套安装设置、一个 DHCP 地址池和一张服务器表。表里的机器自动入库成资产，装完以后在「资产」里管理。打开一个批次的开关，装机就用那一套配置，其他批次同时关掉。开关改变后，在小主机上执行 docker compose restart dnsmasq，地址池才会换过来。"
       />
       <ProjectManager projects={listProjects()} />
     </div>

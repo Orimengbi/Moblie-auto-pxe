@@ -19,7 +19,7 @@ const TARGET: Record<TaskTargetStatus, string> = {
 };
 
 export const HOST_SOURCE: Record<TaskHostSource, string> = {
-  sheet: "服务器表",
+  sheet: "系统地址",
   nic: "网卡规划",
   fixed: "固定 IP",
   lease: "DHCP 租约",
@@ -77,16 +77,20 @@ function formatSize(bytes: number): string {
 /** 机器在服务器列表里勾选，这里只管脚本、文件和执行结果。 */
 export function ProjectTaskRunner({
   projectId,
+  toAssets = (ids) => ids,
   picked,
   installed,
   onPick,
   files,
   tasks,
 }: {
-  projectId: string;
+  /** 从装机批次页发起时带上，任务记在这个批次下。 */
+  projectId?: string;
+  /** 勾选的是装机行时换成资产 id；资产页勾的本来就是资产 id。 */
+  toAssets?: (ids: string[]) => string[];
   picked: string[];
   installed: string[];
-  /** 项目里所有机器。采集硬件没勾选时对全部机器做。 */
+  /** 批次里所有机器。采集硬件没勾选时对全部机器做。 */
   onPick: (ids: string[]) => void;
   files: RemoteFile[];
   tasks: RemoteTask[];
@@ -121,10 +125,11 @@ export function ProjectTaskRunner({
   async function submit(body: Record<string, unknown>) {
     setPending(true);
     setError("");
-    const response = await fetch(`/api/projects/${projectId}/tasks`, {
+    const { serverIds, ...rest } = body as { serverIds: string[] };
+    const response = await fetch("/api/tasks", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ ...rest, assetIds: toAssets(serverIds), ...(projectId ? { projectId } : {}) }),
     });
     const result = await response.json();
     setPending(false);

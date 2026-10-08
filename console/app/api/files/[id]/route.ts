@@ -1,6 +1,6 @@
-import { jsonError } from "@/lib/api";
+import { audited, jsonError } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
-import { deleteFile } from "@/lib/store";
+import { deleteFile, getFile } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
@@ -9,7 +9,7 @@ export async function DELETE(request: Request, context: { params: Promise<{ id: 
   try {
     requireUser(request);
     const { id } = await context.params;
-    await deleteFile(id);
+    await audited(request, { action: "删除任务文件", targetType: "file", targetId: id, targetLabel: getFile(id)?.name }, () => deleteFile(id));
     return Response.json({ ok: true });
   } catch (error) {
     return jsonError(error);

@@ -100,7 +100,8 @@ function NetTable({ ports }: { ports: HwPort[] }) {
 }
 
 /** 盘位、PCIe 插槽、网口的占用情况，来自最近一次采集。 */
-export function ServerPorts({ projectId, row }: { projectId: string; row: { id: string } }) {
+/** row.id 是资产 id。 */
+export function ServerPorts({ row }: { row: { id: string } }) {
   const [source, setSource] = useState<InventorySource>("os");
   const [snapshot, setSnapshot] = useState<InventorySnapshot | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
@@ -109,7 +110,7 @@ export function ServerPorts({ projectId, row }: { projectId: string; row: { id: 
   useEffect(() => {
     let alive = true;
     setState("loading");
-    fetch(`/api/projects/${projectId}/servers/${row.id}/inventory?source=${source}`)
+    fetch(`/api/assets/${row.id}/inventory?source=${source}`)
       .then((response) => (response.ok ? response.json() : Promise.reject(new Error())))
       .then((body: { snapshot: InventorySnapshot | null }) => {
         if (!alive) return;
@@ -120,7 +121,7 @@ export function ServerPorts({ projectId, row }: { projectId: string; row: { id: 
     return () => {
       alive = false;
     };
-  }, [projectId, row.id, source]);
+  }, [row.id, source]);
 
   const ports = snapshot?.ports;
   return (

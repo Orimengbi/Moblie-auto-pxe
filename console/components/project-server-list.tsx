@@ -197,9 +197,10 @@ export function ProjectServerList({
   const [sideId, setSideId] = useState<string | null>(null);
   // 按 id 找，列表刷新后侧边栏里显示的状态也跟着更新。
   const sideRow = rows.find((row) => row.id === sideId) || null;
+  const assetOf = (ids: string[]) => ids.map((id) => rows.find((row) => row.id === id)?.assetId).filter((id): id is string => Boolean(id));
 
   async function remove(row: ServerListRow) {
-    if (!window.confirm(`从列表里删掉 ${row.sn}？不会动这台机器的 BMC 和系统。`)) return;
+    if (!window.confirm(`从这个装机批次里删掉 ${row.sn}？资产和它的硬件记录还在，也不会动这台机器的 BMC 和系统。`)) return;
     setError("");
     const response = await fetch(`/api/projects/${projectId}/servers/${row.id}`, { method: "DELETE" });
     const body = await response.json().catch(() => ({}));
@@ -283,7 +284,7 @@ export function ProjectServerList({
             {checking ? "检查中" : "立即检查"}
           </Button>
           <span className="text-xs">
-            {enabled ? "项目开着，每 30 秒自动检查一次，密码不对的机器不自动重试。" : "项目关着，不自动检查；立即检查只读取状态，不改 BMC。"}
+            {enabled ? "批次开着，每 30 秒自动检查一次，密码不对的机器不自动重试。" : "批次关着，不自动检查；立即检查只读取状态，不改 BMC。"}
             {checkedAt ? ` 上次检查 ${checkedAt.toLocaleTimeString("zh-CN")}` : ""}
           </span>
           {rows.length ? (
@@ -453,12 +454,34 @@ export function ProjectServerList({
           setAdding(false);
         }}
       />
-      <ServerPowerDialog projectId={projectId} targets={powerTargets} onClose={() => setPowerTargets([])} />
-      {consoleRow ? <RemoteConsole projectId={projectId} row={consoleRow} port={bmcPort} onClose={() => setConsoleRow(null)} /> : null}
-      <ServerSidebar projectId={projectId} row={sideRow} onClose={() => setSideId(null)} />
+      <ServerPowerDialog targets={powerTargets.map((row) => ({ id: row.assetId, sn: row.sn, bmcIp: row.bmcIp }))} onClose={() => setPowerTargets([])} />
+      {consoleRow ? <RemoteConsole row={{ id: consoleRow.assetId, sn: consoleRow.sn, bmcIp: consoleRow.bmcIp }} port={bmcPort} onClose={() => setConsoleRow(null)} /> : null}
+      <ServerSidebar
+        projectId={projectId}
+        initialTab="hardware"
+        row={
+          sideRow
+            ? {
+                id: sideRow.assetId,
+                sn: sideRow.sn,
+                description: [sideRow.detail, sideRow.bmcIp && `BMC ${sideRow.bmcIp}`, sideRow.host && `系统 ${sideRow.host}`, sideRow.osName && `安装系统 ${sideRow.osName}`].filter(Boolean).join(" · "),
+              }
+            : null
+        }
+        onClose={() => setSideId(null)}
+        onChanged={() => router.refresh()}
+      />
       <div className="grid gap-3 border-t pt-4">
         <h3 className="font-medium">批量任务</h3>
-        <ProjectTaskRunner projectId={projectId} picked={picked} installed={installed} onPick={setPicked} files={files} tasks={tasks} />
+        <ProjectTaskRunner
+          projectId={projectId}
+          toAssets={assetOf}
+          picked={picked}
+          installed={installed}
+          onPick={(ids) => setPicked(rows.filter((row) => ids.includes(row.assetId) || ids.includes(row.id)).map((row) => row.id))}
+          files={files}
+          tasks={tasks}
+        />
       </div>
     </div>
   );

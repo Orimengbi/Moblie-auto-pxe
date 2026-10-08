@@ -1,4 +1,4 @@
-import { jsonError, readJson } from "@/lib/api";
+import { auditRequest, jsonError, readJson } from "@/lib/api";
 import {
   AuthError,
   clearLoginFailures,
@@ -42,10 +42,12 @@ export async function POST(request: Request) {
 
     if (!identity) {
       recordLoginFailure(address, username);
+      auditRequest(request, null, { action: "登录失败", targetType: "user", targetLabel: username || body.method, detail: body.method, ok: false });
       const message = { password: "用户名或密码不对", key: "访问密钥无效", ssh: "签名校验失败或挑战码已过期" }[body.method];
       throw new AuthError(message, 401);
     }
     clearLoginFailures(address);
+    auditRequest(request, identity, { action: "登录", targetType: "user", targetId: identity.user.id, targetLabel: identity.user.username, detail: body.method });
     return Response.json(publicUser(identity.user), { headers: { "set-cookie": sessionCookie(createSession(identity)) } });
   } catch (error) {
     return jsonError(error);

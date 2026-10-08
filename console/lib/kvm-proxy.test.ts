@@ -13,17 +13,18 @@ process.env.PXE_DATA_DIR = temp;
 
 const auth = await import("./auth.ts");
 const store = await import("./store.ts");
+const assets = await import("./assets.ts");
 const { parseServerTable } = await import("./server-sheet.ts");
 const kvm = await import("./kvm-proxy.ts");
 
 test("root paths in BMC pages and headers are moved under the server's prefix", () => {
-  const prefix = "/__bmc/11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222";
+  const prefix = "/__bmc/22222222-2222-4222-8222-222222222222";
   assert.deepEqual(kvm.parseBmcPath(`${prefix}/api/kvm/token`), {
-    projectId: "11111111-1111-4111-8111-111111111111",
-    serverId: "22222222-2222-4222-8222-222222222222",
+    assetId: "22222222-2222-4222-8222-222222222222",
     rest: "/api/kvm/token",
   });
   assert.equal(kvm.parseBmcPath("/api/projects"), null);
+  assert.equal(kvm.parseBmcPath("/__bmc/11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222/x")?.rest, "/22222222-2222-4222-8222-222222222222/x");
   const html = kvm.rewriteHtml('<html><head><link href="/viewer.min.css"><script data-main="/app/main" src="/viewer.min.js"></script><img src="images/a.png"><a href="//x">', prefix);
   assert.ok(html.startsWith(`<html><head><script src="${prefix}/__pxe/shim.js"></script>`));
   assert.match(html, new RegExp(`href="${prefix}/viewer.min.css"`));
@@ -139,8 +140,9 @@ test("the proxy logs in to the BMC itself and relays pages and the KVM socket", 
   });
   const row = store.listServers().find((item) => item.projectId === project.id)!;
   assert.equal(row.bmcIp, "127.0.0.1");
-  const saved = JSON.parse(fs.readFileSync(path.join(temp, "servers", `${row.id}.json`), "utf8"));
-  fs.writeFileSync(path.join(temp, "servers", `${row.id}.json`), JSON.stringify({ ...saved, passwordChanged: true }));
+  assert.equal(assets.getAsset(row.assetId)?.bmcIp, "127.0.0.1", "装机批次找到的 BMC 地址同步到资产");
+  // 资产上主账号是改过的目标账号，原账号做备用。
+  assets.updateAsset(row.assetId, { bmcUser: "ops", bmcPassword: "new-pass", bmcFallbackUser: "admin", bmcFallbackPassword: "old-pass" }, "测试");
 
   const user = auth.createUser({ username: "kvm-user", password: "kvm-user-pass" });
   const cookie = `${auth.SESSION_COOKIE}=${auth.createSession({ user, method: "password", credentialId: "" })}`;
@@ -148,7 +150,7 @@ test("the proxy logs in to the BMC itself and relays pages and the KVM socket", 
   await new Promise<void>((resolve) => proxy.listen(0, "127.0.0.1", resolve));
   const port = (proxy.address() as net.AddressInfo).port;
   const base = `http://127.0.0.1:${port}`;
-  const prefix = kvm.bmcPrefix(project.id, row.id);
+  const prefix = kvm.bmcPrefix(row.assetId);
 
   assert.equal((await fetch(`${base}${prefix}/viewer.html`)).status, 401, "没登录控制台不给看");
   const start = await fetch(`${base}${prefix}/`, { headers: { cookie }, redirect: "manual" });
@@ -199,6 +201,9 @@ test("the proxy logs in to the BMC itself and relays pages and the KVM socket", 
   socket.destroy();
   await new Promise((resolve) => setTimeout(resolve, 3500));
   assert.deepEqual(kvmSessions.map((item) => item.id), [20], "关掉面板后结束自己的 KVM 会话");
+
+  const opened = assets.listAudit({ targetId: row.assetId }).filter((entry) => entry.action === "打开远程控制台");
+  assert.ok(opened.length >= 1 && opened.every((entry) => entry.actor === "kvm-user"), "打开远程控制台记审计");
 
   auth.updateUser(user.id, { disabled: true });
   assert.equal((await fetch(`${base}${prefix}/viewer.html`, { headers: { cookie } })).status, 401, "停用用户后远程控制台也断开");

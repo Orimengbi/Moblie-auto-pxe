@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { AssetHistory } from "@/components/asset-history";
+import { AssetOverview } from "@/components/asset-overview";
 import { ServerChanges } from "@/components/server-changes";
 import { ServerInventory } from "@/components/server-inventory";
 import { ServerOptics } from "@/components/server-optics";
@@ -10,18 +12,32 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetBody, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 
 interface Row {
+  /** 资产 id。 */
   id: string;
   sn: string;
-  bmcIp?: string;
-  host: string;
-  osName: string;
-  detail: string;
+  /** 标题后面的一行说明。 */
+  description: string;
 }
 
-/** 点服务器列表里的一行，从右边滑出这台机器的侧边栏。点外面关闭；点到列表里别的行不关，直接换成那一台。 */
-export function ServerSidebar({ projectId, row, onClose }: { projectId: string; row: Row | null; onClose: () => void }) {
+type Tab = "overview" | "hardware" | "changes" | "ports" | "topology" | "optics" | "history";
+
+const TABS: [Tab, string][] = [
+  ["overview", "概况"],
+  ["hardware", "硬件配置"],
+  ["changes", "变更记录"],
+  ["ports", "接口"],
+  ["topology", "GPU / 网卡拓扑"],
+  ["optics", "光模块"],
+  ["history", "记录"],
+];
+
+/**
+ * 点资产列表或装机批次里的一行，从右边滑出这台资产的侧边栏。点外面关闭；点到列表里别的行不关，直接换成那一台。
+ * 从装机批次打开时带 projectId，硬件配置按那个批次的基准检查。
+ */
+export function ServerSidebar({ projectId, row, initialTab = "overview", onClose, onChanged }: { projectId?: string; row: Row | null; initialTab?: Tab; onClose: () => void; onChanged?: () => void }) {
   // 换一台机器时停在同一个标签上，方便一台台对比。
-  const [tab, setTab] = useState<"hardware" | "changes" | "ports" | "topology" | "optics">("hardware");
+  const [tab, setTab] = useState<Tab>(initialTab);
   return (
     <Sheet
       open={Boolean(row)}
@@ -39,33 +55,23 @@ export function ServerSidebar({ projectId, row, onClose }: { projectId: string; 
           <>
             <SheetHeader>
               <SheetTitle className="font-mono">{row.sn}</SheetTitle>
-              <SheetDescription>
-                {[row.detail, row.bmcIp && `BMC ${row.bmcIp}`, row.host && `系统 ${row.host}`, row.osName && `安装系统 ${row.osName}`].filter(Boolean).join(" · ")}
-              </SheetDescription>
+              <SheetDescription>{row.description}</SheetDescription>
               <div className="mt-2 flex flex-wrap gap-1">
-                <Button type="button" size="sm" variant={tab === "hardware" ? "default" : "ghost"} onClick={() => setTab("hardware")}>
-                  硬件配置
-                </Button>
-                <Button type="button" size="sm" variant={tab === "changes" ? "default" : "ghost"} onClick={() => setTab("changes")}>
-                  变更记录
-                </Button>
-                <Button type="button" size="sm" variant={tab === "ports" ? "default" : "ghost"} onClick={() => setTab("ports")}>
-                  接口
-                </Button>
-                <Button type="button" size="sm" variant={tab === "topology" ? "default" : "ghost"} onClick={() => setTab("topology")}>
-                  GPU / 网卡拓扑
-                </Button>
-                <Button type="button" size="sm" variant={tab === "optics" ? "default" : "ghost"} onClick={() => setTab("optics")}>
-                  光模块
-                </Button>
+                {TABS.map(([value, label]) => (
+                  <Button key={value} type="button" size="sm" variant={tab === value ? "default" : "ghost"} onClick={() => setTab(value)}>
+                    {label}
+                  </Button>
+                ))}
               </div>
             </SheetHeader>
             <SheetBody>
+              {tab === "overview" ? <AssetOverview key={row.id} assetId={row.id} onChanged={onChanged} /> : null}
               {tab === "hardware" ? <ServerInventory key={row.id} projectId={projectId} row={row} /> : null}
-              {tab === "changes" ? <ServerChanges key={row.id} projectId={projectId} row={row} /> : null}
-              {tab === "ports" ? <ServerPorts key={row.id} projectId={projectId} row={row} /> : null}
-              {tab === "topology" ? <ServerTopology key={row.id} projectId={projectId} row={row} /> : null}
-              {tab === "optics" ? <ServerOptics key={row.id} projectId={projectId} row={row} /> : null}
+              {tab === "changes" ? <ServerChanges key={row.id} row={row} /> : null}
+              {tab === "ports" ? <ServerPorts key={row.id} row={row} /> : null}
+              {tab === "topology" ? <ServerTopology key={row.id} row={row} /> : null}
+              {tab === "optics" ? <ServerOptics key={row.id} row={row} /> : null}
+              {tab === "history" ? <AssetHistory key={row.id} assetId={row.id} /> : null}
             </SheetBody>
           </>
         ) : null}

@@ -9,22 +9,9 @@ import { sshKeyPath, taskPath } from "./paths.ts";
 import { OPTICS_SCRIPT, parseOptics } from "./optics.ts";
 import { crawlRedfish, RedfishAuthError, redfishGetter, type RedfishGet } from "./redfish.ts";
 import { renderRevokeScript } from "./render.ts";
-import {
-  bmcAccounts,
-  filePayloadPath,
-  getFile,
-  getProject,
-  getServer,
-  getTask,
-  listMachines,
-  listNicPlans,
-  listServers,
-  readLeasesText,
-  saveInventory,
-  saveOptics,
-  writeTask,
-} from "./store.ts";
-import type { HwChange, HwPort, InventorySource, OpticsReading, Machine, NicPlan, RemoteTask, ServerRow, TaskHostSource, TaskKind, TaskTarget, TaskTargetStatus } from "./types.ts";
+import { assetBmcAccounts, getAsset } from "./assets.ts";
+import { filePayloadPath, getFile, getProject, getTask, listMachines, listNicPlans, readLeasesText, saveInventory, saveOptics, writeTask } from "./store.ts";
+import type { Asset, HwChange, HwPort, InventorySource, OpticsReading, Machine, NicPlan, RemoteTask, ServerRow, TaskHostSource, TaskKind, TaskTarget, TaskTargetStatus } from "./types.ts";
 
 const OUTPUT_LIMIT = 16000;
 /** 采集脚本的原始输出要整段解析，不能像普通任务那样只留结尾。 */
@@ -54,11 +41,15 @@ export interface HostContext {
  * 找装好的系统现在的地址。先用和小主机同网段的系统地址或规划网卡，再用固定 IP，
  * 再用装机网的 DHCP 租约（系统地址配在业务网卡上时，PXE 口还是 DHCP），最后才用需要走路由的地址。
  */
-export function resolveHost(row: Pick<ServerRow, "projectId" | "sn" | "bootMac" | "osAddress" | "osNetmask">, context: HostContext): { host: string; source: TaskHostSource } {
+export function resolveHost(
+  row: Pick<ServerRow, "sn" | "bootMac" | "osAddress" | "osNetmask"> & { projectId?: string },
+  context: HostContext,
+): { host: string; source: TaskHostSource } {
   if (row.osAddress && context.locals.some((ip) => sameSubnet(ip, row.osAddress!, row.osNetmask || "255.255.255.0"))) {
     return { host: row.osAddress, source: "sheet" };
   }
-  const nics = context.nics.filter((item) => item.projectId === row.projectId && item.sn === row.sn);
+  // 资产不属于哪个批次，用所有批次里这个序列号的网卡规划。
+  const nics = context.nics.filter((item) => (!row.projectId || item.projectId === row.projectId) && item.sn === row.sn);
   const local = nics.find((nic) => context.locals.some((ip) => sameSubnet(ip, nic.address, nic.netmask)));
   if (local) return { host: local.address, source: "nic" };
   const machine = row.bootMac ? context.machines.find((item) => item.mac === row.bootMac) : undefined;
@@ -69,6 +60,11 @@ export function resolveHost(row: Pick<ServerRow, "projectId" | "sn" | "bootMac" 
   const routed = nics.find((nic) => nic.gateway) || nics[0];
   if (routed) return { host: routed.address, source: "nic" };
   return { host: "", source: "" };
+}
+
+/** 资产的系统地址：资产上的系统地址和装机网卡 MAC，加上各批次的网卡规划。 */
+export function resolveAssetHost(asset: Pick<Asset, "sn" | "bootMac" | "osAddress" | "osNetmask">, context: HostContext): { host: string; source: TaskHostSource } {
+  return resolveHost({ sn: asset.sn, bootMac: asset.bootMac || undefined, osAddress: asset.osAddress || undefined, osNetmask: asset.osNetmask || undefined }, context);
 }
 
 export function hostContext(): HostContext {
@@ -86,7 +82,10 @@ export interface TaskInput {
   sources?: InventorySource[];
   name?: string;
   script?: string;
-  serverIds: string[];
+  /** 资产 id。 */
+  assetIds: string[];
+  /** 从装机批次页发起时带上，任务列表里按批次显示。 */
+  projectId?: string;
   fileIds?: string[];
   concurrency?: number;
   timeoutSec?: number;
@@ -99,9 +98,9 @@ function boundedInt(value: unknown, fallback: number, min: number, max: number, 
   return n;
 }
 
-export function createTask(projectId: string, input: TaskInput, context: HostContext = hostContext()): RemoteTask {
-  const project = getProject(projectId);
-  if (!project) throw new Error("项目不存在");
+export function createTask(input: TaskInput, context: HostContext = hostContext()): RemoteTask {
+  const project = input.projectId ? getProject(input.projectId) : null;
+  if (input.projectId && !project) throw new Error("装机批次不存在");
   const kind: TaskKind = input.kind === "revoke" || input.kind === "inventory" ? input.kind : "script";
   const script =
     kind === "revoke" ? renderRevokeScript(consolePublicKey()) : kind === "inventory" ? INVENTORY_SCRIPT : (input.script || "").replace(/\r\n/g, "\n");
@@ -115,19 +114,19 @@ export function createTask(projectId: string, input: TaskInput, context: HostCon
   for (const id of fileIds) {
     if (!getFile(id)) throw new Error("选中的文件已经不存在，刷新页面再选");
   }
-  const rows = listServers().filter((row) => row.projectId === project.id);
-  const wanted = [...new Set(input.serverIds || [])];
+  const wanted = [...new Set(input.assetIds || [])];
   if (!wanted.length) throw new Error("至少选一台机器");
+  if (wanted.length > 2000) throw new Error("一次最多 2000 台");
   const targets: TaskTarget[] = wanted.map((id) => {
-    const row = rows.find((item) => item.id === id);
-    if (!row) throw new Error("选中的机器不在这个项目里，刷新页面再选");
-    const found = resolveHost(row, context);
+    const row = getAsset(id);
+    if (!row) throw new Error("选中的机器已经不在资产里，刷新页面再选");
+    const found = resolveAssetHost(row, context);
     // 采集硬件只读 BMC 时不需要系统地址；两边都读时有一边能连就去试。
     const reachable = kind === "inventory" ? (sources.includes("os") && Boolean(found.host)) || (sources.includes("bmc") && Boolean(row.bmcIp)) : Boolean(found.host);
     const missing =
       kind === "inventory"
         ? `${sources.includes("os") ? "找不到系统地址" : ""}${sources.length === 2 ? "，" : ""}${sources.includes("bmc") ? "还没有 BMC 地址" : ""}`
-        : "找不到这台机器的地址：服务器表没填系统地址，DHCP 租约里也没有它的装机网卡";
+        : "找不到这台机器的地址：资产和服务器表都没填系统地址，DHCP 租约里也没有它的装机网卡";
     return {
       serverId: row.id,
       sn: row.sn,
@@ -140,7 +139,7 @@ export function createTask(projectId: string, input: TaskInput, context: HostCon
   });
   const task: RemoteTask = {
     id: crypto.randomUUID(),
-    projectId: project.id,
+    projectId: project?.id || "",
     kind,
     name,
     script,
@@ -314,7 +313,7 @@ export async function collectInventory(
 ): Promise<{ status: TaskTargetStatus; exitCode: number | null; output: string }> {
   const deadline = Date.now() + task.timeoutSec * 1000;
   const sources = task.inventorySources || ["os", "bmc"];
-  const row = getServer(task.projectId, target.serverId);
+  const row = getAsset(target.serverId);
   const lines: string[] = [];
   let ok = 0;
   let tried = 0;
@@ -352,11 +351,11 @@ export async function collectInventory(
   }
 
   if (sources.includes("bmc")) {
-    const accounts = row ? bmcAccounts(row) : [];
+    const accounts = row ? assetBmcAccounts(row) : [];
     if (!row?.bmcIp) {
       lines.push("BMC：还没有 BMC 地址，跳过");
     } else if (!accounts.length) {
-      lines.push(`BMC（${row.bmcIp}）：服务器表里没有 IPMI 账号密码，跳过`);
+      lines.push(`BMC（${row.bmcIp}）：资产里没有 BMC 账号密码，跳过`);
     } else {
       tried++;
       let done = false;
@@ -399,10 +398,10 @@ export async function collectInventory(
 }
 
 /** 手动查一台机器所有光模块的收发光：SSH 进系统跑 mlxlink / ethtool -m，存下这一次的读数。 */
-export async function queryOptics(projectId: string, serverId: string, exec: Exec = defaultExec, context: HostContext = hostContext()): Promise<OpticsReading> {
-  const row = listServers().find((item) => item.projectId === projectId && item.id === serverId);
-  if (!row) throw new Error("这台机器不在这个项目里");
-  const { host } = resolveHost(row, context);
+export async function queryOptics(assetId: string, exec: Exec = defaultExec, context: HostContext = hostContext()): Promise<OpticsReading> {
+  const row = getAsset(assetId);
+  if (!row) throw new Error("资产不存在");
+  const { host } = resolveAssetHost(row, context);
   if (!host) throw new Error(`${row.sn} 找不到系统地址，查不了光模块。收发光只能在系统里读`);
   const ran = await exec("ssh", [...sshOptions(), `root@${host}`, "bash -s"], OPTICS_SCRIPT, Date.now() + 120_000, INVENTORY_OUTPUT_LIMIT);
   if (ran.timedOut) throw new Error(`${row.sn}（${host}）查询超过 2 分钟，已中止`);

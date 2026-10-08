@@ -1,4 +1,4 @@
-import { jsonError } from "@/lib/api";
+import { audited, jsonError } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
 import { listFiles, saveFile } from "@/lib/store";
 
@@ -20,7 +20,8 @@ export async function PUT(request: Request) {
     requireUser(request);
     const name = new URL(request.url).searchParams.get("name") || "";
     if (!request.body) throw new Error("没有收到文件内容");
-    return Response.json(await saveFile(name, request.body));
+    const body = request.body;
+    return Response.json(await audited(request, (f) => ({ action: "上传任务文件", targetType: "file", targetId: f?.id, targetLabel: name, detail: f ? `${f.size} 字节` : "" }), () => saveFile(name, body)));
   } catch (error) {
     return jsonError(error);
   }

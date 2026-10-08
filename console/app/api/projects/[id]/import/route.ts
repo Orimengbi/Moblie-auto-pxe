@@ -1,4 +1,4 @@
-import { jsonError } from "@/lib/api";
+import { audited, jsonError } from "@/lib/api";
 import { parseServerTable } from "@/lib/server-sheet";
 import { importServerSheet } from "@/lib/store";
 import * as XLSX from "xlsx";
@@ -21,7 +21,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: "" }) as unknown[][];
     const parsed = parseServerTable(rows);
     if (parsed.error) throw new Error(parsed.error);
-    const result = await importServerSheet(id, parsed.records);
+    const result = await audited(request, (r) => ({ action: "上传服务器表", targetType: "project", targetId: id, targetLabel: file.name, detail: r ? `${r.rows} 行，列入 ${r.servers} 台，${r.errors.length} 行有问题` : "" }), () => importServerSheet(id, parsed.records));
     return Response.json(result);
   } catch (error) {
     return jsonError(error);

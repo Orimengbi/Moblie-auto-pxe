@@ -1,4 +1,4 @@
-import { jsonError, readJson } from "@/lib/api";
+import { audited, jsonError, readJson } from "@/lib/api";
 import { deleteProject, getProject, renameProject, updateProjectNetwork, type ProjectInput, type ProjectNetworkInput } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
@@ -15,19 +15,29 @@ export async function PUT(request: Request, context: { params: Promise<{ id: str
     const { id } = await context.params;
     const body = await readJson<Partial<ProjectInput & ProjectNetworkInput>>(request);
     if (body.dhcp) {
-      return Response.json(await updateProjectNetwork(id, { dhcp: body.dhcp, fixed: body.fixed }));
+      const dhcp = body.dhcp;
+      return Response.json(
+        await audited(request, { action: "修改装机批次 DHCP", targetType: "project", targetId: id, targetLabel: getProject(id)?.name, detail: `${dhcp.start}-${dhcp.end}` }, () =>
+          updateProjectNetwork(id, { dhcp, fixed: body.fixed }),
+        ),
+      );
     }
-    if (body.name) return Response.json(await renameProject(id, { name: body.name, note: body.note }));
+    const name = body.name;
+    if (name) {
+      return Response.json(
+        await audited(request, { action: "重命名装机批次", targetType: "project", targetId: id, targetLabel: `${getProject(id)?.name} → ${name}` }, () => renameProject(id, { name, note: body.note })),
+      );
+    }
     throw new Error("没有要保存的内容");
   } catch (error) {
     return jsonError(error);
   }
 }
 
-export async function DELETE(_: Request, context: { params: Promise<{ id: string }> }) {
+export async function DELETE(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await context.params;
-    await deleteProject(id);
+    await audited(request, { action: "删除装机批次", targetType: "project", targetId: id, targetLabel: getProject(id)?.name }, () => deleteProject(id));
     return Response.json({ ok: true });
   } catch (error) {
     return jsonError(error);

@@ -139,9 +139,12 @@ export type IpmiLink = "unknown" | "up" | "down" | "denied";
 export type IpSource = "unknown" | "dhcp" | "static";
 export type InstallState = "no" | "installing" | "yes";
 
+/** 装机批次（项目）里的一行：这台机器这次怎么装。机器本身的信息在资产里，assetId 指向它。 */
 export interface ServerRow {
   id: string;
   projectId: string;
+  /** 旧数据没有这一项时等于 id（迁移时资产沿用了行的 id）。 */
+  assetId: string;
   sn: string;
   ipmiMac: string;
   originalUser: string;
@@ -328,6 +331,7 @@ export type TaskTargetStatus = "pending" | "running" | "ok" | "failed" | "timeou
 export type TaskHostSource = "sheet" | "nic" | "fixed" | "lease" | "";
 
 export interface TaskTarget {
+  /** 资产 id。旧任务里是服务器行的 id，迁移后资产沿用了它，所以照样能用。 */
   serverId: string;
   sn: string;
   host: string;
@@ -342,6 +346,7 @@ export interface TaskTarget {
 /** 装完系统后，控制台用自己的 SSH 密钥对一批机器执行同一段脚本。 */
 export interface RemoteTask {
   id: string;
+  /** 从装机批次里发起的任务带批次 id，从资产页发起的是空字符串。 */
   projectId: string;
   kind: TaskKind;
   name: string;
@@ -392,6 +397,7 @@ export interface HwChange {
 /** 一次采集的结果。每台机器、每个来源各留最近 30 次。 */
 export interface InventorySnapshot {
   id: string;
+  /** 资产 id。 */
   serverId: string;
   projectId: string;
   sn: string;
@@ -571,4 +577,95 @@ export interface TaskFeed {
   extracting: { id: string; name: string }[];
   /** 服务器上没传完的镜像上传会话。 */
   uploads: { id: string; filename: string; name: string; size: number; offset: number; fingerprint: string; updatedAt: string }[];
+}
+
+export type AssetType = "server" | "switch" | "pdu" | "other";
+
+/** 生命周期：入库 → 上架 → 装机中 → 待交付 → 在用 → 维修中 → 下架 → 报废。 */
+export type AssetStatus = "stock" | "racked" | "installing" | "pending" | "active" | "repair" | "offline" | "scrapped";
+
+export interface Customer {
+  id: string;
+  /** 简称，用在资产编号里，例如 RS、ACME。 */
+  code: string;
+  name: string;
+  contact: string;
+  note: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** 一台设备。BMC 和系统地址可以手填，也会在装机批次里更新时同步过来。 */
+export interface Asset {
+  id: string;
+  /** 入库顺序号，编号规则里的 {seq} 用它，不会重复也不会变。 */
+  seq: number;
+  /** 按当前编号规则算出来的编号；单台手动指定了就用手动的。 */
+  tag: string;
+  tagOverride: string;
+  type: AssetType;
+  sn: string;
+  vendor: string;
+  model: string;
+  customerId: string | null;
+  /** 负责人。 */
+  owner: string;
+  status: AssetStatus;
+  location: string;
+  bmcMac: string;
+  bmcIp: string;
+  bmcUser: string;
+  bmcPassword: string;
+  /** BMC 恢复出厂后可能只认原账号，主账号被拒时再试它。 */
+  bmcFallbackUser: string;
+  bmcFallbackPassword: string;
+  bootMac: string;
+  osAddress: string;
+  osNetmask: string;
+  hostname: string;
+  purchaseSupplier: string;
+  purchaseOrder: string;
+  /** YYYY-MM-DD，下同。 */
+  purchaseDate: string;
+  purchasePrice: string;
+  warrantyVendor: string;
+  warrantyLevel: string;
+  warrantyStart: string;
+  warrantyEnd: string;
+  note: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type PublicAsset = Omit<Asset, "bmcPassword" | "bmcFallbackPassword"> & { hasBmcPassword: boolean; hasBmcFallback: boolean };
+
+export interface AssetEvent {
+  id: number;
+  assetId: string;
+  at: string;
+  actor: string;
+  /** status 状态变化，edit 改了资料，install 装机，hardware 硬件变化，task 任务，note 备注。 */
+  kind: string;
+  text: string;
+}
+
+export interface AuditEntry {
+  id: number;
+  at: string;
+  actor: string;
+  ip: string;
+  action: string;
+  targetType: string;
+  targetId: string;
+  targetLabel: string;
+  detail: string;
+  ok: boolean;
+}
+
+export interface TagSettings {
+  /** 例如 RS-{type}-{seq:5}。可用 {type} {customer} {seq} {seq:N} {year} {sn}。 */
+  template: string;
+  /** 没有归属客户时 {customer} 填什么。 */
+  noCustomer: string;
+  typeCodes: Record<AssetType, string>;
 }

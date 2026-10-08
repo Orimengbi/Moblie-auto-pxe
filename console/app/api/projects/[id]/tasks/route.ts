@@ -1,4 +1,5 @@
-import { jsonError, readJson } from "@/lib/api";
+import { auditTask, jsonError, readJson } from "@/lib/api";
+import { requireUser } from "@/lib/auth";
 import { createTask, startTask, type TaskInput } from "@/lib/remote";
 import { getProject, listTasks } from "@/lib/store";
 
@@ -13,8 +14,10 @@ export async function GET(_: Request, context: { params: Promise<{ id: string }>
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await context.params;
-    const task = createTask(id, await readJson<TaskInput>(request));
+    const identity = requireUser(request);
+    const task = createTask({ ...(await readJson<TaskInput>(request)), projectId: id });
     startTask(task);
+    auditTask(request, identity, task);
     return Response.json(task);
   } catch (error) {
     return jsonError(error);

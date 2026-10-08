@@ -8,7 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { ATTR_LABEL, KIND_LABEL, KIND_ORDER, SOURCE_LABEL } from "@/lib/inventory";
 import type { Baseline, BaselineRule, HwKind } from "@/lib/types";
 
-/** 项目的基准配置：从一台好机器生成后，在这里改数量、固件要求，删掉不想检查的条目。 */
+/** 装机批次的基准配置：从一台好机器生成后，在这里改数量、固件要求，删掉不想检查的条目。 */
 export function ProjectBaseline({ projectId, baseline, matched, mismatched }: { projectId: string; baseline: Baseline | null; matched: number; mismatched: number }) {
   const router = useRouter();
   const [rules, setRules] = useState<BaselineRule[]>(baseline?.rules || []);
@@ -35,7 +35,7 @@ export function ProjectBaseline({ projectId, baseline, matched, mismatched }: { 
   }
 
   async function send(method: "PUT" | "DELETE") {
-    if (method === "DELETE" && !window.confirm("删掉这个项目的基准？采集记录不受影响。")) return;
+    if (method === "DELETE" && !window.confirm("删掉这个批次的基准？采集记录不受影响。")) return;
     setPending(true);
     setError("");
     const response = await fetch(`/api/projects/${projectId}/baseline`, {
@@ -56,7 +56,7 @@ export function ProjectBaseline({ projectId, baseline, matched, mismatched }: { 
   if (!baseline) {
     return (
       <p className="text-sm text-muted-foreground">
-        还没有基准。先采集一台确认没问题的机器，在服务器列表里点它的「硬件」，再点「设为项目基准」。之后每台机器的硬件一列会显示是否符合。
+        还没有基准。先采集一台确认没问题的机器，点它那一行打开侧边栏，在「硬件配置」里点「设为批次基准」。之后每台机器的硬件一列会显示是否符合。
       </p>
     );
   }

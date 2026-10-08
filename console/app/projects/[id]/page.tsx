@@ -24,7 +24,7 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
     .filter((row) => row.projectId === project.id)
     .map((row) => {
       const found = resolveHost(row, hosts);
-      return { ...publicServer(row), host: found.host, hostSource: found.source, inventory: inventoryStatus(row.id, baseline) };
+      return { ...publicServer(row), host: found.host, hostSource: found.source, inventory: inventoryStatus(row.assetId, baseline) };
     });
   const checked = servers.filter((row) => row.inventory.issues !== null);
   return (
@@ -32,10 +32,10 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
       <div>
         <PageHeader
           title={project.name}
-          description={project.enabled ? "这个项目的开关是打开的。上传的服务器会按 IPMI MAC 找 BMC，改账号，再从网卡启动安装。" : "开关还关着。写好 DHCP 后，回到项目列表打开开关，上传的服务器表才会开始找设备。"}
+          description={project.enabled ? "这个装机批次的开关是打开的。上传的服务器会按 IPMI MAC 找 BMC，改账号，再从网卡启动安装。" : "开关还关着。写好 DHCP 后，回到装机批次列表打开开关，上传的服务器表才会开始找设备。"}
         />
         <Link href="/projects" className="text-sm underline underline-offset-4">
-          返回项目列表
+          返回装机批次列表
         </Link>
       </div>
       <div className="grid gap-4 lg:grid-cols-2">

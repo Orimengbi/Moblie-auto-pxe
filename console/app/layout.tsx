@@ -18,8 +18,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "PXE 装机台",
-  description: "移动小主机上的 Linux 无人值守安装",
+  title: "资产运维平台",
+  description: "服务器资产台账、运维和 PXE 装机",
 };
 
 export const dynamic = "force-dynamic";
@@ -35,8 +35,8 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
             <div className="min-h-screen md:grid md:grid-cols-[220px_1fr]">
               <aside className="border-b bg-card md:border-r md:border-b-0">
                 <div className="px-5 pt-5 pb-3">
-                  <p className="text-xs tracking-[0.16em] text-muted-foreground">移动小主机</p>
-                  <p className="text-lg font-semibold">PXE 装机台</p>
+                  <p className="text-xs tracking-[0.16em] text-muted-foreground">资产 · 运维 · 装机</p>
+                  <p className="text-lg font-semibold">资产运维平台</p>
                 </div>
                 <Nav user={{ username: identity.user.username, role: identity.user.role }} />
               </aside>

@@ -33,7 +33,7 @@ export function ProjectServerImport({ projectId }: { projectId: string }) {
   return (
     <form onSubmit={upload} className="grid gap-3">
       <p className="text-sm text-muted-foreground">
-        一行一台服务器。表里有序列号、IPMI MAC、原账号、目标账号、IPMI 地址、掩码、路由，VLAN 可以空着。安装系统要和这个项目里某条安装设置的名称一致。密码只留在小主机上，页面不显示。
+        一行一台服务器。表里有序列号、IPMI MAC、原账号、目标账号、IPMI 地址、掩码、路由，VLAN 可以空着。安装系统要和这个批次里某条安装设置的名称一致。序列号已经入库的机器会挂到原来的资产上，没入库的自动入库。密码只留在小主机上，页面不显示。
       </p>
       <a className="w-fit text-sm underline underline-offset-4" href={`/api/projects/${projectId}/template`}>
         下载 Excel 模板

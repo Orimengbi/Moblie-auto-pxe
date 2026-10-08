@@ -51,7 +51,7 @@ export function ProjectManager({ projects }: { projects: Project[] }) {
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) {
-        setError(body.error || "无法切换项目");
+        setError(body.error || "无法切换装机批次");
         return;
       }
       router.refresh();
@@ -75,11 +75,11 @@ export function ProjectManager({ projects }: { projects: Project[] }) {
   return (
     <div className="grid gap-4">
       <Button className="w-fit" onClick={() => setOpen(true)}>
-        新建项目
+        新建装机批次
       </Button>
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
       {projects.length === 0 ? (
-        <p className="text-sm text-muted-foreground">还没有项目。新建后只是一个空目录，再到里面填写安装设置、DHCP 和 IPMI。</p>
+        <p className="text-sm text-muted-foreground">还没有装机批次。新建后再到里面填写安装设置、DHCP，上传服务器表。</p>
       ) : (
         <div className="grid gap-3">
           {projects.map((project) => (
@@ -107,7 +107,7 @@ export function ProjectManager({ projects }: { projects: Project[] }) {
               </p>
               <div className="mt-3 flex gap-2">
                 <Button size="sm" variant="secondary" render={<Link href={`/projects/${project.id}`} />}>
-                  进入项目
+                  进入批次
                 </Button>
                 <Button size="sm" variant="ghost" onClick={() => remove(project.id)}>
                   删除
@@ -121,8 +121,8 @@ export function ProjectManager({ projects }: { projects: Project[] }) {
         <DialogContent>
           <form onSubmit={create} className="grid gap-3">
             <DialogHeader>
-              <DialogTitle>新建项目</DialogTitle>
-              <DialogDescription>先建立项目目录。安装设置、DHCP 和 IPMI 进去之后再填。同一时间只能启用一个项目。</DialogDescription>
+              <DialogTitle>新建装机批次</DialogTitle>
+              <DialogDescription>安装设置、DHCP 和服务器表进去之后再填。同一时间只能打开一个批次。表里的机器会自动入库成资产，已经入库的按序列号对上。</DialogDescription>
             </DialogHeader>
             <label className="grid gap-1.5 text-sm">
               <span className="font-medium">名称</span>

@@ -1,4 +1,4 @@
-import { jsonError } from "@/lib/api";
+import { audited, jsonError } from "@/lib/api";
 import { startExtract } from "@/lib/jobs";
 import { createImageFromIncoming, listImages, saveUploadedIso } from "@/lib/store";
 
@@ -19,13 +19,15 @@ export async function POST(request: Request) {
       if (file.size > 256 * 1024 * 1024) {
         throw new Error("大于 256MB 的 ISO 请先放到 data/incoming，再从列表导入");
       }
-      const record = await saveUploadedIso(file.name, Buffer.from(await file.arrayBuffer()), name);
+      const bytes = Buffer.from(await file.arrayBuffer());
+      const record = await audited(request, (r) => ({ action: "上传镜像", targetType: "image", targetId: r?.id, targetLabel: name || file.name }), () => saveUploadedIso(file.name, bytes, name));
       startExtract(record.id);
       return Response.json(record, { status: 201 });
     }
     const body = (await request.json()) as { filename?: string; name?: string };
     if (!body.filename) throw new Error("请指定 incoming 里的 ISO 文件名");
-    const record = await createImageFromIncoming({ filename: body.filename, name: body.name || "" });
+    const filename = body.filename;
+    const record = await audited(request, (r) => ({ action: "导入镜像", targetType: "image", targetId: r?.id, targetLabel: body.name || filename }), () => createImageFromIncoming({ filename, name: body.name || "" }));
     startExtract(record.id);
     return Response.json(record, { status: 201 });
   } catch (error) {

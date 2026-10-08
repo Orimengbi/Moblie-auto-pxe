@@ -96,14 +96,15 @@ function nvlinkSummary(topology: Topology, gpus: TopoDevice[]): string {
 }
 
 /** GPU 和网卡的拓扑：NUMA → 根复合体 → PCIe 交换芯片 → GPU/网卡的树，加上两两之间的连接矩阵。数据来自最近一次系统内采集。 */
-export function ServerTopology({ projectId, row }: { projectId: string; row: { id: string } }) {
+/** row.id 是资产 id。 */
+export function ServerTopology({ row }: { row: { id: string } }) {
   const [snapshot, setSnapshot] = useState<InventorySnapshot | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
 
   useEffect(() => {
     let alive = true;
     setState("loading");
-    fetch(`/api/projects/${projectId}/servers/${row.id}/inventory?source=os`)
+    fetch(`/api/assets/${row.id}/inventory?source=os`)
       .then((response) => (response.ok ? response.json() : Promise.reject(new Error())))
       .then((body: { snapshot: InventorySnapshot | null }) => {
         if (!alive) return;
@@ -114,7 +115,7 @@ export function ServerTopology({ projectId, row }: { projectId: string; row: { i
     return () => {
       alive = false;
     };
-  }, [projectId, row.id]);
+  }, [row.id]);
 
   if (state === "loading") return <p className="text-sm text-muted-foreground">正在读取</p>;
   if (state === "error") return <p className="text-sm text-destructive">读取失败</p>;

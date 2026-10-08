@@ -79,7 +79,8 @@ function PartTable({ kind, items }: { kind: HwKind; items: HwComponent[] }) {
 }
 
 /** 一台机器的硬件配置：按来源看最近一次或历史上某一次的部件、和上次相比的变化、按项目基准检查的结果。放在服务器侧边栏里。 */
-export function ServerInventory({ projectId, row }: { projectId: string; row: { id: string; sn: string } }) {
+/** row.id 是资产 id。给了 projectId（从装机批次打开）时按那个批次的基准检查，并能用这台生成基准。 */
+export function ServerInventory({ projectId, row }: { projectId?: string; row: { id: string; sn: string } }) {
   const router = useRouter();
   const [view, setView] = useState<View | null>(null);
   const [error, setError] = useState("");
@@ -93,7 +94,8 @@ export function ServerInventory({ projectId, row }: { projectId: string; row: { 
       setLoading(true);
       setError("");
       try {
-        const response = await fetch(`/api/projects/${projectId}/servers/${row.id}/inventory${query}`);
+        const scope = projectId ? `${query ? "&" : "?"}project=${projectId}` : "";
+        const response = await fetch(`/api/assets/${row.id}/inventory${query}${scope}`);
         const body = await response.json().catch(() => ({}));
         if (!response.ok) setError(body.error || "读取失败");
         else setView(body as View);
@@ -116,9 +118,8 @@ export function ServerInventory({ projectId, row }: { projectId: string; row: { 
   useEffect(() => {
     if (!collecting) return;
     const timer = setInterval(async () => {
-      const response = await fetch(`/api/projects/${projectId}/tasks`).catch(() => null);
-      const tasks = ((await response?.json().catch(() => [])) || []) as RemoteTask[];
-      const task = tasks.find((item) => item.id === collecting);
+      const response = await fetch(`/api/tasks/${collecting}`).catch(() => null);
+      const task = (response?.ok ? await response.json().catch(() => null) : null) as RemoteTask | null;
       if (task && task.status === "running") return;
       setCollecting("");
       const target = task?.targets[0];
@@ -128,15 +129,15 @@ export function ServerInventory({ projectId, row }: { projectId: string; row: { 
       await load("");
     }, 3000);
     return () => clearInterval(timer);
-  }, [collecting, projectId, load, router]);
+  }, [collecting, load, router]);
 
   async function collect() {
     setError("");
     setMessage("");
-    const response = await fetch(`/api/projects/${projectId}/tasks`, {
+    const response = await fetch("/api/tasks", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ kind: "inventory", sources, serverIds: [row.id], concurrency: 1, timeoutSec: 600 }),
+      body: JSON.stringify({ kind: "inventory", sources, assetIds: [row.id], ...(projectId ? { projectId } : {}), concurrency: 1, timeoutSec: 600 }),
     });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) {
@@ -153,12 +154,13 @@ export function ServerInventory({ projectId, row }: { projectId: string; row: { 
 
   async function makeBaseline() {
     if (!snapshot) return;
-    const replace = view?.baseline ? "会替换项目现有的基准。" : "";
-    if (!window.confirm(`用 ${row.sn} 最近一次${SOURCE_LABEL[source]}的采集生成项目基准？${replace}生成后可以在项目的「基准配置」里改数量和固件要求。`)) return;
+    if (!projectId) return;
+    const replace = view?.baseline ? "会替换这个批次现有的基准。" : "";
+    if (!window.confirm(`用 ${row.sn} 最近一次${SOURCE_LABEL[source]}的采集生成装机批次的基准？${replace}生成后可以在批次的「基准配置」里改数量和固件要求。`)) return;
     const response = await fetch(`/api/projects/${projectId}/baseline`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ serverId: row.id, source }),
+      body: JSON.stringify({ assetId: row.id, source }),
     });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) {
@@ -213,9 +215,9 @@ export function ServerInventory({ projectId, row }: { projectId: string; row: { 
             ))}
           </select>
         ) : null}
-        {snapshot ? (
+        {snapshot && projectId ? (
           <Button type="button" size="sm" variant="outline" className="ml-auto" onClick={makeBaseline}>
-            设为项目基准
+            设为批次基准
           </Button>
         ) : null}
       </div>
@@ -234,9 +236,11 @@ export function ServerInventory({ projectId, row }: { projectId: string; row: { 
           <section className="grid gap-1">
             <h4 className="text-sm font-medium">基准检查</h4>
             {!view?.baseline ? (
-              <p className="text-sm text-muted-foreground">项目还没有基准。挑一台确认没问题的机器，点「设为项目基准」。</p>
+              <p className="text-sm text-muted-foreground">
+                {projectId ? "这个装机批次还没有基准。挑一台确认没问题的机器，点「设为批次基准」。" : "最近一次装机批次没有基准。基准在装机批次里设。"}
+              </p>
             ) : view.baseline.source !== snapshot.source ? (
-              <p className="text-sm text-muted-foreground">项目基准是按{SOURCE_LABEL[view.baseline.source]}采集生成的，切到「{SOURCE_LABEL[view.baseline.source]}」查看比对。</p>
+              <p className="text-sm text-muted-foreground">批次基准是按{SOURCE_LABEL[view.baseline.source]}采集生成的，切到「{SOURCE_LABEL[view.baseline.source]}」查看比对。</p>
             ) : view.issues?.length ? (
               <ul className="grid gap-1 text-sm text-destructive">
                 {view.issues.map((issue, index) => (

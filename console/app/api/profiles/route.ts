@@ -1,4 +1,4 @@
-import { jsonError, readJson } from "@/lib/api";
+import { audited, jsonError, readJson } from "@/lib/api";
 import { createProfile, listProfiles, publicProfile } from "@/lib/store";
 import type { ProfileInput } from "@/lib/store";
 
@@ -11,7 +11,7 @@ export function GET() {
 export async function POST(request: Request) {
   try {
     const body = await readJson<ProfileInput>(request);
-    const profile = await createProfile(body);
+    const profile = await audited(request, (p) => ({ action: "新建安装配置", targetType: "profile", targetId: p?.id, targetLabel: body.name }), () => createProfile(body));
     return Response.json(publicProfile(profile), { status: 201 });
   } catch (error) {
     return jsonError(error);

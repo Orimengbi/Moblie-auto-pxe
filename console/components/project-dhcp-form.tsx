@@ -49,7 +49,7 @@ export function ProjectDhcpForm({ project }: { project: Project }) {
       setError(body.error || "保存失败");
       return;
     }
-    setSaved("DHCP 已写入这个项目。打开项目开关后，装机才使用这套地址池。");
+    setSaved("DHCP 已写入这个批次。打开批次开关后，装机才使用这套地址池。");
     router.refresh();
   }
 

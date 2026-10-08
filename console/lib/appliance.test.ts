@@ -26,7 +26,8 @@ import {
   renderNicScript,
   renderUbuntuAutoinstall,
 } from "./render.ts";
-import { bindServerBoot, controlServer, createIpmi, deleteProject, deleteServer, saveServer, getTask, listMachines, listServers, markServerInstalled, requestReinstall, saveFile, createNic, createProfile, createProject, createReport, customizationForMac, getIpmiBySn, getMachine, getProject, getState, importProjectPlan, importServerSheet, listImages, listNicsBySn, listProjects, publicServer, reconcileServers, renameProject, saveMachine, saveMachineFact, saveNetwork, setProjectEnabled, updateProjectNetwork } from "./store.ts";
+import { bindServerBoot, controlAsset, createIpmi, deleteProject, deleteServer, saveServer, getTask, listMachines, listServers, markServerInstalled, requestReinstall, saveFile, createNic, createProfile, createProject, createReport, customizationForMac, getIpmiBySn, getMachine, getProject, getState, importProjectPlan, importServerSheet, listImages, listNicsBySn, listProjects, publicServer, reconcileServers, renameProject, saveMachine, saveMachineFact, saveNetwork, setProjectEnabled, updateProjectNetwork } from "./store.ts";
+import { updateAsset } from "./assets.ts";
 import { DEFAULT_STATE, type ImageRecord, type Profile } from "./types.ts";
 
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pxe-test-"));
@@ -563,17 +564,17 @@ test("batch tasks find each host and record every result", async () => {
 
   const others = rows.filter((row) => row.id !== installed.id);
   assert.ok(others.length >= 1);
-  await assert.rejects(async () => createTask(projectId, { script: "true", serverIds: [] }), /至少选一台/);
-  assert.throws(() => createTask(projectId, { script: "  ", serverIds: [installed.id] }), /脚本是空的/);
-  assert.throws(() => createTask(projectId, { script: "true", serverIds: ["not-in-project"] }), /不在这个项目里/);
-  assert.throws(() => createTask(projectId, { script: "true", serverIds: [installed.id], concurrency: 99 }), /并发数/);
+  await assert.rejects(async () => createTask({ script: "true", assetIds: [], projectId }), /至少选一台/);
+  assert.throws(() => createTask({ script: "  ", assetIds: [installed.assetId], projectId }), /脚本是空的/);
+  assert.throws(() => createTask({ script: "true", assetIds: ["not-in-project"], projectId }), /不在资产里/);
+  assert.throws(() => createTask({ script: "true", assetIds: [installed.assetId], concurrency: 99, projectId }), /并发数/);
 
   const file = await saveFile("drv 1.run", Readable.from([Buffer.from("#!/bin/sh\necho drv\n")]));
   assert.equal(file.name, "drv_1.run");
   await assert.rejects(saveFile("../drv 1.run", Readable.from([Buffer.from("x")])), /已经有/);
 
   const context = { nics: [], machines: [], leases: [lease, { ...lease, mac: "aa:bb:cc:dd:ee:77", ip: "192.168.77.77" }], locals: ["192.168.77.1"] };
-  const task = createTask(projectId, { name: "装驱动", script: "sh ./drv_1.run", serverIds: [installed.id, others[0].id], fileIds: [file.id], concurrency: 2 }, context);
+  const task = createTask({ name: "装驱动", script: "sh ./drv_1.run", assetIds: [installed.assetId, others[0].assetId], fileIds: [file.id], concurrency: 2, projectId }, context);
   assert.equal(task.status, "running");
   assert.equal(task.targets[0].host, "192.168.77.92");
   assert.equal(task.targets[1].status, "unreachable");
@@ -598,10 +599,10 @@ test("batch tasks find each host and record every result", async () => {
   assert.match(calls[2].stdin || "", /trap 'cd \/; rm -rf "\$PXE_FILES"' EXIT/);
   assert.match(calls[2].stdin || "", /sh \.\/drv_1\.run\n$/);
 
-  const unreachable = createTask(projectId, { script: "true", serverIds: [installed.id] }, context);
+  const unreachable = createTask({ script: "true", assetIds: [installed.assetId], projectId }, context);
   const offline: Exec = async () => ({ code: 255, output: "ssh: connect to host 192.168.77.92 port 22: No route to host\n", timedOut: false });
   assert.equal((await runTask(unreachable.id, offline)).targets[0].status, "unreachable");
-  const slow = createTask(projectId, { script: "sleep 999", serverIds: [installed.id], timeoutSec: 10 }, context);
+  const slow = createTask({ script: "sleep 999", assetIds: [installed.assetId], timeoutSec: 10, projectId }, context);
   const hang: Exec = async (_command, _args, stdin) => (stdin ? { code: null, output: "", timedOut: true } : { code: 0, output: "", timedOut: false });
   assert.equal((await runTask(slow.id, hang)).targets[0].status, "timeout");
 });
@@ -682,7 +683,7 @@ test("the server sheet sets a static system address on the business nic", async 
   assert.deepEqual(resolveHost({ ...row!, bootMac: lease.mac }, { nics: [], machines: [], leases: [lease], locals: ["10.50.0.250"] }), { host: "10.50.0.11", source: "sheet" });
   assert.deepEqual(resolveHost(row!, { nics: [], machines: [], leases: [], locals: [] }), { host: "10.50.0.11", source: "sheet" });
 
-  const task = createTask(project.id, { script: "true", serverIds: [row!.id] }, { nics: [], machines: [], leases: [], locals: [] });
+  const task = createTask({ script: "true", assetIds: [row!.assetId], projectId: project.id }, { nics: [], machines: [], leases: [], locals: [] });
   assert.equal(task.targets[0].host, "10.50.0.11");
   await saveMachine({ mac: "aa:bb:cc:dd:ee:f2", action: "menu", projectId: project.id });
   await deleteProject(project.id);
@@ -876,34 +877,34 @@ test("power and boot device go to the BMC with the account it accepts now", asyn
   await reconcileServers(project.id, { exec, leasesText: leases });
   const rows = listServers().filter((row) => row.projectId === project.id);
   const row = rows.find((item) => item.sn === "SN-POWER")!;
-  const saved = JSON.parse(fs.readFileSync(path.join(temp, "servers", `${row.id}.json`), "utf8"));
-  // 表里说已经改成目标账号，但 BMC 只认原密码：先试目标账号，被拒后用原账号。
-  fs.writeFileSync(path.join(temp, "servers", `${row.id}.json`), JSON.stringify({ ...saved, passwordChanged: true }));
+  // 资产上记的主账号是目标账号，但 BMC 只认原密码：先试目标账号，被拒后用备用的原账号。
+  updateAsset(row.assetId, { bmcUser: "ops", bmcPassword: "new-pass", bmcFallbackUser: "admin", bmcFallbackPassword: "old-pass" }, "测试");
 
   calls.length = 0;
-  const result = await controlServer(project.id, row.id, { boot: "usb", power: "cycle" }, exec);
+  const result = await controlAsset(row.assetId, { boot: "usb", power: "cycle" }, exec);
   assert.deepEqual(calls, [
     "admin chassis power status",
     "admin chassis bootdev floppy options=efiboot",
     "admin chassis power on",
     "admin chassis power status",
   ], "关着的机器重启变成开机");
-  assert.equal(result.row.power, "on");
+  assert.equal(result.power, "on");
+  assert.equal(listServers().find((item) => item.id === row.id)?.power, "on", "开关机状态写回装机批次");
   assert.match(result.message, /下次从U 盘启动，开机/);
 
   calls.length = 0;
-  await controlServer(project.id, row.id, { boot: "cdrom", persistent: true, legacy: true }, exec);
+  await controlAsset(row.assetId, { boot: "cdrom", persistent: true, legacy: true }, exec);
   assert.ok(calls.includes("admin chassis bootdev cdrom options=persistent"));
   assert.ok(!calls.some((call) => call.startsWith("admin chassis power cycle")));
-  await controlServer(project.id, row.id, { power: "off" }, exec);
+  await controlAsset(row.assetId, { power: "off" }, exec);
   assert.equal(listServers().find((item) => item.id === row.id)?.power, "off");
 
-  await assert.rejects(controlServer(project.id, row.id, { power: "explode" as never }, exec), /不支持的电源操作/);
-  await assert.rejects(controlServer(project.id, row.id, {}, exec), /没有要执行的操作/);
+  await assert.rejects(controlAsset(row.assetId, { power: "explode" as never }, exec), /不支持的电源操作/);
+  await assert.rejects(controlAsset(row.assetId, {}, exec), /没有要执行的操作/);
   const noLease = rows.find((item) => item.sn === "SN-NOLEASE")!;
-  await assert.rejects(controlServer(project.id, noLease.id, { power: "on" }, exec), /还没有 IPMI 地址/);
+  await assert.rejects(controlAsset(noLease.assetId, { power: "on" }, exec), /还没有 BMC 地址/);
   const deny = async () => ({ code: 1, stdout: "", stderr: "> RAKP 2 HMAC is invalid" });
-  await assert.rejects(controlServer(project.id, row.id, { power: "on" }, deny), /不接受表里的账号密码/);
+  await assert.rejects(controlAsset(row.assetId, { power: "on" }, deny), /不接受资产里的账号密码/);
 
   const args: string[][] = [];
   await setBootDevice("h", "u", "p", { device: "pxe", persistent: true }, async (_h, _u, _p, a) => (args.push(a), { code: 0, stdout: "", stderr: "" }));

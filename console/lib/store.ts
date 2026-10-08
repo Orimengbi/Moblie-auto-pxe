@@ -3,6 +3,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { parseLeases, renderBootIpxe, renderDnsmasq } from "./dnsmasq.ts";
+import { assetBmcAccounts, findAssetBySn, getAsset, syncAssetFromRow } from "./assets.ts";
 import { refreshBootScript } from "./disk-image.ts";
 import { checkBaseline, diffComponents, generateBaseline, KIND_LABEL } from "./inventory.ts";
 import {
@@ -649,9 +650,8 @@ export async function deleteProject(id: string): Promise<void> {
     }
     for (const server of listServers()) {
       if (server.projectId !== id) continue;
+      // 硬件采集和收发光属于资产，删批次不删它们。
       fs.rmSync(serverPath(server.id), { force: true });
-      fs.rmSync(inventoryDir(server.id), { recursive: true, force: true });
-      fs.rmSync(opticsPath(server.id), { force: true });
     }
     fs.rmSync(baselinePath(id), { force: true });
     for (const fact of listMachineFacts()) {
@@ -1228,6 +1228,7 @@ function assertIpmiPassword(value: string, label: string): string {
 function hydrateServer(row: ServerRow): ServerRow {
   return {
     ...row,
+    assetId: row.assetId || row.id,
     canApply: row.canApply !== false,
     ipmiAddress: row.ipmiAddress || "",
     ipmiNetmask: row.ipmiNetmask || "",
@@ -1239,6 +1240,24 @@ function hydrateServer(row: ServerRow): ServerRow {
     installed: row.installed || (row.stage === "installing" ? "installing" : "no"),
     passwordChanged: Boolean(row.passwordChanged),
   };
+}
+
+/** 写一行装机记录，同时把变了的部分同步到资产。 */
+function writeServer(row: ServerRow): void {
+  const previousFile = readJson<ServerRow>(serverPath(row.id));
+  writeJson(serverPath(row.id), row);
+  syncAssetFromRow(previousFile ? hydrateServer(previousFile) : undefined, row);
+}
+
+/** 启动时补建资产：老数据里的服务器行还没有对应的资产。 */
+export function ensureServerAssets(): number {
+  let made = 0;
+  for (const row of listServers()) {
+    if (getAsset(row.assetId)) continue;
+    syncAssetFromRow(undefined, row);
+    made++;
+  }
+  return made;
 }
 
 export function listServers(): ServerRow[] {
@@ -1413,9 +1432,13 @@ function buildServerRow(project: Project, cells: ServerCells, existing: ServerRo
     existing && existing.ipmiAddress === ipmiAddress && existing.ipmiNetmask === ipmiNetmask && existing.ipmiGateway === ipmiGateway && existing.ipmiVlan === ipmiVlan,
   );
   const canApply = problems.length === 0;
+  const id = existing?.id || crypto.randomUUID();
+  // 同一序列号已经入库就挂到那台资产上；新机器的资产沿用这一行的 id。
+  const assetId = existing && existing.sn === sn ? existing.assetId : findAssetBySn(sn)?.id || (getAsset(id) ? crypto.randomUUID() : id);
   const row: ServerRow = {
-    id: existing?.id || crypto.randomUUID(),
+    id,
     projectId: project.id,
+    assetId,
     sn,
     ipmiMac,
     originalUser,
@@ -1469,7 +1492,7 @@ export async function importServerSheet(projectId: string, records: { row: numbe
       }
       const existing = sn ? listServers().find((item) => item.projectId === project.id && item.sn === sn) : undefined;
       const { row, problems } = buildServerRow(project, cells, existing, `第${record.row}行`, now);
-      writeJson(serverPath(row.id), row);
+      writeServer(row);
       result.servers += 1;
       if (problems.length) result.errors.push({ row: record.row, message: problems.join("；") });
     }
@@ -1499,7 +1522,7 @@ export async function saveServer(projectId: string, serverId: string | null, cel
     };
     const { row, problems } = buildServerRow(project, filled, existing, "这一行", new Date().toISOString());
     if (problems.length) throw new Error(problems.join("；"));
-    writeJson(serverPath(row.id), row);
+    writeServer(row);
     return row;
   });
 }
@@ -1510,8 +1533,6 @@ export async function deleteServer(projectId: string, serverId: string): Promise
     if (!row) throw new Error("这台机器不在这个项目里");
     if (row.bootMac) unbindInstall(row.bootMac);
     fs.rmSync(serverPath(row.id), { force: true });
-    fs.rmSync(inventoryDir(row.id), { recursive: true, force: true });
-    fs.rmSync(opticsPath(row.id), { force: true });
   });
 }
 
@@ -1651,11 +1672,11 @@ function saveReconciled(row: ServerRow, base: string): Promise<boolean> {
     if (!current) return false;
     const now = new Date().toISOString();
     if (current.updatedAt === base) {
-      writeJson(serverPath(row.id), { ...row, updatedAt: now });
+      writeServer({ ...row, updatedAt: now });
       return true;
     }
     if (current.ipmiMac !== row.ipmiMac) return false;
-    writeJson(serverPath(row.id), {
+    writeServer({
       ...current,
       bmcIp: row.bmcIp,
       ipmiLink: row.ipmiLink,
@@ -1669,16 +1690,22 @@ function saveReconciled(row: ServerRow, base: string): Promise<boolean> {
   });
 }
 
-/** BMC 现在最可能接受的账号在前：改过账号用目标账号，原账号兜底。 */
-export function bmcAccounts(row: ServerRow): { user: string; password: string }[] {
-  return [
-    ...(row.passwordChanged ? [{ user: row.targetUser, password: row.targetPassword }] : []),
-    { user: row.originalUser, password: row.originalPassword },
-  ].filter((item) => item.user && item.password);
-}
-
 export function getServer(projectId: string, serverId: string): ServerRow | null {
   return listServers().find((item) => item.projectId === projectId && item.id === serverId) || null;
+}
+
+/** 这台资产在装机批次里的行，新的在前。 */
+export function serversOfAsset(assetId: string): ServerRow[] {
+  return listServers()
+    .filter((row) => row.assetId === assetId)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+/** 删资产时一起删它的硬件采集和收发光。装机批次里的行留着，那是装机记录。 */
+export function removeAssetFiles(assetId: string): void {
+  if (!/^[0-9a-f-]{36}$/.test(assetId)) return;
+  fs.rmSync(inventoryDir(assetId), { recursive: true, force: true });
+  fs.rmSync(opticsPath(assetId), { force: true });
 }
 
 export interface ServerControl {
@@ -1690,57 +1717,49 @@ export interface ServerControl {
 }
 
 /**
- * 服务器列表里的电源和引导按钮。用 BMC 现在的账号登录：改过账号用目标账号，目标账号被拒再试原账号。
- * 和对账一样不在连 BMC 时占数据锁，只在写回开关机状态时加锁。
+ * 电源和引导按钮。用资产上的 BMC 账号登录，主账号被拒再试备用账号。
+ * 和对账一样不在连 BMC 时占数据锁，只在把开关机状态写回装机批次时加锁。
  */
-export async function controlServer(
-  projectId: string,
-  serverId: string,
-  input: ServerControl,
-  exec: IpmiExec = defaultIpmiExec,
-): Promise<{ row: ServerRow; message: string }> {
-  const row = listServers().find((item) => item.projectId === projectId && item.id === serverId);
-  if (!row) throw new Error("这台机器不在这个项目里");
+export async function controlAsset(assetId: string, input: ServerControl, exec: IpmiExec = defaultIpmiExec): Promise<{ power: PowerState; message: string }> {
+  const asset = getAsset(assetId);
+  if (!asset) throw new Error("资产不存在");
   if (input.boot !== undefined && !Object.hasOwn(BOOT_DEVICES, input.boot)) throw new Error("不支持的引导设备");
   if (input.power !== undefined && !Object.hasOwn(POWER_ACTIONS, input.power)) throw new Error("不支持的电源操作");
   if (!input.boot && !input.power) throw new Error("没有要执行的操作");
-  if (!row.bmcIp) throw new Error(`${row.sn} 还没有 IPMI 地址，等 DHCP 发现它或在表里填 IPMI 地址`);
+  if (!asset.bmcIp) throw new Error(`${asset.sn} 还没有 BMC 地址，在资产里填上，或等装机批次的 DHCP 发现它`);
 
-  const accounts = bmcAccounts(row);
-  if (!accounts.length) throw new Error(`${row.sn} 没有 IPMI 账号密码`);
+  const accounts = assetBmcAccounts(asset);
+  if (!accounts.length) throw new Error(`${asset.sn} 没有 BMC 账号密码`);
   let account = accounts[0];
-  let power = await exec(row.bmcIp, account.user, account.password, ["chassis", "power", "status"]);
+  let power = await exec(asset.bmcIp, account.user, account.password, ["chassis", "power", "status"]);
   if (power.code !== 0 && accounts[1] && ipmiFailure(power.stderr) === "denied") {
     account = accounts[1];
-    power = await exec(row.bmcIp, account.user, account.password, ["chassis", "power", "status"]);
+    power = await exec(asset.bmcIp, account.user, account.password, ["chassis", "power", "status"]);
   }
   if (power.code !== 0) {
-    throw new Error(
-      ipmiFailure(power.stderr) === "denied" ? `${row.sn} 的 BMC ${row.bmcIp} 不接受表里的账号密码` : `${row.sn} 的 BMC ${row.bmcIp} 没有回应`,
-    );
+    throw new Error(ipmiFailure(power.stderr) === "denied" ? `${asset.sn} 的 BMC ${asset.bmcIp} 不接受资产里的账号密码` : `${asset.sn} 的 BMC ${asset.bmcIp} 没有回应`);
   }
 
   const done: string[] = [];
   if (input.boot) {
-    await setBootDevice(row.bmcIp, account.user, account.password, { device: input.boot, persistent: input.persistent, legacy: input.legacy }, exec);
+    await setBootDevice(asset.bmcIp, account.user, account.password, { device: input.boot, persistent: input.persistent, legacy: input.legacy }, exec);
     done.push(`${input.persistent ? "以后都" : "下次"}从${BOOT_DEVICES[input.boot].label}启动`);
   }
   let action = input.power;
   // 关着的机器「重启」没有意义，ipmitool 也会报错，直接开机。
   if ((action === "reset" || action === "cycle") && /power is off/i.test(power.stdout)) action = "on";
   if (action) {
-    await powerControl(row.bmcIp, account.user, account.password, action, exec);
+    await powerControl(asset.bmcIp, account.user, account.password, action, exec);
     done.push(POWER_ACTIONS[action].label);
   }
-  const state = await powerStatus(row.bmcIp, account.user, account.password, exec).catch(() => "unknown" as const);
-  const saved = await withLock(() => {
-    const current = listServers().find((item) => item.id === row.id);
-    if (!current) return row;
-    const next = { ...current, power: state, ipmiLink: "up" as const, updatedAt: new Date().toISOString() };
-    writeJson(serverPath(row.id), next);
-    return next;
+  const state = await powerStatus(asset.bmcIp, account.user, account.password, exec).catch(() => "unknown" as const);
+  await withLock(() => {
+    for (const current of serversOfAsset(assetId)) {
+      if (current.power === state && current.ipmiLink === "up") continue;
+      writeServer({ ...current, power: state, ipmiLink: "up", updatedAt: new Date().toISOString() });
+    }
   });
-  return { row: saved, message: `${row.sn}：${done.join("，")}` };
+  return { power: state, message: `${asset.sn}：${done.join("，")}` };
 }
 
 export async function bindServerBoot(snRaw: string, macRaw: string): Promise<ServerRow | null> {
@@ -1763,13 +1782,13 @@ export async function bindServerBoot(snRaw: string, macRaw: string): Promise<Ser
     if (row.installed === "yes") {
       // 装完重启时很多机器还是先从网卡启动。不再绑定安装，菜单超时后回本地硬盘。
       unbindInstall(mac);
-      writeJson(serverPath(row.id), row);
+      writeServer(row);
       return row;
     }
     if (!profile) {
       row.stage = "error";
       row.detail = `机器已从网卡启动，但项目里没有名为「${row.osName}」的安装设置`;
-      writeJson(serverPath(row.id), row);
+      writeServer(row);
       return row;
     }
     const existing = getMachine(mac);
@@ -1788,7 +1807,7 @@ export async function bindServerBoot(snRaw: string, macRaw: string): Promise<Ser
     row.installed = "installing";
     // 内存运行不会回报「已安装」，机器每次从网卡启动都重新进内存系统。
     row.detail = runsInRam(profile) ? `正在内存运行「${row.osName}」，不碰硬盘` : `正在安装「${row.osName}」`;
-    writeJson(serverPath(row.id), row);
+    writeServer(row);
     return row;
   });
 }
@@ -1808,7 +1827,7 @@ export async function markServerInstalled(snRaw: string): Promise<void> {
       row.stage = "installing";
       row.detail = `「${row.osName || "系统"}」已安装`;
       row.updatedAt = new Date().toISOString();
-      writeJson(serverPath(row.id), row);
+      writeServer(row);
       if (row.bootMac) unbindInstall(row.bootMac);
     }
   });
@@ -1832,7 +1851,7 @@ export async function requestReinstall(projectId: string, serverId: string): Pro
     row.stage = "waiting";
     row.detail = project.enabled ? "等待重装，马上会让它从网卡启动" : "等待重装。打开项目开关后会让它从网卡启动";
     row.updatedAt = new Date().toISOString();
-    writeJson(serverPath(row.id), row);
+    writeServer(row);
     return row;
   });
 }
@@ -2088,10 +2107,10 @@ export async function saveBaseline(projectId: string, input: { source?: Inventor
 }
 
 /** 用某台机器最近一次的采集生成项目的基准，替换原来的。 */
-export async function baselineFromServer(projectId: string, serverId: string, source: InventorySource): Promise<Baseline> {
-  const row = getServer(projectId, serverId);
-  if (!row) throw new Error("这台机器不在这个项目里");
-  const snapshot = latestInventory(serverId, source);
+export async function baselineFromServer(projectId: string, assetId: string, source: InventorySource): Promise<Baseline> {
+  const row = listServers().find((item) => item.projectId === projectId && item.assetId === assetId);
+  if (!row) throw new Error("这台机器不在这个装机批次里");
+  const snapshot = latestInventory(assetId, source);
   if (!snapshot) throw new Error(`${row.sn} 还没有${source === "os" ? "系统内" : " BMC "}的采集结果`);
   return saveBaseline(projectId, { source, rules: generateBaseline(snapshot.components), fromSn: row.sn });
 }

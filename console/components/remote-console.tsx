@@ -8,18 +8,17 @@ import { Button } from "@/components/ui/button";
  * 关掉浮层就断开 KVM。
  */
 export function RemoteConsole({
-  projectId,
   row,
   port,
   onClose,
 }: {
-  projectId: string;
+  /** id 是资产 id。 */
   row: { id: string; sn: string; bmcIp?: string };
   port: string;
   onClose: () => void;
 }) {
   const frame = useRef<HTMLIFrameElement>(null);
-  const path = `/__bmc/${projectId}/${row.id}/viewer.html`;
+  const path = `/__bmc/${row.id}/viewer.html`;
   const src = typeof window !== "undefined" && port ? `${window.location.protocol}//${window.location.hostname}:${port}${path}` : path;
 
   useEffect(() => {

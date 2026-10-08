@@ -1,3 +1,6 @@
+import { auditRequest, auditTask, jsonError, readJson } from "@/lib/api";
+import { requireUser } from "@/lib/auth";
+import { createTask, startTask, type TaskInput } from "@/lib/remote";
 import { listImages, listAllTasks, listProjects } from "@/lib/store";
 import type { TaskFeed, TaskSummary } from "@/lib/types";
 import { listUploadSessions } from "@/lib/uploads";
@@ -14,7 +17,7 @@ export function GET() {
       return {
         id: task.id,
         projectId: task.projectId,
-        projectName: projects.get(task.projectId) || task.projectId,
+        projectName: task.projectId ? projects.get(task.projectId) || task.projectId : "",
         kind: task.kind,
         name: task.name,
         status: task.status,
@@ -33,4 +36,18 @@ export function GET() {
     uploads: listUploadSessions().map(({ id, filename, name, size, offset, fingerprint, updatedAt }) => ({ id, filename, name, size, offset, fingerprint, updatedAt })),
   };
   return Response.json(feed);
+}
+
+/** 对选中的资产发起批量任务（脚本、采集硬件、交付清理）。从装机批次页发起时带 projectId。 */
+export async function POST(request: Request) {
+  const identity = requireUser(request);
+  try {
+    const task = createTask(await readJson<TaskInput>(request));
+    startTask(task);
+    auditTask(request, identity, task);
+    return Response.json(task);
+  } catch (error) {
+    auditRequest(request, identity, { action: "发起任务", targetType: "task", detail: error instanceof Error ? error.message : "", ok: false });
+    return jsonError(error);
+  }
 }

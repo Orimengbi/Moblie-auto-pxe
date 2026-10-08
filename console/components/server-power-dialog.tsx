@@ -31,7 +31,8 @@ interface Target {
 }
 
 /** 一台或多台机器的电源和引导设备。多台时每台单独发请求，同时最多 4 台。 */
-export function ServerPowerDialog({ projectId, targets, onClose }: { projectId: string; targets: Target[]; onClose: () => void }) {
+/** targets 的 id 是资产 id。 */
+export function ServerPowerDialog({ targets, onClose }: { targets: Target[]; onClose: () => void }) {
   const router = useRouter();
   const [boot, setBoot] = useState<BootDevice>("pxe");
   const [persistent, setPersistent] = useState(false);
@@ -51,7 +52,7 @@ export function ServerPowerDialog({ projectId, targets, onClose }: { projectId: 
       Array.from({ length: Math.min(4, queue.length) }, async () => {
         for (let target = queue.shift(); target; target = queue.shift()) {
           try {
-            const response = await fetch(`/api/projects/${projectId}/servers/${target.id}/control`, {
+            const response = await fetch(`/api/assets/${target.id}/control`, {
               method: "POST",
               headers: { "content-type": "application/json" },
               body: JSON.stringify(body),

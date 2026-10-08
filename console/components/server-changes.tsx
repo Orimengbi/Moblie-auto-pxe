@@ -16,7 +16,8 @@ const CHANGE_VARIANT: Record<HwChange["type"], "default" | "destructive" | "outl
 };
 
 /** 变更记录：每次采集和同来源的上一次比出的新增、拆除、更换和变化，新的在前。 */
-export function ServerChanges({ projectId, row }: { projectId: string; row: { id: string } }) {
+/** row.id 是资产 id。 */
+export function ServerChanges({ row }: { row: { id: string } }) {
   const [entries, setEntries] = useState<Entry[] | null>(null);
   const [error, setError] = useState("");
   const [source, setSource] = useState<InventorySource | "all">("all");
@@ -24,14 +25,14 @@ export function ServerChanges({ projectId, row }: { projectId: string; row: { id
 
   useEffect(() => {
     let alive = true;
-    fetch(`/api/projects/${projectId}/servers/${row.id}/inventory?view=changes`)
+    fetch(`/api/assets/${row.id}/inventory?view=changes`)
       .then((response) => (response.ok ? response.json() : Promise.reject(new Error())))
       .then((body: { history: Entry[] }) => alive && setEntries(body.history))
       .catch(() => alive && setError("读取失败"));
     return () => {
       alive = false;
     };
-  }, [projectId, row.id]);
+  }, [row.id]);
 
   const shown = (entries || []).filter((entry) => (source === "all" || entry.source === source) && (!onlyChanged || entry.list?.length));
   const total = (entries || []).reduce((sum, entry) => sum + (entry.list?.length || 0), 0);

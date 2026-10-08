@@ -2,27 +2,27 @@ import http from "node:http";
 import https from "node:https";
 import type { Duplex } from "node:stream";
 import zlib from "node:zlib";
-import { authenticate, sameOrigin } from "./auth.ts";
-import { bmcAccounts, getServer } from "./store.ts";
+import { authenticate, clientAddress, sameOrigin } from "./auth.ts";
+import { assetBmcAccounts, audit, getAsset } from "./assets.ts";
 
 /**
  * 远程控制台：在控制台页面里嵌入某台服务器 BMC 的 KVM 画面（AMI H5Viewer）。
  *
- * nginx 把 /__bmc/<项目>/<服务器>/... 转到这里，这里再转给那台 BMC 的 https://<bmcIp>/...。
+ * nginx 把 /__bmc/<资产>/... 转到这里，这里再转给那台 BMC 的 https://<bmcIp>/...。
  * 和控制台同源，所以不用另开端口和窗口，控制台登录 cookie 直接拿来鉴权。
  * BMC 的会话（QSESSIONID 和 CSRF token）只留在小主机上，每次转发时补上，浏览器拿不到 BMC 账号密码。
  * BMC 的页面写死了从根路径加载资源和连 WebSocket，由注入的 shim.js 在浏览器里改成带前缀的路径。
  */
 
-const PREFIX_RE = /^\/__bmc\/([0-9a-f-]{36})\/([0-9a-f-]{36})(\/.*)?$/;
+const PREFIX_RE = /^\/__bmc\/([0-9a-f-]{36})(\/.*)?$/;
 
-export function bmcPrefix(projectId: string, serverId: string): string {
-  return `/__bmc/${projectId}/${serverId}`;
+export function bmcPrefix(assetId: string): string {
+  return `/__bmc/${assetId}`;
 }
 
-export function parseBmcPath(pathname: string): { projectId: string; serverId: string; rest: string } | null {
+export function parseBmcPath(pathname: string): { assetId: string; rest: string } | null {
   const match = PREFIX_RE.exec(pathname);
-  return match ? { projectId: match[1], serverId: match[2], rest: match[3] || "/" } : null;
+  return match ? { assetId: match[1], rest: match[2] || "/" } : null;
 }
 
 /** BMC 的网页端口。只有测试会改它。 */
@@ -374,12 +374,15 @@ function resolve(req: http.IncomingMessage): Resolved | { status: number; messag
   const identity = authenticate(headers);
   if (!identity) return { status: 401, message: "需要先登录 PXE 控制台。" };
   if (!["GET", "HEAD", "OPTIONS"].includes(req.method || "GET") && !sameOrigin(headers)) return { status: 403, message: "跨站请求被拒绝。" };
-  const row = getServer(parsed.projectId, parsed.serverId);
-  if (!row?.bmcIp) return { status: 404, message: "这台服务器还没有 IPMI 地址。" };
-  const accounts = bmcAccounts(row);
-  if (!accounts.length) return { status: 404, message: "服务器表里没有这台的 IPMI 账号密码。" };
+  const row = getAsset(parsed.assetId);
+  if (!row?.bmcIp) return { status: 404, message: "这台资产还没有 BMC 地址。" };
+  const accounts = assetBmcAccounts(row);
+  if (!accounts.length) return { status: 404, message: "资产里没有这台的 BMC 账号密码。" };
+  if ((req.method || "GET") === "GET" && parsed.rest === "/viewer.html") {
+    audit({ actor: identity.user.username, ip: clientAddress(headers), action: "打开远程控制台", targetType: "asset", targetId: row.id, targetLabel: `${row.tag} ${row.sn}`, detail: `BMC ${row.bmcIp}` });
+  }
   return {
-    prefix: bmcPrefix(parsed.projectId, parsed.serverId),
+    prefix: bmcPrefix(parsed.assetId),
     rest: `${parsed.rest}${url.search}`,
     key: `${identity.user.id}:${row.id}`,
     host: row.bmcIp,

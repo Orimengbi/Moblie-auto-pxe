@@ -69,13 +69,14 @@ function summary(ports: OpticsPort[]): string {
 }
 
 /** 光模块的型号、序列号和收发光。收发光要手动点查询，读数留最近一次。 */
-export function ServerOptics({ projectId, row }: { projectId: string; row: { id: string; sn: string } }) {
+/** row.id 是资产 id。 */
+export function ServerOptics({ row }: { row: { id: string; sn: string } }) {
   const [reading, setReading] = useState<OpticsReading | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const columnWidths = useColumnWidths("pxe-optics-columns", COLUMN_KEYS);
-  const url = `/api/projects/${projectId}/servers/${row.id}/optics`;
+  const url = `/api/assets/${row.id}/optics`;
 
   useEffect(() => {
     let alive = true;

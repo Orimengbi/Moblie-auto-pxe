@@ -11,7 +11,8 @@ import type { HwComponent } from "./types.ts";
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pxe-inventory-test-"));
 process.env.PXE_DATA_DIR = temp;
 
-const { createProject, getOptics, getBaseline, getTask, inventoryStatus, latestInventory, listInventory, saveBaseline, baselineFromServer, deleteServer } = await import("./store.ts");
+const { createProject, ensureServerAssets, getOptics, getBaseline, getTask, inventoryStatus, latestInventory, listInventory, removeAssetFiles, saveBaseline, baselineFromServer, deleteServer } = await import("./store.ts");
+const { deleteAsset, getAsset, updateAsset } = await import("./assets.ts");
 const { createTask, queryOptics, runTask } = await import("./remote.ts");
 const { serverPath } = await import("./paths.ts");
 
@@ -470,10 +471,15 @@ test("inventory tasks collect both sources, keep history and feed the baseline",
   };
   fs.mkdirSync(path.dirname(serverPath(serverId)), { recursive: true });
   fs.writeFileSync(serverPath(serverId), JSON.stringify(row));
+  // 老数据没有资产：启动时按服务器行补建，资产沿用行的 id，账号取 BMC 现在认的那个。
+  assert.equal(ensureServerAssets(), 1);
+  assert.equal(getAsset(serverId)?.bmcUser, "ops");
+  assert.equal(getAsset(serverId)?.osAddress, "10.0.0.5");
+  assert.equal(ensureServerAssets(), 0);
   const context = { nics: [], machines: [], leases: [], locals: ["10.0.0.1"] };
 
-  assert.throws(() => createTask(project.id, { kind: "inventory", sources: [], serverIds: [serverId] }, context), /至少选一种/);
-  const task = createTask(project.id, { kind: "inventory", serverIds: [serverId], timeoutSec: 60 }, context);
+  assert.throws(() => createTask({ kind: "inventory", sources: [], projectId: project.id, assetIds: [serverId] }, context), /至少选一种/);
+  const task = createTask({ kind: "inventory", projectId: project.id, assetIds: [serverId], timeoutSec: 60 }, context);
   assert.equal(task.name, "采集硬件配置");
   assert.deepEqual(task.inventorySources, ["os", "bmc"]);
   assert.equal(task.targets[0].host, "10.0.0.5");
@@ -509,7 +515,7 @@ test("inventory tasks collect both sources, keep history and feed the baseline",
   assert.equal(baseline.fromSn, "SYS0001");
   assert.equal(inventoryStatus(serverId, baseline).issues, 1, "GPU0 的固件不一致");
   output = OS_OUTPUT.replace(/DISK0001/g, "DISK0009");
-  const again = await runTask(createTask(project.id, { kind: "inventory", sources: ["os"], serverIds: [serverId] }, context).id, exec, redfish);
+  const again = await runTask(createTask({ kind: "inventory", sources: ["os"], projectId: project.id, assetIds: [serverId] }, context).id, exec, redfish);
   assert.match(again.targets[0].output, /和上次采集相比有 1 处变化：\n {2}更换 硬盘 nvme0n1：SOLIDIGM SB5PH27X076T SN DISK0001 → SOLIDIGM SB5PH27X076T SN DISK0009/);
   const history = listInventory(serverId);
   assert.deepEqual(history.map((item) => item.source).sort(), ["bmc", "os", "os"]);
@@ -523,34 +529,38 @@ test("inventory tasks collect both sources, keep history and feed the baseline",
 
   // SSH 连不上、BMC 也拒绝时算连不上。
   const offline = async () => ({ code: 255, output: "ssh: connect to host 10.0.0.5 port 22: No route to host\n", timedOut: false });
-  const failed = await runTask(createTask(project.id, { kind: "inventory", serverIds: [serverId] }, context).id, offline, () => async () => Promise.reject(new RedfishAuthError("BMC 拒绝了账号（HTTP 401）")));
+  const failed = await runTask(createTask({ kind: "inventory", projectId: project.id, assetIds: [serverId] }, context).id, offline, () => async () => Promise.reject(new RedfishAuthError("BMC 拒绝了账号（HTTP 401）")));
   assert.equal(failed.targets[0].status, "unreachable");
   assert.match(failed.targets[0].output, /SSH 登录失败[\s\S]*BMC（192\.168\.77\.151）：BMC 拒绝了账号/);
   assert.equal(listInventory(serverId).length, 3, "失败的不存");
 
   // 只要 BMC：没有系统地址也能采。
   const noHost = { nics: [], machines: [], leases: [], locals: [] };
-  fs.writeFileSync(serverPath(serverId), JSON.stringify({ ...row, osAddress: undefined }));
-  const bmcOnly = createTask(project.id, { kind: "inventory", sources: ["bmc"], serverIds: [serverId] }, noHost);
+  updateAsset(serverId, { osAddress: "" }, "测试");
+  const bmcOnly = createTask({ kind: "inventory", sources: ["bmc"], projectId: project.id, assetIds: [serverId] }, noHost);
   assert.equal(bmcOnly.targets[0].status, "pending");
-  assert.equal(createTask(project.id, { kind: "inventory", sources: ["os"], serverIds: [serverId] }, noHost).targets[0].status, "unreachable");
+  assert.equal(createTask({ kind: "inventory", sources: ["os"], projectId: project.id, assetIds: [serverId] }, noHost).targets[0].status, "unreachable");
 
   // 手动查收发光：只走 SSH，存最近一次。
-  fs.writeFileSync(serverPath(serverId), JSON.stringify(row));
+  updateAsset(serverId, { osAddress: "10.0.0.5" }, "测试");
   const opticsExec = async (_command: string, args: string[], stdin: string | null) => {
     assert.ok(args.includes("root@10.0.0.5"));
     assert.match(stdin || "", /mlxlink/);
     return { code: 0, output: OS_OUTPUT.slice(OS_OUTPUT.indexOf("===PXEOPT")), timedOut: false };
   };
-  const reading = await queryOptics(project.id, serverId, opticsExec, context);
+  const reading = await queryOptics(serverId, opticsExec, context);
   assert.equal(reading.host, "10.0.0.5");
   assert.deepEqual(reading.ports.map((port) => [port.port, port.sn, port.rx.join("/")]), [["enp115s0f0np0", "MODSN0001", "0/2/0/0"]]);
   assert.equal(getOptics(serverId)?.at, reading.at);
-  await assert.rejects(queryOptics(project.id, serverId, async () => ({ code: 255, output: "", timedOut: false }), context), /SSH 登录 10\.0\.0\.5 失败/);
-  fs.writeFileSync(serverPath(serverId), JSON.stringify({ ...row, osAddress: undefined }));
-  await assert.rejects(queryOptics(project.id, serverId, opticsExec, noHost), /找不到系统地址/);
+  await assert.rejects(queryOptics(serverId, async () => ({ code: 255, output: "", timedOut: false }), context), /SSH 登录 10\.0\.0\.5 失败/);
+  updateAsset(serverId, { osAddress: "" }, "测试");
+  await assert.rejects(queryOptics(serverId, opticsExec, noHost), /找不到系统地址/);
 
   await deleteServer(project.id, serverId);
-  assert.equal(getOptics(serverId), null, "删机器时一起删收发光读数");
-  assert.deepEqual(listInventory(serverId), [], "删机器时一起删采集记录");
+  assert.ok(getOptics(serverId), "从装机批次删掉一台不删资产的收发光读数");
+  assert.equal(listInventory(serverId).length, 3, "也不删采集记录");
+  deleteAsset(serverId);
+  removeAssetFiles(serverId);
+  assert.equal(getOptics(serverId), null, "删资产时一起删收发光读数");
+  assert.deepEqual(listInventory(serverId), [], "删资产时一起删采集记录");
 });
