@@ -768,11 +768,29 @@ export interface Rack {
   posY: number | null;
   /** 正面朝哪边：up 朝上、down 朝下，空表示没设。 */
   facing: RackFacing;
+  /** 不可用（坏了、预留）：不能往里放设备，俯视图里画成斜纹。 */
+  disabled: boolean;
   createdAt: string;
   updatedAt: string;
 }
 
 export type RackFacing = "" | "up" | "down";
+
+/** 机房平面上不是机柜的东西：柱子、空调、配电柜、预留空位等。 */
+export type FloorItemKind = "pillar" | "ac" | "power" | "blocked" | "other";
+
+export interface FloorItem {
+  id: string;
+  siteId: string;
+  kind: FloorItemKind;
+  /** 显示的名字，空就用类型名。 */
+  label: string;
+  x: number;
+  y: number;
+  /** 占几格宽、几格高。 */
+  w: number;
+  h: number;
+}
 
 /** 备件类型：硬件采集的部件类别，加上风扇、线缆和其他。 */
 export type PartKind = "cpu" | "memory" | "disk" | "gpu" | "nic" | "transceiver" | "psu" | "board" | "fan" | "cable" | "other";

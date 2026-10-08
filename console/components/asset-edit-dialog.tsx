@@ -234,8 +234,8 @@ export function AssetEditDialog({
                 {racks
                   .filter((rack) => rack.siteId === form.siteId)
                   .map((rack) => (
-                    <option key={rack.id} value={rack.id}>
-                      {rack.name}（{rack.heightU}U）
+                    <option key={rack.id} value={rack.id} disabled={rack.disabled && rack.id !== asset?.rackId}>
+                      {rack.name}（{rack.heightU}U{rack.disabled ? "，不可用" : ""}）
                     </option>
                   ))}
               </NativeSelect>

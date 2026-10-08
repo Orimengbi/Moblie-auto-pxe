@@ -357,10 +357,11 @@ function assertPlacement(record: AssetRecord): void {
     if (record.uStart) throw new Error("没选机柜，不能填起始 U");
     return;
   }
-  if (record.uHeight === 0) record.uStart = null;
-  if (!record.uStart) return;
   const rack = getRack(record.rackId);
   if (!rack) throw new Error("机柜不存在");
+  if (rack.disabled) throw new Error(`机柜 ${rack.name} 设成了不可用，不能放设备`);
+  if (record.uHeight === 0) record.uStart = null;
+  if (!record.uStart) return;
   const top = record.uStart + record.uHeight - 1;
   if (top > rack.heightU) throw new Error(`机柜 ${rack.name} 只有 ${rack.heightU}U，放在 U${record.uStart} 占 ${record.uHeight}U 会到 U${top}`);
   const other = db()
@@ -425,6 +426,20 @@ function blankAsset(id: string, sn: string, now: string): AssetRecord {
 }
 
 /**
+ * 新资产按规则算出的编号如果已经被别的资产手动占了，序号往后跳，直到不撞。
+ * 不跳的话，序号走到那个号时之后所有新资产都入不了库。
+ */
+function skipTakenSeq(record: AssetRecord): void {
+  if (record.tagOverride) return;
+  const { settings, customers } = currentTagContext();
+  for (let tries = 0; tries < 1000; tries++) {
+    const tag = renderTag(record, settings, customers);
+    if (!db().prepare("SELECT 1 FROM assets WHERE tag_override = ?").get(tag)) return;
+    record.seq += 1;
+  }
+}
+
+/**
  * 编号不能重复，两个方向都要查：我的编号（规则算的或手动的）不能是别人的手动编号；
  * 我手动指定的编号也不能等于别人按规则算出来的。后一种要算所有资产的编号，只在有手动编号时做。
  */
@@ -445,6 +460,7 @@ export function createAsset(input: AssetInput, actor: string): Asset {
     const base = blankAsset(crypto.randomUUID(), "", now);
     const record = { ...base, ...cleanAssetInput(input, null) } as AssetRecord;
     if (findAssetBySn(record.sn)) throw new Error(`序列号 ${record.sn} 已经入库了`);
+    skipTakenSeq(record);
     assertTagFree(record);
     assertPlacement(record);
     autoRack(null, record, input);
@@ -631,6 +647,7 @@ export function syncAssetFromRow(previous: ServerRow | undefined, row: ServerRow
     } else {
       if (findAssetBySn(row.sn)) return;
       record = { ...blankAsset(row.assetId, row.sn, now), status: row.installed === "yes" ? "pending" : "installing", createdAt: row.createdAt || now };
+      skipTakenSeq(record);
     }
     const before = { ...record };
     const changed = <K extends keyof ServerRow>(key: K) => !previous || previous[key] !== row[key];

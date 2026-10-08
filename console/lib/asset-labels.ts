@@ -1,4 +1,4 @@
-import type { AlertSeverity, AlertSource, AlertStatus, Asset, AssetStatus, AssetType, Customer, PartKind, PartStatus, TagSettings, TicketKind, TicketPriority, TicketStatus } from "./types.ts";
+import type { AlertSeverity, AlertSource, AlertStatus, Asset, AssetStatus, FloorItemKind, AssetType, Customer, PartKind, PartStatus, TagSettings, TicketKind, TicketPriority, TicketStatus } from "./types.ts";
 
 /** 页面和服务端共用的名称。这个文件不碰数据库，客户端组件可以直接引用。 */
 export const ASSET_TYPES: Record<AssetType, string> = {
@@ -108,3 +108,11 @@ export function priorityVariant(priority: TicketPriority): BadgeVariant {
 export function taskTargetVariant(status: string): BadgeVariant {
   return status === "ok" ? "default" : status === "running" || status === "pending" ? "outline" : "destructive";
 }
+
+export const FLOOR_ITEM_KINDS: Record<FloorItemKind, string> = {
+  pillar: "柱子",
+  ac: "空调",
+  power: "配电柜",
+  blocked: "不可用位置",
+  other: "其他",
+};

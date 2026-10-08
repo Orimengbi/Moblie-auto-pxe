@@ -13,7 +13,7 @@ import { Textarea } from "@/components/ui/textarea";
 import type { AssetRow } from "@/lib/asset-view";
 import { ASSET_STATUS } from "@/lib/asset-labels";
 import type { RackImportRow } from "@/lib/racks";
-import type { AlertSeverity, AssetStatus, Rack, Site } from "@/lib/types";
+import type { AlertSeverity, AssetStatus, FloorItem, Rack, Site } from "@/lib/types";
 import { Labeled } from "@/components/ui/labeled";
 import { api } from "@/lib/client-api";
 
@@ -27,7 +27,19 @@ function tone(status: AssetStatus): string {
 }
 
 /** 机房页：选一个机房，它的机柜并排显示，U1 在最下面。点设备看资产，点空 U 位放一台进去。 */
-export function RackBoard({ sites, racks, assets, alerts }: { sites: Site[]; racks: Rack[]; assets: AssetRow[]; alerts: Record<string, AlertSeverity> }) {
+export function RackBoard({
+  sites,
+  racks,
+  obstacles,
+  assets,
+  alerts,
+}: {
+  sites: Site[];
+  racks: Rack[];
+  obstacles: FloorItem[];
+  assets: AssetRow[];
+  alerts: Record<string, AlertSeverity>;
+}) {
   const router = useRouter();
   const search = useSearchParams();
   const [siteId, setSiteId] = useState("");
@@ -165,6 +177,7 @@ export function RackBoard({ sites, racks, assets, alerts }: { sites: Site[]; rac
               key={siteId}
               siteId={siteId}
               racks={siteRacks}
+              obstacles={obstacles.filter((item) => item.siteId === siteId)}
               assets={assets}
               alerts={alerts}
               onOpenRack={(rackId) => {
@@ -242,6 +255,7 @@ function RackColumn({
       <header className="grid gap-0.5">
         <div className="flex items-baseline gap-2">
           <h3 className="font-mono font-semibold">{rack.name}</h3>
+          {rack.disabled ? <span className="rounded bg-muted px-1 text-xs text-muted-foreground">不可用</span> : null}
           <span className="text-xs text-muted-foreground">
             {rack.rowLabel ? `${rack.rowLabel} · ` : ""}
             {rack.heightU}U{rack.powerKw ? ` · ${rack.powerKw}` : ""}
@@ -262,13 +276,17 @@ function RackColumn({
           用了 {used}U，空 {rack.heightU - used}U
         </span>
       </header>
-      <div className="relative grid grid-cols-[2rem_1fr] rounded-md border bg-card">
+      <div
+        className="relative grid grid-cols-[2rem_1fr] rounded-md border bg-card"
+        title={rack.disabled ? `机柜 ${rack.name} 不可用${rack.note ? `：${rack.note}` : ""}` : undefined}
+        style={rack.disabled ? { backgroundImage: "repeating-linear-gradient(45deg, color-mix(in oklab, var(--foreground) 10%, transparent) 0 5px, transparent 5px 10px)" } : undefined}
+      >
         {units.map((u) => (
           <div key={u} className="contents">
             <span className="border-r border-b px-1 text-right font-mono text-[10px] leading-5 text-muted-foreground" style={{ height: U_PX }}>
               {u}
             </span>
-            {taken.has(u) ? (
+            {taken.has(u) || rack.disabled ? (
               <span className="border-b" style={{ height: U_PX }} />
             ) : (
               <button type="button" className="border-b text-left text-[10px] text-transparent hover:bg-muted hover:text-muted-foreground" style={{ height: U_PX }} title={`把一台资产放到 U${u}`} onClick={() => onPlace(u)}>
@@ -392,6 +410,7 @@ function RackDialog({ rack, sites, siteId, onClose, onSaved }: { rack: Rack | "n
   const editing = rack && rack !== "new" ? rack : null;
   const [batch, setBatch] = useState(true);
   const [form, setForm] = useState({ siteId: "", name: "", rowLabel: "", heightU: "42", powerKw: "", note: "", rowFrom: "A", rowTo: "A", from: "1", to: "10", pad: "2" });
+  const [disabled, setDisabled] = useState(false);
   const [error, setError] = useState("");
   useEffect(() => {
     if (!rack) return;
@@ -407,6 +426,7 @@ function RackDialog({ rack, sites, siteId, onClose, onSaved }: { rack: Rack | "n
       powerKw: editing?.powerKw || "",
       note: editing?.note || "",
     }));
+    setDisabled(Boolean(editing?.disabled));
   }, [rack, editing, siteId]);
 
   const rows = rowNames(form.rowFrom, form.rowTo);
@@ -414,7 +434,7 @@ function RackDialog({ rack, sites, siteId, onClose, onSaved }: { rack: Rack | "n
 
   async function save(event: React.FormEvent) {
     event.preventDefault();
-    const base = { siteId: form.siteId, rowLabel: form.rowLabel, heightU: Number(form.heightU), powerKw: form.powerKw, note: form.note };
+    const base = { siteId: form.siteId, rowLabel: form.rowLabel, heightU: Number(form.heightU), powerKw: form.powerKw, note: form.note, disabled };
     const result = editing
       ? await api(`/api/racks/${editing.id}`, "PATCH", { ...base, name: form.name })
       : batch
@@ -512,6 +532,13 @@ function RackDialog({ rack, sites, siteId, onClose, onSaved }: { rack: Rack | "n
           <Labeled label="备注">
             <Textarea {...field("note")} className="min-h-14" />
           </Labeled>
+          <label className="flex items-start gap-2 text-sm">
+            <input type="checkbox" className="mt-1" checked={disabled} onChange={(event) => setDisabled(event.target.checked)} />
+            <span>
+              不可用（坏了、预留、没通电）
+              <span className="block text-xs text-muted-foreground">不能往里放设备；俯视图里画成斜纹。原因写在备注里。柜里有设备时要先挪走。</span>
+            </span>
+          </label>
           {error ? <p className="text-sm text-destructive">{error}</p> : null}
           <div className="flex justify-end gap-2">
             <Button type="button" variant="ghost" onClick={onClose}>

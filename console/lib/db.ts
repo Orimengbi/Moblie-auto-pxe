@@ -252,6 +252,21 @@ const MIGRATIONS: string[] = [
   ALTER TABLE racks ADD COLUMN pos_y INTEGER;
   ALTER TABLE racks ADD COLUMN facing TEXT NOT NULL DEFAULT '';
   `,
+  `
+  ALTER TABLE racks ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0;
+  CREATE TABLE floor_items (
+    id TEXT PRIMARY KEY,
+    site_id TEXT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    label TEXT NOT NULL DEFAULT '',
+    x INTEGER NOT NULL,
+    y INTEGER NOT NULL,
+    w INTEGER NOT NULL DEFAULT 1,
+    h INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX floor_items_site ON floor_items(site_id);
+  `,
 ];
 
 let opened: { file: string; db: Database } | null = null;

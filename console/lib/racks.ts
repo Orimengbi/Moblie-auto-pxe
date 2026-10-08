@@ -1,6 +1,6 @@
 import { assertCodeFree, countWhere, db, runOrPreview, transaction, type SqlValue } from "./db.ts";
 import { cleanCode, cleanName, cleanText } from "./validate.ts";
-import type { Rack, RackFacing, Site } from "./types.ts";
+import type { FloorItem, FloorItemKind, Rack, RackFacing, Site } from "./types.ts";
 
 /** 机房和机柜。资产放在哪个机柜、哪几个 U 记在资产上（rack_id、u_start、u_height），这里只管机房和机柜本身。 */
 
@@ -30,6 +30,7 @@ function toRack(row: Record<string, SqlValue>): Rack {
     posX: row.pos_x === null || row.pos_x === undefined ? null : Number(row.pos_x),
     posY: row.pos_y === null || row.pos_y === undefined ? null : Number(row.pos_y),
     facing: (["up", "down"].includes(String(row.facing)) ? String(row.facing) : "") as RackFacing,
+    disabled: Boolean(row.disabled),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
@@ -102,6 +103,8 @@ export interface RackInput {
   heightU?: number | string;
   powerKw?: string;
   note?: string;
+  /** 不给就不改。 */
+  disabled?: boolean;
 }
 
 function rackHeight(value: unknown): number {
@@ -110,7 +113,9 @@ function rackHeight(value: unknown): number {
   return height;
 }
 
-function cleanRack(input: RackInput, id: string | null): Omit<Rack, "id" | "createdAt" | "updatedAt" | "posX" | "posY" | "facing"> {
+type RackFields = Omit<Rack, "id" | "createdAt" | "updatedAt" | "posX" | "posY" | "facing">;
+
+function cleanRack(input: RackInput, id: string | null): RackFields {
   const site = getSite(String(input.siteId ?? ""));
   if (!site) throw new Error("选的机房不存在");
   const name = String(input.name ?? "").trim();
@@ -118,6 +123,9 @@ function cleanRack(input: RackInput, id: string | null): Omit<Rack, "id" | "crea
   const clash = db().prepare("SELECT id FROM racks WHERE site_id = ? AND name = ? AND id != ?").get(site.id, name, id || "");
   if (clash) throw new Error(`「${site.name}」里已经有机柜 ${name}`);
   const heightU = rackHeight(input.heightU);
+  const current = id ? getRack(id) : null;
+  const disabled = input.disabled === undefined ? Boolean(current?.disabled) : Boolean(input.disabled);
+  if (id && disabled && !current?.disabled && countWhere("assets", "rack_id", id)) throw new Error("机柜里还有设备，先挪走再设成不可用");
   if (id) {
     // 改矮了不能把已经放着的设备挤出去。
     const top = Number(db().prepare("SELECT MAX(u_start + u_height - 1) AS top FROM assets WHERE rack_id = ? AND u_start IS NOT NULL AND u_height > 0").get(id)?.top ?? 0);
@@ -130,15 +138,16 @@ function cleanRack(input: RackInput, id: string | null): Omit<Rack, "id" | "crea
     heightU,
     powerKw: String(input.powerKw ?? "").trim().slice(0, 24),
     note: String(input.note ?? "").trim().slice(0, 1000),
+    disabled,
   };
 }
 
-function insertRack(clean: Omit<Rack, "id" | "createdAt" | "updatedAt" | "posX" | "posY" | "facing">): Rack {
+function insertRack(clean: RackFields): Rack {
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
   db()
-    .prepare("INSERT INTO racks (id, site_id, name, row_label, height_u, power_kw, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-    .run(id, clean.siteId, clean.name, clean.rowLabel, clean.heightU, clean.powerKw, clean.note, now, now);
+    .prepare("INSERT INTO racks (id, site_id, name, row_label, height_u, power_kw, note, disabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .run(id, clean.siteId, clean.name, clean.rowLabel, clean.heightU, clean.powerKw, clean.note, clean.disabled ? 1 : 0, now, now);
   return getRack(id)!;
 }
 
@@ -288,8 +297,8 @@ export function updateRack(id: string, input: RackInput): Rack {
   if (!getRack(id)) throw new Error("机柜不存在");
   const clean = cleanRack(input, id);
   db()
-    .prepare("UPDATE racks SET site_id = ?, name = ?, row_label = ?, height_u = ?, power_kw = ?, note = ?, updated_at = ? WHERE id = ?")
-    .run(clean.siteId, clean.name, clean.rowLabel, clean.heightU, clean.powerKw, clean.note, new Date().toISOString(), id);
+    .prepare("UPDATE racks SET site_id = ?, name = ?, row_label = ?, height_u = ?, power_kw = ?, note = ?, disabled = ?, updated_at = ? WHERE id = ?")
+    .run(clean.siteId, clean.name, clean.rowLabel, clean.heightU, clean.powerKw, clean.note, clean.disabled ? 1 : 0, new Date().toISOString(), id);
   return getRack(id)!;
 }
 
@@ -340,10 +349,34 @@ export interface LayoutItem {
   facing?: RackFacing;
 }
 
+const FLOOR_KINDS: FloorItemKind[] = ["pillar", "ac", "power", "blocked", "other"];
+
+export function listFloorItems(siteId?: string): FloorItem[] {
+  const rows = siteId ? db().prepare("SELECT * FROM floor_items WHERE site_id = ? ORDER BY y, x").all(siteId) : db().prepare("SELECT * FROM floor_items ORDER BY y, x").all();
+  return rows.map((row) => ({
+    id: String(row.id),
+    siteId: String(row.site_id),
+    kind: row.kind as FloorItemKind,
+    label: String(row.label),
+    x: Number(row.x),
+    y: Number(row.y),
+    w: Number(row.w),
+    h: Number(row.h),
+  }));
+}
+
+/** 障碍物占的格子。 */
+export function floorItemCells(item: Pick<FloorItem, "x" | "y" | "w" | "h">): string[] {
+  const cells: string[] = [];
+  for (let dx = 0; dx < item.w; dx++) for (let dy = 0; dy < item.h; dy++) cells.push(`${item.x + dx},${item.y + dy}`);
+  return cells;
+}
+
 /**
- * 保存一个机房的俯视图布局。只改给了的机柜；两个机柜不能占同一格。
+ * 保存一个机房的俯视图布局。racks 只改给了的机柜；obstacles 给了就整体替换这个机房的障碍物（柱子等）。
+ * 机柜和机柜、机柜和障碍物、障碍物和障碍物都不能占同一格。没摆过位置（自动排布）的机柜在页面上已经避开障碍物，这里不查。
  */
-export function saveLayout(siteId: string, items: LayoutItem[]): Rack[] {
+export function saveLayout(siteId: string, items: LayoutItem[], obstacles?: Omit<FloorItem, "id" | "siteId">[]): { racks: Rack[]; obstacles: FloorItem[] } {
   if (!getSite(siteId)) throw new Error("机房不存在");
   return transaction(db(), () => {
     const racks = new Map(listRacks(siteId).map((rack) => [rack.id, rack]));
@@ -358,13 +391,27 @@ export function saveLayout(siteId: string, items: LayoutItem[]): Rack[] {
       racks.set(rack.id, { ...rack, posX: placed ? item.x : null, posY: placed ? item.y : null, facing });
       db().prepare("UPDATE racks SET pos_x = ?, pos_y = ?, facing = ?, updated_at = ? WHERE id = ?").run(placed ? item.x : null, placed ? item.y : null, facing, now, rack.id);
     }
-    const taken = new Map<string, string>();
-    for (const rack of racks.values()) {
-      if (rack.posX === null || rack.posY === null) continue;
-      const key = `${rack.posX},${rack.posY}`;
-      if (taken.has(key)) throw new Error(`机柜 ${taken.get(key)} 和 ${rack.name} 放在了同一格`);
-      taken.set(key, rack.name);
+    if (obstacles) {
+      if (obstacles.length > 1000) throw new Error("障碍物太多了");
+      db().prepare("DELETE FROM floor_items WHERE site_id = ?").run(siteId);
+      for (const raw of obstacles) {
+        const kind = FLOOR_KINDS.includes(raw.kind) ? raw.kind : "other";
+        const [x, y, w, h] = [raw.x, raw.y, raw.w ?? 1, raw.h ?? 1].map(Number);
+        if (![x, y].every((value) => Number.isInteger(value) && value >= 0 && value < MAX_FLOOR) || ![w, h].every((value) => Number.isInteger(value) && value >= 1 && value <= 20)) {
+          throw new Error("障碍物的位置或大小不对");
+        }
+        db()
+          .prepare("INSERT INTO floor_items (id, site_id, kind, label, x, y, w, h, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+          .run(crypto.randomUUID(), siteId, kind, cleanText(raw.label, 20), x, y, w, h, now);
+      }
     }
-    return listRacks(siteId);
+    const taken = new Map<string, string>();
+    const occupy = (key: string, label: string) => {
+      if (taken.has(key)) throw new Error(`${taken.get(key)} 和 ${label} 放在了同一格`);
+      taken.set(key, label);
+    };
+    for (const item of listFloorItems(siteId)) for (const key of floorItemCells(item)) occupy(key, item.label || "障碍物");
+    for (const rack of racks.values()) if (rack.posX !== null && rack.posY !== null) occupy(`${rack.posX},${rack.posY}`, `机柜 ${rack.name}`);
+    return { racks: listRacks(siteId), obstacles: listFloorItems(siteId) };
   });
 }

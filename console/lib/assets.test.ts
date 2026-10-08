@@ -314,7 +314,12 @@ test("tags stay unique in both directions and dates must exist", async () => {
   const next = assets.listAssets().reduce((max, item) => Math.max(max, item.seq), 0) + 2;
   const upcoming = assets.renderTag({ seq: next, type: "server", sn: "X", customerId: null, createdAt: new Date().toISOString(), tagOverride: "" }, assets.getTagSettings(), new Map());
   assets.createAsset({ sn: "tag-squatter", tagOverride: upcoming }, "alice");
-  assert.throws(() => assets.createAsset({ sn: "tag-victim" }, "alice"), /已经手动指定给了 TAG-SQUATTER/);
+  // 下一台不会撞上，而是跳过被占的序号。
+  const victim = assets.createAsset({ sn: "tag-victim" }, "alice");
+  assert.notEqual(victim.tag, upcoming);
+  assert.equal(victim.seq, next + 1);
+  // 改已有资产的手动编号去撞别人按规则算出的编号，还是不行。
+  assert.throws(() => assets.updateAsset(victim.id, { tagOverride: assets.findAssetBySn("SRV-001")!.tag }, "alice"), /已经/);
 
   assert.equal(assertDate("2028-02-29", "日期"), "2028-02-29");
   assert.throws(() => assertDate("2026-13-45", "保修到期"), /保修到期要写成/);
@@ -348,4 +353,36 @@ test("rack floor layout auto-places by row and saves positions without overlap",
   assert.throws(() => racks.saveLayout(site.id, [{ id: b1.id, x: 5, y: 7 }]), /同一格/);
   racks.saveLayout(site.id, [{ id: a1.id, x: null, y: null }]);
   assert.equal(racks.listRacks(site.id).find((r) => r.id === a1.id)?.posX, null, "回到自动排布");
+});
+
+test("pillars push auto-placed racks along, overlap is refused and disabled racks take no devices", async () => {
+  const racks = await import("./racks.ts");
+  const { floorPositions } = await import("./floor.ts");
+  const site = racks.createSite({ code: "OB1", name: "有柱子的机房" });
+  racks.createRacks({ siteId: site.id, prefix: "A", from: 1, to: 4, pad: 2 });
+  // A 排第三格是一根柱子：A03、A04 往后挪一格。
+  const saved = racks.saveLayout(site.id, [], [{ kind: "pillar", label: "柱 1", x: 2, y: 0, w: 1, h: 1 }]);
+  assert.equal(saved.obstacles.length, 1);
+  const list = racks.listRacks(site.id);
+  const pos = floorPositions(list, saved.obstacles);
+  const x = (name: string) => pos.get(list.find((rack) => rack.name === name)!.id)!.x;
+  assert.deepEqual(["A01", "A02", "A03", "A04"].map(x), [0, 1, 3, 4]);
+  const a1 = list.find((rack) => rack.name === "A01")!;
+  assert.throws(() => racks.saveLayout(site.id, [{ id: a1.id, x: 2, y: 0 }]), /柱 1 和 机柜 A01 放在了同一格/);
+  assert.throws(() => racks.saveLayout(site.id, [], [{ kind: "ac", label: "", x: 0, y: 5, w: 2, h: 1 }, { kind: "power", label: "", x: 1, y: 5, w: 1, h: 1 }]), /同一格/);
+  assert.throws(() => racks.saveLayout(site.id, [], [{ kind: "pillar", label: "", x: 0, y: 0, w: 0, h: 1 }]), /大小不对/);
+  // 不给 obstacles 不动障碍物。
+  racks.saveLayout(site.id, [{ id: a1.id, x: 0, y: 3 }]);
+  assert.equal(racks.listFloorItems(site.id).length, 1);
+
+  // 不可用的机柜：放不了设备；有设备的不能设成不可用。
+  const a2 = list.find((rack) => rack.name === "A02")!;
+  racks.updateRack(a2.id, { siteId: site.id, name: "A02", heightU: 42, disabled: true, note: "漏水，待修" });
+  assert.equal(racks.getRack(a2.id)?.disabled, true);
+  assert.throws(() => assets.createAsset({ sn: "into-disabled", rackId: a2.id, uStart: 1 }, "alice"), /不可用，不能放设备/);
+  const a3 = list.find((rack) => rack.name === "A03")!;
+  assets.createAsset({ sn: "in-a03", rackId: a3.id, uStart: 1 }, "alice");
+  assert.throws(() => racks.updateRack(a3.id, { siteId: site.id, name: "A03", heightU: 42, disabled: true }), /先挪走/);
+  // 改别的字段不带 disabled 时保持原样。
+  assert.equal(racks.updateRack(a2.id, { siteId: site.id, name: "A02", heightU: 48 }).disabled, true);
 });
