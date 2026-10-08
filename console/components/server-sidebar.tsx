@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { AssetHistory } from "@/components/asset-history";
 import { AssetOverview } from "@/components/asset-overview";
+import { AssetTickets } from "@/components/asset-tickets";
 import { ServerChanges } from "@/components/server-changes";
 import { ServerInventory } from "@/components/server-inventory";
 import { ServerOptics } from "@/components/server-optics";
@@ -15,14 +16,17 @@ interface Row {
   /** 资产 id。 */
   id: string;
   sn: string;
+  /** 资产编号，新建工单时显示。 */
+  tag?: string;
   /** 标题后面的一行说明。 */
   description: string;
 }
 
-type Tab = "overview" | "hardware" | "changes" | "ports" | "topology" | "optics" | "history";
+type Tab = "overview" | "tickets" | "hardware" | "changes" | "ports" | "topology" | "optics" | "history";
 
 const TABS: [Tab, string][] = [
   ["overview", "概况"],
+  ["tickets", "工单"],
   ["hardware", "硬件配置"],
   ["changes", "变更记录"],
   ["ports", "接口"],
@@ -66,6 +70,7 @@ export function ServerSidebar({ projectId, row, initialTab = "overview", onClose
             </SheetHeader>
             <SheetBody>
               {tab === "overview" ? <AssetOverview key={row.id} assetId={row.id} onChanged={onChanged} /> : null}
+              {tab === "tickets" ? <AssetTickets key={row.id} asset={{ id: row.id, tag: row.tag || row.sn, sn: row.sn, model: "" }} onChanged={onChanged} /> : null}
               {tab === "hardware" ? <ServerInventory key={row.id} projectId={projectId} row={row} /> : null}
               {tab === "changes" ? <ServerChanges key={row.id} row={row} /> : null}
               {tab === "ports" ? <ServerPorts key={row.id} row={row} /> : null}

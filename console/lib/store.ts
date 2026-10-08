@@ -5,6 +5,7 @@ import { pipeline } from "node:stream/promises";
 import { parseLeases, renderBootIpxe, renderDnsmasq } from "./dnsmasq.ts";
 import { assetBmcAccounts, findAssetBySn, getAsset, syncAssetFromRow } from "./assets.ts";
 import { refreshBootScript } from "./disk-image.ts";
+import { recordHardwareChanges } from "./parts.ts";
 import { checkBaseline, diffComponents, generateBaseline, KIND_LABEL } from "./inventory.ts";
 import {
   BOOT_DEVICES,
@@ -2053,6 +2054,14 @@ export async function saveInventory(input: Omit<InventorySnapshot, "id" | "chang
       ...(previous ? { changes: diffComponents(previous.components, input.components) } : {}),
     };
     writeJson(path.join(inventoryDir(input.serverId), `${snapshot.id}.json`), snapshot);
+    if (snapshot.changes?.length) {
+      // 记时间线和备件出错不能让采集本身失败。
+      try {
+        recordHardwareChanges(input.serverId, snapshot.changes, input.source);
+      } catch (error) {
+        console.error("[inventory] 记录部件变化失败", error);
+      }
+    }
     for (const old of snapshotIds(input.serverId, input.source).slice(0, -INVENTORY_KEEP)) {
       fs.rmSync(path.join(inventoryDir(input.serverId), `${old}.json`), { force: true });
     }

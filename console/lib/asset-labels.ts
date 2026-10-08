@@ -1,4 +1,4 @@
-import type { Asset, AssetStatus, AssetType, Customer, TagSettings } from "./types.ts";
+import type { Asset, AssetStatus, AssetType, Customer, PartKind, PartStatus, TagSettings, TicketKind, TicketPriority, TicketStatus } from "./types.ts";
 
 /** 页面和服务端共用的名称。这个文件不碰数据库，客户端组件可以直接引用。 */
 export const ASSET_TYPES: Record<AssetType, string> = {
@@ -41,3 +41,51 @@ export function renderTag(asset: Pick<Asset, "seq" | "type" | "sn" | "customerId
     return String(asset.seq).padStart(Number(width || 0), "0");
   });
 }
+
+export const PART_KINDS: Record<PartKind, string> = {
+  cpu: "CPU",
+  memory: "内存",
+  disk: "硬盘",
+  gpu: "GPU",
+  nic: "网卡",
+  transceiver: "光模块",
+  psu: "电源",
+  board: "主板 / 背板",
+  fan: "风扇",
+  cable: "线缆",
+  other: "其他",
+};
+
+export const PART_STATUS: Record<PartStatus, string> = {
+  stock: "在库",
+  installed: "已装机",
+  removed: "已拆下",
+  faulty: "待返修",
+  rma: "返修中",
+  scrapped: "报废",
+};
+
+export const TICKET_KINDS: Record<TicketKind, string> = {
+  fault: "故障",
+  repair: "维修",
+  change: "变更",
+  other: "其他",
+};
+
+export const TICKET_PRIORITY: Record<TicketPriority, string> = {
+  low: "低",
+  normal: "中",
+  high: "高",
+  urgent: "紧急",
+};
+
+export const TICKET_STATUS: Record<TicketStatus, string> = {
+  open: "待处理",
+  processing: "处理中",
+  waiting: "等待中",
+  resolved: "已解决",
+  closed: "已关闭",
+};
+
+/** 还没解决的工单状态。 */
+export const OPEN_TICKET_STATUS: TicketStatus[] = ["open", "processing", "waiting"];

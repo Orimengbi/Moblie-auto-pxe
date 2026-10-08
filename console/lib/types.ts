@@ -701,3 +701,78 @@ export interface Rack {
   createdAt: string;
   updatedAt: string;
 }
+
+/** 备件类型：硬件采集的部件类别，加上风扇、线缆和其他。 */
+export type PartKind = "cpu" | "memory" | "disk" | "gpu" | "nic" | "transceiver" | "psu" | "board" | "fan" | "cable" | "other";
+
+/** 在库 → 已装机 → 已拆下 / 待返修 → 返修中 → 在库或报废。 */
+export type PartStatus = "stock" | "installed" | "removed" | "faulty" | "rma" | "scrapped";
+
+export interface Part {
+  id: string;
+  kind: PartKind;
+  model: string;
+  vendor: string;
+  /** 没有序列号的（线缆等）是空字符串；有的话全局唯一。 */
+  sn: string;
+  status: PartStatus;
+  /** 存放的机房和库位；装在机器上时看 assetId。 */
+  siteId: string | null;
+  bin: string;
+  assetId: string | null;
+  /** 装在机器上的槽位，例如 GPU 的 PCI 地址、DIMM_P0_A0。 */
+  slot: string;
+  supplier: string;
+  purchaseOrder: string;
+  warrantyEnd: string;
+  note: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PartEvent {
+  id: number;
+  partId: string;
+  at: string;
+  actor: string;
+  kind: string;
+  text: string;
+  ticketId: string;
+}
+
+export type TicketKind = "fault" | "repair" | "change" | "other";
+export type TicketPriority = "low" | "normal" | "high" | "urgent";
+export type TicketStatus = "open" | "processing" | "waiting" | "resolved" | "closed";
+
+export interface Ticket {
+  id: string;
+  seq: number;
+  /** WO-2026-0001，年份是建单那年。 */
+  no: string;
+  assetId: string | null;
+  title: string;
+  kind: TicketKind;
+  priority: TicketPriority;
+  status: TicketStatus;
+  assignee: string;
+  reporter: string;
+  description: string;
+  /** 厂商那边的工单号或 RMA 号。 */
+  vendorCase: string;
+  /** 建单时把资产改成「维修中」之前的状态，解决后改回去。没改过是空的。 */
+  prevAssetStatus: AssetStatus | "";
+  createdAt: string;
+  updatedAt: string;
+  resolvedAt: string;
+  closedAt: string;
+}
+
+export interface TicketLog {
+  id: number;
+  ticketId: string;
+  at: string;
+  actor: string;
+  /** comment 评论，status 状态，edit 改了字段，replace 换件，create 建单。 */
+  kind: string;
+  text: string;
+}

@@ -5,6 +5,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ASSET_STATUS, WARRANTY_LABEL } from "@/lib/asset-labels";
 import { listAssets, listCustomers, warrantyState } from "@/lib/assets";
 import { parseLeases } from "@/lib/dnsmasq";
+import { listParts } from "@/lib/parts";
+import { openTicketCount } from "@/lib/tickets";
 import { activeProject, getState, ipxeReady, listImages, listServers, profilesForProject, readLeasesText } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
@@ -21,6 +23,8 @@ export default function HomePage() {
   const byStatus = Object.keys(ASSET_STATUS).map((status) => [status, assets.filter((asset) => asset.status === status).length] as const).filter(([, count]) => count);
   const expiring = assets.filter((asset) => !["scrapped", "offline"].includes(asset.status) && ["expired", "expiring"].includes(warrantyState(asset)));
   const customers = listCustomers().length;
+  const openTickets = openTicketCount();
+  const faultyParts = listParts().filter((part) => part.status === "faulty" || part.status === "removed").length;
 
   return (
     <div>
@@ -28,8 +32,10 @@ export default function HomePage() {
         title="总览"
         description="资产的数量、状态和保修，加上装机网现在的情况。"
       />
-      <div className="mb-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="mb-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         <Stat label="资产" value={String(assets.length)} href="/assets" />
+        <Stat label="没解决的工单" value={String(openTickets)} href="/tickets" />
+        <Stat label="待返修和已拆下的备件" value={String(faultyParts)} href="/parts" />
         <Stat label="客户" value={String(customers)} href="/customers" />
         <Stat label="保修已过或 90 天内到期" value={String(expiring.length)} href="/assets?warranty=1" />
         <Stat label="正在装机的批次" value={active?.name || "无"} href={active ? `/projects/${active.id}` : "/projects"} />

@@ -568,6 +568,8 @@ export function deleteAsset(id: string): Asset {
   if (!asset) throw new Error("资产不存在");
   transaction(db(), () => {
     db().prepare("DELETE FROM asset_events WHERE asset_id = ?").run(id);
+    // 装在这台上的备件留在库里，标成已拆下。
+    db().prepare("UPDATE parts SET status = 'removed', asset_id = NULL, slot = '', updated_at = ? WHERE asset_id = ?").run(new Date().toISOString(), id);
     db().prepare("DELETE FROM assets WHERE id = ?").run(id);
   });
   return asset;

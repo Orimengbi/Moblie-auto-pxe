@@ -386,7 +386,7 @@ export function AssetList({
       <ServerPowerDialog targets={powerTargets} onClose={() => setPowerTargets([])} />
       {consoleRow ? <RemoteConsole row={consoleRow} port={bmcPort} onClose={() => setConsoleRow(null)} /> : null}
       <ServerSidebar
-        row={sideRow ? { id: sideRow.id, sn: sideRow.sn, description: [sideRow.tag, ASSET_STATUS[sideRow.status], sideRow.place, sideRow.customerName, [sideRow.vendor, sideRow.model].filter(Boolean).join(" ")].filter(Boolean).join(" · ") } : null}
+        row={sideRow ? { id: sideRow.id, sn: sideRow.sn, tag: sideRow.tag, description: [sideRow.tag, ASSET_STATUS[sideRow.status], sideRow.place, sideRow.customerName, [sideRow.vendor, sideRow.model].filter(Boolean).join(" ")].filter(Boolean).join(" · ") } : null}
         onClose={() => setSideId(null)}
         onChanged={() => router.refresh()}
       />

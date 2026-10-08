@@ -126,6 +126,68 @@ const MIGRATIONS: string[] = [
   ALTER TABLE assets ADD COLUMN u_height INTEGER NOT NULL DEFAULT 1;
   CREATE INDEX assets_rack ON assets(rack_id);
   `,
+  `
+  CREATE TABLE parts (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    model TEXT NOT NULL DEFAULT '',
+    vendor TEXT NOT NULL DEFAULT '',
+    sn TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL,
+    site_id TEXT REFERENCES sites(id) ON DELETE SET NULL,
+    bin TEXT NOT NULL DEFAULT '',
+    asset_id TEXT REFERENCES assets(id) ON DELETE SET NULL,
+    slot TEXT NOT NULL DEFAULT '',
+    supplier TEXT NOT NULL DEFAULT '',
+    purchase_order TEXT NOT NULL DEFAULT '',
+    warranty_end TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE UNIQUE INDEX parts_sn ON parts(sn) WHERE sn != '';
+  CREATE INDEX parts_asset ON parts(asset_id);
+  CREATE INDEX parts_status ON parts(status);
+  CREATE TABLE part_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    part_id TEXT NOT NULL,
+    at TEXT NOT NULL,
+    actor TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL,
+    text TEXT NOT NULL,
+    ticket_id TEXT NOT NULL DEFAULT ''
+  );
+  CREATE INDEX part_events_part ON part_events(part_id, at);
+  CREATE TABLE tickets (
+    id TEXT PRIMARY KEY,
+    seq INTEGER NOT NULL UNIQUE,
+    asset_id TEXT REFERENCES assets(id) ON DELETE SET NULL,
+    title TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    priority TEXT NOT NULL,
+    status TEXT NOT NULL,
+    assignee TEXT NOT NULL DEFAULT '',
+    reporter TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    vendor_case TEXT NOT NULL DEFAULT '',
+    prev_asset_status TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    resolved_at TEXT NOT NULL DEFAULT '',
+    closed_at TEXT NOT NULL DEFAULT ''
+  );
+  CREATE INDEX tickets_asset ON tickets(asset_id);
+  CREATE INDEX tickets_status ON tickets(status);
+  CREATE TABLE ticket_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticket_id TEXT NOT NULL,
+    at TEXT NOT NULL,
+    actor TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL,
+    text TEXT NOT NULL
+  );
+  CREATE INDEX ticket_logs_ticket ON ticket_logs(ticket_id, id);
+  `,
 ];
 
 let opened: { file: string; db: Database } | null = null;
