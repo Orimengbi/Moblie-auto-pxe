@@ -2,9 +2,9 @@ import { ASSET_STATUS, ASSET_TYPES, renderTag, TAG_TOKEN as TOKEN, type Warranty
 import { parseStatus, parseType, type SheetCells } from "./asset-sheet.ts";
 import { db, transaction, type SqlValue } from "./db.ts";
 import { assertDate } from "./validate.ts";
-import { findRack, getRack, listRacks, listSites, MAX_RACK_U, placeLabel } from "./racks.ts";
+import { cachedRackFinder, getRack, listRacks, listSites, MAX_RACK_U, placeLabel } from "./racks.ts";
 import { assertIpv4, normalizeMac, normalizeSn } from "./net.ts";
-import type { Asset, AssetEvent, AssetStatus, AssetType, AuditEntry, Customer, PublicAsset, ServerRow, TagSettings } from "./types.ts";
+import type { Asset, AssetEvent, AssetStatus, AssetType, AuditEntry, Customer, PublicAsset, Rack, ServerRow, Site, TagSettings } from "./types.ts";
 
 export { ASSET_STATUS, ASSET_TYPES, renderTag } from "./asset-labels.ts";
 
@@ -71,6 +71,7 @@ export function saveTagSettings(input: Partial<TagSettings>): TagSettings {
     seen.set(tag, asset.sn);
   }
   putSetting("asset.tag", settings);
+  forgetTagContext();
   return settings;
 }
 
@@ -119,6 +120,7 @@ export function createCustomer(input: CustomerInput): Customer {
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
   db().prepare("INSERT INTO customers (id, code, name, contact, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(id, clean.code, clean.name, clean.contact, clean.note, now, now);
+  forgetTagContext();
   return getCustomer(id)!;
 }
 
@@ -128,6 +130,7 @@ export function updateCustomer(id: string, input: CustomerInput): Customer {
   db()
     .prepare("UPDATE customers SET code = ?, name = ?, contact = ?, note = ?, updated_at = ? WHERE id = ?")
     .run(clean.code, clean.name, clean.contact, clean.note, new Date().toISOString(), id);
+  forgetTagContext();
   return getCustomer(id)!;
 }
 
@@ -137,6 +140,7 @@ export function deleteCustomer(id: string): void {
   const used = Number(db().prepare("SELECT COUNT(*) AS n FROM assets WHERE customer_id = ?").get(id)?.n ?? 0);
   if (used) throw new Error(`还有 ${used} 台资产归属「${customer.name}」，先把它们改到别的客户`);
   db().prepare("DELETE FROM customers WHERE id = ?").run(id);
+  forgetTagContext();
 }
 
 // ---------- 资产 ----------
@@ -233,9 +237,25 @@ function rawAssets(): AssetRecord[] {
   return db().prepare("SELECT * FROM assets ORDER BY seq").all().map(toAsset);
 }
 
+/**
+ * 算编号要用的编号规则和客户表。批量导入时每行都要算好几次编号，这里缓存 5 秒，改规则、改客户时立刻作废。
+ * 执行任务的子进程也会读，5 秒的过期保证它看到别的进程的改动不会太晚。
+ */
+let tagContext: { at: number; settings: TagSettings; customers: Map<string, Customer> } | null = null;
+
+function currentTagContext(): { settings: TagSettings; customers: Map<string, Customer> } {
+  if (!tagContext || Date.now() - tagContext.at > 5000) {
+    tagContext = { at: Date.now(), settings: getTagSettings(), customers: new Map(listCustomers().map((item) => [item.id, item])) };
+  }
+  return tagContext;
+}
+
+function forgetTagContext(): void {
+  tagContext = null;
+}
+
 function withTags(records: AssetRecord[]): Asset[] {
-  const settings = getTagSettings();
-  const customers = new Map(listCustomers().map((item) => [item.id, item]));
+  const { settings, customers } = currentTagContext();
   return records.map((record) => ({ ...record, tag: renderTag(record, settings, customers) }));
 }
 
@@ -377,9 +397,11 @@ function autoRack(before: AssetRecord | null, next: AssetRecord, input: AssetInp
 }
 
 function describeChanges(before: AssetRecord, after: AssetRecord): string[] {
-  const customers = new Map(listCustomers().map((item) => [item.id, item.name]));
-  const racks = new Map(listRacks().map((item) => [item.id, item]));
-  const sites = new Map(listSites().map((item) => [item.id, item]));
+  // 只有改了客户或机柜才去读那几张表。
+  const changedKeys = new Set(COLUMNS.filter(([key]) => before[key] !== after[key]).map(([key]) => key));
+  const customers = changedKeys.has("customerId") ? new Map(listCustomers().map((item) => [item.id, item.name])) : new Map<string, string>();
+  const racks = changedKeys.has("rackId") ? new Map(listRacks().map((item) => [item.id, item])) : new Map<string, Rack>();
+  const sites = changedKeys.has("rackId") ? new Map(listSites().map((item) => [item.id, item])) : new Map<string, Site>();
   const lines: string[] = [];
   for (const [key] of COLUMNS) {
     if (key === "status" || before[key] === after[key]) continue;
@@ -426,8 +448,8 @@ function blankAsset(id: string, sn: string, now: string): AssetRecord {
  * 我手动指定的编号也不能等于别人按规则算出来的。后一种要算所有资产的编号，只在有手动编号时做。
  */
 function assertTagFree(record: AssetRecord): void {
-  const customer = record.customerId ? getCustomer(record.customerId) : null;
-  const tag = renderTag(record, getTagSettings(), new Map(customer ? [[customer.id, customer]] : []));
+  const { settings, customers } = currentTagContext();
+  const tag = renderTag(record, settings, customers);
   const manual = db().prepare("SELECT sn FROM assets WHERE tag_override = ? AND id != ?").get(tag, record.id);
   if (manual) throw new Error(`编号 ${tag} 已经手动指定给了 ${manual.sn}`);
   if (!record.tagOverride) return;
@@ -452,6 +474,11 @@ export function createAsset(input: AssetInput, actor: string): Asset {
 }
 
 export function updateAsset(id: string, input: AssetInput, actor: string): Asset {
+  return applyUpdate(id, input, actor).asset;
+}
+
+/** 改一台资产，同时给出改了什么（状态变化在前），批量导入预览直接用，不用再算一遍。 */
+function applyUpdate(id: string, input: AssetInput, actor: string): { asset: Asset; lines: string[] } {
   return transaction(db(), () => {
     const current = getAsset(id);
     if (!current) throw new Error("资产不存在");
@@ -466,12 +493,13 @@ export function updateAsset(id: string, input: AssetInput, actor: string): Asset
     autoRack(before, next, input);
     const changes = describeChanges(before, next);
     // 什么都没变就不写，免得更新时间跟着变。
-    if (next.status === before.status && !changes.length) return current;
+    if (next.status === before.status && !changes.length) return { asset: current, lines: [] };
     assertTagFree(next);
     writeAsset(next);
-    if (next.status !== before.status) addEvent(id, "status", `状态：${ASSET_STATUS[before.status]} → ${ASSET_STATUS[next.status]}`, actor);
+    const status = next.status !== before.status ? `状态：${ASSET_STATUS[before.status]} → ${ASSET_STATUS[next.status]}` : "";
+    if (status) addEvent(id, "status", status, actor);
     if (changes.length) addEvent(id, "edit", changes.join("\n"), actor);
-    return getAsset(id)!;
+    return { asset: getAsset(id)!, lines: [status, ...changes].filter(Boolean) };
   });
 }
 
@@ -505,6 +533,8 @@ export function importAssets(records: { row: number; cells: SheetCells }[], acto
     return customers.find((item) => item.code.toLowerCase() === key || item.name.toLowerCase() === key)?.id;
   };
   const seen = new Map<string, number>();
+  // 机柜查找表整个导入只建一次（导入资产不会改机柜）。
+  const rackFinder = cachedRackFinder();
   const run = () => {
     for (const record of records) {
       const cells = record.cells;
@@ -533,7 +563,7 @@ export function importAssets(records: { row: number; cells: SheetCells }[], acto
               input.rackId = null;
               continue;
             }
-            const rack = findRack(cells.site || "", value);
+            const rack = rackFinder(cells.site || "", value);
             if (rack === "ambiguous") throw new Error(`好几个机房都有机柜 ${value}，在「机房」列写明是哪个`);
             if (!rack) throw new Error(`${cells.site ? `机房「${cells.site}」里` : ""}没有机柜 ${value}，先在机房页建好`);
             input.rackId = rack.id;
@@ -563,11 +593,7 @@ export function importAssets(records: { row: number; cells: SheetCells }[], acto
             result.rows.push({ row: record.row, sn, action: "create", message: "" });
             return;
           }
-          const after = updateAsset(existing.id, input, actor);
-          const lines = [
-            ...(after.status !== existing.status ? [`状态：${ASSET_STATUS[existing.status]} → ${ASSET_STATUS[after.status]}`] : []),
-            ...describeChanges(existing, after),
-          ];
+          const { lines } = applyUpdate(existing.id, input, actor);
           if (lines.length) result.updated++;
           else result.unchanged++;
           result.rows.push({ row: record.row, sn, action: lines.length ? "update" : "same", message: lines.join("\n") });

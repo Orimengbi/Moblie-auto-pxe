@@ -249,7 +249,7 @@ export function importRacks(rows: unknown[][], defaultSiteId: string | null, opt
       });
       const entry: RackImportRow = { row: i + 1, site: cells.site || "", name: cells.name || "", action: "error", message: "" };
       try {
-        const site = cells.site ? sites.find((item) => item.code.toLowerCase() === cells.site!.toLowerCase() || item.name === cells.site) : defaultSiteId ? getSite(defaultSiteId) : null;
+        const site = cells.site ? sites.find((item) => item.code.toLowerCase() === cells.site!.toLowerCase() || item.name.toLowerCase() === cells.site!.toLowerCase()) : defaultSiteId ? getSite(defaultSiteId) : null;
         if (!site) throw new Error(cells.site ? `没有机房「${cells.site}」，先建好` : "没写机房");
         entry.site = site.code;
         if (!cells.name) throw new Error("没写机柜号");
@@ -261,15 +261,15 @@ export function importRacks(rows: unknown[][], defaultSiteId: string | null, opt
             result.created++;
             return;
           }
-          const next = updateRack(existing.id, {
-            siteId: site.id,
-            name: existing.name,
+          const wanted = {
             rowLabel: cells.rowLabel ?? existing.rowLabel,
-            heightU: cells.heightU ?? existing.heightU,
+            heightU: cells.heightU !== undefined ? Number(cells.heightU) : existing.heightU,
             powerKw: cells.powerKw ?? existing.powerKw,
             note: cells.note ?? existing.note,
-          });
-          const changed = (["rowLabel", "heightU", "powerKw", "note"] as const).filter((field) => next[field] !== existing[field]);
+          };
+          const changed = (["rowLabel", "heightU", "powerKw", "note"] as const).filter((field) => wanted[field] !== existing[field]);
+          // 没变的不写，免得白白改更新时间。
+          const next = changed.length ? updateRack(existing.id, { siteId: site.id, name: existing.name, ...wanted, heightU: cells.heightU ?? existing.heightU }) : existing;
           entry.action = changed.length ? "update" : "same";
           entry.message = changed.map((field) => `${{ rowLabel: "列/排", heightU: "高度", powerKw: "功率", note: "备注" }[field]}：${existing[field] || "空"} → ${next[field] || "空"}`).join("，");
           if (changed.length) result.updated++;
@@ -319,12 +319,20 @@ export function placeLabel(asset: { rackId: string | null; uStart: number | null
   return [site?.code, rack.name, u].filter(Boolean).join(" / ");
 }
 
-/** 按机房代码或名称、机柜号找机柜。只给机柜号时要在所有机房里唯一。Excel 导入用。 */
-export function findRack(siteText: string, rackName: string): Rack | null | "ambiguous" {
-  const key = siteText.trim().toLowerCase();
-  const site = key ? listSites().find((item) => item.code.toLowerCase() === key || item.name.toLowerCase() === key) : null;
-  if (key && !site) return null;
-  const matches = listRacks(site?.id).filter((rack) => rack.name.toLowerCase() === rackName.trim().toLowerCase());
-  if (matches.length > 1) return "ambiguous";
-  return matches[0] || null;
+/**
+ * 按机房代码或名称、机柜号找机柜（Excel 导入用）。只给机柜号时要在所有机房里唯一。
+ * 返回的函数里机房和机柜表只读一次，整个导入复用。机房名不分大小写。
+ */
+export function cachedRackFinder(): (siteText: string, rackName: string) => Rack | null | "ambiguous" {
+  const sites = listSites();
+  const racks = listRacks();
+  return (siteText, rackName) => {
+    const key = siteText.trim().toLowerCase();
+    const site = key ? sites.find((item) => item.code.toLowerCase() === key || item.name.toLowerCase() === key) : null;
+    if (key && !site) return null;
+    const name = rackName.trim().toLowerCase();
+    const matches = racks.filter((rack) => (!site || rack.siteId === site.id) && rack.name.toLowerCase() === name);
+    if (matches.length > 1) return "ambiguous";
+    return matches[0] || null;
+  };
 }

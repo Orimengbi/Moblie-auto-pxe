@@ -1350,7 +1350,15 @@ function serverNicPlan(row: ServerRow): NicPlan | null {
   };
 }
 
-function buildServerRow(project: Project, cells: ServerCells, existing: ServerRow | undefined, label: string, now: string): { row: ServerRow; problems: string[] } {
+/** siblings 是这个批次现有的行；批量导入时由调用方传进来并随写随更新，不用每行都重读整个目录。 */
+function buildServerRow(
+  project: Project,
+  cells: ServerCells,
+  existing: ServerRow | undefined,
+  label: string,
+  now: string,
+  siblings: ServerRow[] = listServers().filter((item) => item.projectId === project.id),
+): { row: ServerRow; problems: string[] } {
   const problems: string[] = [];
   let sn = "";
   try {
@@ -1417,7 +1425,7 @@ function buildServerRow(project: Project, cells: ServerCells, existing: ServerRo
       problems.push(problemOf(error, "IPMI VLAN 不合法"));
     }
   }
-  const others = listServers().filter((item) => item.projectId === project.id && item.id !== existing?.id);
+  const others = siblings.filter((item) => item.id !== existing?.id);
   if (ipmiMac) {
     const duplicateMac = others.find((item) => item.ipmiMac === ipmiMac);
     if (duplicateMac) problems.push(`IPMI MAC ${ipmiMac} 已经属于序列号 ${duplicateMac.sn}`);
@@ -1482,6 +1490,8 @@ export async function importServerSheet(projectId: string, records: { row: numbe
     if (!project) throw new Error("项目不存在");
     const result: ServerImportResult = { rows: records.length, servers: 0, errors: [] };
     const now = new Date().toISOString();
+    // 只读一次目录，之后写一行就更新这份列表。以前每行读两遍，1000 行要读两百万次文件。
+    const siblings = listServers().filter((item) => item.projectId === project.id);
     for (const record of records) {
       const cells = record.cells;
       if (!cells.sn && !cells.ipmiMac && !cells.osName && !cells.originalUser) continue;
@@ -1491,9 +1501,12 @@ export async function importServerSheet(projectId: string, records: { row: numbe
       } catch {
         sn = "";
       }
-      const existing = sn ? listServers().find((item) => item.projectId === project.id && item.sn === sn) : undefined;
-      const { row, problems } = buildServerRow(project, cells, existing, `第${record.row}行`, now);
+      const existing = sn ? siblings.find((item) => item.sn === sn) : undefined;
+      const { row, problems } = buildServerRow(project, cells, existing, `第${record.row}行`, now, siblings);
       writeServer(row);
+      const index = siblings.findIndex((item) => item.id === row.id);
+      if (index >= 0) siblings[index] = row;
+      else siblings.push(row);
       result.servers += 1;
       if (problems.length) result.errors.push({ row: record.row, message: problems.join("；") });
     }
@@ -1565,8 +1578,9 @@ async function reconcileOnce(projectId: string, options?: ReconcileOptions): Pro
   const project = getProject(projectId);
   if (!project) throw new Error("项目不存在");
   let changed = false;
-  for (const row of listServers()) {
-    if (row.projectId !== project.id) continue;
+  // 同时处理 8 台：BMC 不通时 ipmitool 一次要等 20 秒，一台台串着 100 台不通的就要半个多小时。
+  const queue = listServers().filter((item) => item.projectId === project.id);
+  const handle = async (row: ServerRow) => {
     const base = row.updatedAt;
     const snapshot = () => {
       const { updatedAt, originalPassword, targetPassword, ...rest } = row;
@@ -1662,7 +1676,11 @@ async function reconcileOnce(projectId: string, options?: ReconcileOptions): Pro
       }
     }
     if (snapshot() !== before && (await saveReconciled(row, base))) changed = true;
-  }
+  };
+  const worker = async () => {
+    for (let row = queue.shift(); row; row = queue.shift()) await handle(row);
+  };
+  await Promise.all(Array.from({ length: Math.min(8, queue.length) }, worker));
   return { changed };
 }
 
@@ -2037,14 +2055,50 @@ export function inventoryMeta(snapshot: InventorySnapshot): InventoryMeta {
   };
 }
 
+/**
+ * 采集记录写下后不再改，按「资产/记录 id」缓存列表要用的摘要，免得每次打开资产页都把每台的大 JSON 重新解析一遍。
+ * 基准检查的结果按基准的更新时间缓存；换了基准才重新读部件。
+ */
+interface SnapshotSummary {
+  at: string;
+  changes: number | null;
+  issues: Map<string, number>;
+}
+
+const summaries = new Map<string, SnapshotSummary>();
+
+function snapshotSummary(serverId: string, id: string, baseline: Baseline | null): SnapshotSummary | null {
+  const key = `${serverId}/${id}`;
+  let summary = summaries.get(key);
+  let snapshot: InventorySnapshot | null = null;
+  if (!summary) {
+    snapshot = getInventory(serverId, id);
+    if (!snapshot) return null;
+    summary = { at: snapshot.at, changes: snapshot.changes ? snapshot.changes.length : null, issues: new Map() };
+    // 只留最近用到的一批，不让缓存无限长。
+    if (summaries.size > 5000) summaries.delete(summaries.keys().next().value!);
+    summaries.set(key, summary);
+  }
+  if (baseline) {
+    const baselineKey = `${baseline.projectId}@${baseline.updatedAt}`;
+    if (!summary.issues.has(baselineKey)) {
+      snapshot ||= getInventory(serverId, id);
+      if (snapshot) summary.issues.set(baselineKey, checkBaseline(baseline.rules, snapshot.components).length);
+    }
+  }
+  return summary;
+}
+
 /** 服务器列表「硬件」一列用。baseline 由调用方读一次传进来。 */
 export function inventoryStatus(serverId: string, baseline: Baseline | null): InventoryStatus {
   const status: InventoryStatus = { issues: null };
+  const ids = snapshotIds(serverId);
   for (const source of ["os", "bmc"] as const) {
-    const latest = latestInventory(serverId, source);
-    if (!latest) continue;
-    status[source] = { at: latest.at, changes: latest.changes ? latest.changes.length : null };
-    if (baseline?.source === source) status.issues = checkBaseline(baseline.rules, latest.components).length;
+    const id = ids.filter((item) => item.includes(`-${source}-`)).at(-1);
+    const summary = id ? snapshotSummary(serverId, id, baseline?.source === source ? baseline : null) : null;
+    if (!summary) continue;
+    status[source] = { at: summary.at, changes: summary.changes };
+    if (baseline?.source === source) status.issues = summary.issues.get(`${baseline.projectId}@${baseline.updatedAt}`) ?? null;
   }
   return status;
 }

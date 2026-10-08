@@ -17,7 +17,12 @@ export type AssetRow = PublicAsset & {
   batch: { projectId: string; name: string; rowId: string; osName: string; installed: string } | null;
 };
 
-export function assetRows(assets: Asset[] = listAssets(), context: HostContext = hostContext()): AssetRow[] {
+/**
+ * light：机房页、资产下拉框这类只要编号、状态、位置的地方用，不算系统地址、不读硬件采集，资产多时快很多。
+ */
+export function assetRows(assets: Asset[] = listAssets(), context?: HostContext, options: { light?: boolean } = {}): AssetRow[] {
+  const light = Boolean(options.light);
+  const hosts = light ? null : context || hostContext();
   const customers = new Map(listCustomers().map((item) => [item.id, item.name]));
   const projects = new Map(listProjects().map((item) => [item.id, item.name]));
   const latest = new Map<string, ReturnType<typeof listServers>[number]>();
@@ -30,9 +35,9 @@ export function assetRows(assets: Asset[] = listAssets(), context: HostContext =
   const sites = new Map(listSites().map((item) => [item.id, item]));
   return assets.map((asset) => {
     const row = latest.get(asset.id);
-    const found = resolveAssetHost(asset, context);
+    const found = hosts ? resolveAssetHost(asset, hosts) : { host: "", source: "" as const };
     // 硬件「符合基准」按这台最近一次装机批次的基准算。
-    if (row && !baselines.has(row.projectId)) baselines.set(row.projectId, getBaseline(row.projectId));
+    if (!light && row && !baselines.has(row.projectId)) baselines.set(row.projectId, getBaseline(row.projectId));
     return {
       ...publicAsset(asset),
       customerName: asset.customerId ? customers.get(asset.customerId) || "" : "",
@@ -41,7 +46,7 @@ export function assetRows(assets: Asset[] = listAssets(), context: HostContext =
       warranty: warrantyState(asset),
       host: found.host,
       hostSource: found.source,
-      inventory: inventoryStatus(asset.id, row ? baselines.get(row.projectId) || null : null),
+      inventory: light ? { issues: null } : inventoryStatus(asset.id, row ? baselines.get(row.projectId) || null : null),
       batch: row ? { projectId: row.projectId, name: projects.get(row.projectId) || "", rowId: row.id, osName: row.osName, installed: row.installed } : null,
     };
   });

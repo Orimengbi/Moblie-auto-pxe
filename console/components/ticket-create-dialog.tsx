@@ -31,7 +31,7 @@ export function TicketCreateDialog({ open, asset, onClose, onCreated }: { open: 
       .then((list: string[]) => setNames(Array.isArray(list) ? list : []))
       .catch(() => undefined);
     if (!asset) {
-      void fetch("/api/assets")
+      void fetch("/api/assets?light=1")
         .then((response) => response.json())
         .then((list: AssetChoice[]) => setAssets(Array.isArray(list) ? list : []))
         .catch(() => undefined);
