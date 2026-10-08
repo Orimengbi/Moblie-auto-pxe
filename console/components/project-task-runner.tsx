@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -9,7 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import type { RemoteFile, RemoteTask, TaskHostSource, TaskTargetStatus } from "@/lib/types";
 
-const TARGET: Record<TaskTargetStatus, string> = {
+export const TARGET: Record<TaskTargetStatus, string> = {
   pending: "排队",
   running: "执行中",
   ok: "成功",
@@ -268,6 +269,9 @@ export function ProjectTaskRunner({
               <span className="font-medium">{task.name}</span>
               <span className="text-xs text-muted-foreground">{counts(task)}</span>
               <span className="text-xs text-muted-foreground">{new Date(task.createdAt).toLocaleString("zh-CN")}</span>
+              <Link href={`/tasks/${task.id}`} className="text-xs underline underline-offset-4">
+                详情
+              </Link>
               {task.status === "done" ? (
                 <Button
                   type="button"

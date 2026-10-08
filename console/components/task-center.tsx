@@ -105,7 +105,7 @@ function BatchItem({ task, onDismiss }: { task: TaskSummary; onDismiss?: () => v
           {task.projectName || "资产"} · 成功 {task.ok}
           {task.failed ? ` · 失败 ${task.failed}` : ""} · {new Date(task.createdAt).toLocaleString("zh-CN")}
         </span>
-        <Link href={task.projectId ? `/projects/${task.projectId}` : "/assets"} className="shrink-0 underline-offset-4 hover:underline">
+        <Link href={`/tasks/${task.id}`} className="shrink-0 underline-offset-4 hover:underline">
           查看
         </Link>
         {onDismiss ? (
@@ -212,7 +212,7 @@ export function TaskCenter() {
 
   const floatUploads = prefs.upload && !pathname.startsWith("/images") ? live : [];
   const floatBatch = prefs.batch
-    ? feed.tasks.filter((task) => followed.includes(task.id) && !dismissed.includes(task.id) && pathname !== (task.projectId ? `/projects/${task.projectId}` : "/assets"))
+    ? feed.tasks.filter((task) => followed.includes(task.id) && !dismissed.includes(task.id) && pathname !== `/tasks/${task.id}`)
     : [];
 
   return (
