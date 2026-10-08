@@ -213,3 +213,10 @@ test("the proxy logs in to the BMC itself and relays pages and the KVM socket", 
   proxy.closeAllConnections();
   bmc.closeAllConnections();
 });
+
+test("a failed BMC web login says why instead of always blaming the password", () => {
+  assert.match(kvm.loginFailure("10.0.0.9", [{ status: 401 }, { status: 401 }]), /不接受资产里的账号密码/);
+  assert.match(kvm.loginFailure("10.0.0.9", [{ status: 503 }]), /网页服务没有响应（HTTP 503），不是密码问题/);
+  assert.match(kvm.loginFailure("10.0.0.9", [{ status: 501 }]), /HTTP 501/);
+  assert.match(kvm.loginFailure("10.0.0.9", [{ status: null, error: "connect ETIMEDOUT" }]), /连不上 BMC 10\.0\.0\.9 的网页（connect ETIMEDOUT）/);
+});

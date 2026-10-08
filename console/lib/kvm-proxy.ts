@@ -59,17 +59,42 @@ function call(host: string, options: https.RequestOptions, body?: Buffer): Promi
   });
 }
 
-/** 用服务器表里的账号登录 BMC 网页，改过账号的先用目标账号。 */
+/** 登录失败的原因不同，提示也不同：密码不对、BMC 网页服务没起来、连不上，不要都说成密码不对。 */
+export function loginFailure(host: string, results: { status: number | null; error?: string }[]): string {
+  if (results.some((item) => item.status === 401 || item.status === 403 || item.status === 200)) return `BMC ${host} 不接受资产里的账号密码`;
+  const server = results.find((item) => item.status !== null && item.status >= 500);
+  if (server) {
+    return `BMC ${host} 的网页服务没有响应（HTTP ${server.status}），不是密码问题。BMC 刚重启时要等几分钟；一直这样可以对 BMC 做一次冷重启（ipmitool mc reset cold，不影响服务器系统）`;
+  }
+  const failed = results.find((item) => item.error);
+  if (failed) return `连不上 BMC ${host} 的网页（${failed.error}）`;
+  return `BMC ${host} 的网页登录没有成功（HTTP ${results.map((item) => item.status).join("、")}）`;
+}
+
+/** 用资产上的账号登录 BMC 网页，主账号不行再试备用账号。 */
 async function login(host: string, accounts: { user: string; password: string }[]): Promise<BmcSession> {
+  const results: { status: number | null; error?: string }[] = [];
   for (const account of accounts) {
     const form = Buffer.from(new URLSearchParams({ username: account.user, password: account.password }).toString());
-    const { response, body } = await call(host, {
-      method: "POST",
-      path: "/api/session",
-      headers: { "Content-Type": "application/x-www-form-urlencoded", "Content-Length": form.length },
-    }, form);
+    let reply: Awaited<ReturnType<typeof call>>;
+    try {
+      reply = await call(host, {
+        method: "POST",
+        path: "/api/session",
+        headers: { "Content-Type": "application/x-www-form-urlencoded", "Content-Length": form.length },
+      }, form);
+    } catch (error) {
+      results.push({ status: null, error: error instanceof Error ? error.message : "连接失败" });
+      break;
+    }
+    const { response, body } = reply;
     const sid = /QSESSIONID=([^;]+)/.exec([response.headers["set-cookie"] || []].flat().join(";"))?.[1];
-    if (response.statusCode !== 200 || !sid) continue;
+    results.push({ status: response.statusCode ?? null });
+    if (response.statusCode !== 200 || !sid) {
+      // 网页服务没起来时换账号也没用，别白白多试一次。
+      if ((response.statusCode ?? 0) >= 500) break;
+      continue;
+    }
     const data = JSON.parse(body.toString("utf8")) as { CSRFToken?: string; privilege?: number; extendedpriv?: number; remote_addr?: string };
     return {
       host,
@@ -81,7 +106,7 @@ async function login(host: string, accounts: { user: string; password: string }[
       clientIp: data.remote_addr || "",
     };
   }
-  throw new Error("BMC 不接受服务器表里的账号密码");
+  throw new Error(loginFailure(host, results));
 }
 
 /** 每个控制台用户、每台服务器共用一个 BMC 会话；BMC 回 401 时重新登录。 */
