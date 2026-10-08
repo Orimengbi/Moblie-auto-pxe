@@ -11,6 +11,7 @@ import {
   BOOT_DEVICES,
   POWER_ACTIONS,
   bootFromPxe,
+  firstWorkingAccount,
   changeIpmiAccount,
   defaultIpmiExec,
   ipmiFailure,
@@ -1760,13 +1761,8 @@ export async function controlAsset(assetId: string, input: ServerControl, exec: 
 
   const accounts = assetBmcAccounts(asset);
   if (!accounts.length) throw new Error(`${asset.sn} 没有 BMC 账号密码`);
-  let account = accounts[0];
-  let power = await exec(asset.bmcIp, account.user, account.password, ["chassis", "power", "status"]);
-  if (power.code !== 0 && accounts[1] && ipmiFailure(power.stderr) === "denied") {
-    account = accounts[1];
-    power = await exec(asset.bmcIp, account.user, account.password, ["chassis", "power", "status"]);
-  }
-  if (power.code !== 0) {
+  const { account, result: power } = await firstWorkingAccount(asset.bmcIp, accounts, exec);
+  if (!account) {
     throw new Error(ipmiFailure(power.stderr) === "denied" ? `${asset.sn} 的 BMC ${asset.bmcIp} 不接受资产里的账号密码` : `${asset.sn} 的 BMC ${asset.bmcIp} 没有回应`);
   }
 

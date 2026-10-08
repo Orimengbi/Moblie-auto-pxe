@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
+import { runProcess } from "./process.ts";
 import fs from "node:fs";
 import path from "node:path";
 import { parseLeases, type Lease } from "./dnsmasq.ts";
@@ -180,35 +181,14 @@ export interface ExecResult {
 /** 执行一条命令，stdin 可选。deadline 是绝对时间，到点就杀掉。limit 是输出最多留多少字符，超了只留结尾。 */
 export type Exec = (command: string, args: string[], stdin: string | null, deadline: number, limit?: number) => Promise<ExecResult>;
 
-export const defaultExec: Exec = (command, args, stdin, deadline, limit = OUTPUT_LIMIT) =>
-  new Promise((resolve) => {
-    const child = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"] });
-    let output = "";
-    let timedOut = false;
-    const keep = (chunk: string) => {
-      output += chunk;
-      if (output.length > limit * 2) output = output.slice(-limit);
-    };
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGKILL");
-    }, Math.max(0, deadline - Date.now()));
-    // 按 UTF-8 解码流，中文被切在两块之间时不会变成乱码。
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", keep);
-    child.stderr.on("data", keep);
-    child.stdin.on("error", () => undefined);
-    child.on("error", (error) => {
-      clearTimeout(timer);
-      resolve({ code: null, output: `${output}${error.message}\n`, timedOut });
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      resolve({ code, output, timedOut });
-    });
-    child.stdin.end(stdin ?? "");
-  });
+export const defaultExec: Exec = async (command, args, stdin, deadline, limit = OUTPUT_LIMIT) => {
+  try {
+    const result = await runProcess(command, args, { timeoutMs: deadline - Date.now(), stdin: stdin ?? "", limit });
+    return { code: result.code, output: result.output, timedOut: result.timedOut };
+  } catch (error) {
+    return { code: null, output: `${error instanceof Error ? error.message : error}\n`, timedOut: false };
+  }
+};
 
 function sshOptions(): string[] {
   // 装机网上的机器会反复重装，主机密钥每次都变，所以不记 known_hosts。

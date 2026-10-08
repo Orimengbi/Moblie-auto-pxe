@@ -1,4 +1,5 @@
 import type { HwComponent, OpticsPort } from "./types.ts";
+import { markedSections } from "./process.ts";
 
 /**
  * 光模块：型号、序列号和收发光强度。NVIDIA/Mellanox 的网卡用 mlxlink 读（CMIS 的 OSFP/QSFP-DD 也能解），
@@ -146,16 +147,13 @@ function parseEthtool(head: string[], body: string): OpticsPort {
 /** 解析 OPTICS_BODY 的输出。 */
 export function parseOptics(text: string): OpticsPort[] {
   const ports: OpticsPort[] = [];
-  const marks = [...text.matchAll(/^===PXEOPT (.+)===$/gm)];
-  marks.forEach((mark, index) => {
-    const head = mark[1].trim().split(/\s+/);
-    if (head[0] === "end") return;
-    const start = (mark.index ?? 0) + mark[0].length + 1;
-    const end = index + 1 < marks.length ? marks[index + 1].index ?? text.length : text.length;
-    const body = text.slice(start, end);
+  for (const section of markedSections(text, "PXEOPT")) {
+    const head = section.head.split(/\s+/);
+    if (head[0] === "end") continue;
+    const body = section.body;
     if (head[0] === "mlx" && head.length >= 3) ports.push(parseMlxlink(head, body));
     else if (head[0] === "eth" && head.length >= 3) ports.push(parseEthtool(head, body));
-  });
+  }
   // 没插模块的电口（比如板载万兆电口）不列出来；读错了的照样列，方便发现问题。
   return ports.filter((port) => port.present || (port.source === "mlxlink" && port.error !== "没有插模块") || port.error?.startsWith("ethtool 解不了"));
 }

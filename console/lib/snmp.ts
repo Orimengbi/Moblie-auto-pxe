@@ -1,8 +1,5 @@
-import { spawn } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { db, type SqlValue } from "./db.ts";
+import { runProcess, withSecretDir } from "./process.ts";
+import { countWhere, db, type SqlValue } from "./db.ts";
 import type { HwComponent, NetPort, NetSystem, PublicSnmpProfile, SnmpProfile, SnmpVersion } from "./types.ts";
 
 /**
@@ -114,7 +111,7 @@ export function updateSnmpProfile(id: string, input: SnmpProfileInput): SnmpProf
 export function deleteSnmpProfile(id: string): SnmpProfile {
   const profile = getSnmpProfile(id);
   if (!profile) throw new Error("凭据不存在");
-  const used = Number(db().prepare("SELECT COUNT(*) AS n FROM assets WHERE snmp_profile_id = ?").get(id)?.n ?? 0);
+  const used = countWhere("assets", "snmp_profile_id", id);
   if (used) throw new Error(`还有 ${used} 台设备在用「${profile.name}」`);
   db().prepare("DELETE FROM snmp_profiles WHERE id = ?").run(id);
   return profile;
@@ -139,31 +136,19 @@ export function snmpConf(profile: SnmpProfile, dir: string): string {
 export type SnmpExec = (host: string, profile: SnmpProfile, oid: string) => Promise<{ code: number; stdout: string; stderr: string }>;
 
 export const defaultSnmpExec: SnmpExec = (host, profile, oid) =>
-  new Promise((resolve, reject) => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pxe-snmp-"));
-    fs.chmodSync(dir, 0o700);
-    fs.writeFileSync(path.join(dir, "snmp.conf"), snmpConf(profile, dir), { mode: 0o600 });
-    const done = () => fs.rmSync(dir, { recursive: true, force: true });
-    // -On 数字 OID，-Oe 枚举给数字，-Ot 时间给数字，-Cr25 一次要 25 条。
-    const child = spawn("snmpbulkwalk", ["-On", "-Oe", "-Ot", "-Cr25", host, oid], { env: { ...process.env, SNMPCONFPATH: dir, MIBS: "" }, stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    const timer = setTimeout(() => child.kill("SIGKILL"), 120_000);
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => (stdout += chunk));
-    child.stderr.on("data", (chunk) => (stderr += chunk));
-    child.on("error", (error: NodeJS.ErrnoException) => {
-      clearTimeout(timer);
-      done();
-      reject(error.code === "ENOENT" ? new Error("小主机没有 snmpbulkwalk（net-snmp），读不了网络设备") : error);
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      done();
-      resolve({ code: code ?? 1, stdout, stderr });
-    });
-  });
+  withSecretDir(
+    "pxe-snmp-",
+    (dir) => ({ "snmp.conf": snmpConf(profile, dir) }),
+    async (dir) => {
+      try {
+        // -On 数字 OID，-Oe 枚举给数字，-Ot 时间给数字，-Cr25 一次要 25 条。
+        const result = await runProcess("snmpbulkwalk", ["-On", "-Oe", "-Ot", "-Cr25", host, oid], { timeoutMs: 120_000, env: { ...process.env, SNMPCONFPATH: dir, MIBS: "" } });
+        return { code: result.code ?? 1, stdout: result.stdout, stderr: result.stderr };
+      } catch (error) {
+        throw (error as NodeJS.ErrnoException).code === "ENOENT" ? new Error("小主机没有 snmpbulkwalk（net-snmp），读不了网络设备") : error;
+      }
+    },
+  );
 
 export type SnmpValue = string | number;
 

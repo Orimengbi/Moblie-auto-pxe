@@ -1,6 +1,7 @@
 import { ASSET_STATUS, OPEN_TICKET_STATUS, PART_KINDS, PART_STATUS, TICKET_KINDS, TICKET_PRIORITY, TICKET_STATUS } from "./asset-labels.ts";
 import { addEvent, getAsset, updateAsset } from "./assets.ts";
 import { db, transaction, type SqlValue } from "./db.ts";
+import { cleanText, pickEnum } from "./validate.ts";
 import { findPartBySn, getPart, installPart, partLabel, registerPart, setPartStatus } from "./parts.ts";
 import type { AssetStatus, Part, PartKind, PartStatus, Ticket, TicketKind, TicketLog, TicketPriority, TicketStatus } from "./types.ts";
 
@@ -8,6 +9,9 @@ import type { AssetStatus, Part, PartKind, PartStatus, Ticket, TicketKind, Ticke
  * 维修工单。开故障、维修单时可以把资产转成「维修中」，记下原来的状态，这台的单子都解决后改回去。
  * 换件在工单里做：旧件拆下（库里没有就登记一件），新件装上（库里挑或直接填序列号）。
  */
+
+/** 「还没解决」的状态条件，和参数一起给。 */
+const OPEN_CLAUSE = `status IN (${OPEN_TICKET_STATUS.map(() => "?").join(", ")})`;
 
 function ticketNo(seq: number, createdAt: string): string {
   return `WO-${createdAt.slice(0, 4)}-${String(seq).padStart(4, "0")}`;
@@ -61,14 +65,7 @@ function log(ticketId: string, kind: string, text: string, actor: string): void 
   db().prepare("INSERT INTO ticket_logs (ticket_id, at, actor, kind, text) VALUES (?, ?, ?, ?, ?)").run(ticketId, new Date().toISOString(), actor, kind, text.slice(0, 8000));
 }
 
-function text(value: unknown, max: number): string {
-  return String(value ?? "").replace(/[\r\0]/g, "").trim().slice(0, max);
-}
-
-function pickEnum<T extends string>(labels: Record<T, string>, value: unknown, label: string): T {
-  if (!Object.hasOwn(labels, String(value))) throw new Error(`${label}不对`);
-  return value as T;
-}
+const text = cleanText;
 
 export interface TicketInput {
   assetId?: string | null;
@@ -101,7 +98,7 @@ export function createTicket(input: TicketInput, actor: string): Ticket {
     } else if (asset && setRepair && asset.status === "repair") {
       // 已经被别的单转成维修中：跟着记同一个原状态，所有这样的单都解决了才改回去。
       const holder = db()
-        .prepare(`SELECT prev_asset_status FROM tickets WHERE asset_id = ? AND prev_asset_status != '' AND status IN (${OPEN_TICKET_STATUS.map(() => "?").join(", ")}) LIMIT 1`)
+        .prepare(`SELECT prev_asset_status FROM tickets WHERE asset_id = ? AND prev_asset_status != '' AND ${OPEN_CLAUSE} LIMIT 1`)
         .get(asset.id, ...OPEN_TICKET_STATUS);
       prev = (holder ? String(holder.prev_asset_status) : "") as AssetStatus | "";
     }
@@ -169,7 +166,7 @@ export function setTicketStatus(id: string, status: TicketStatus, actor: string,
     const extra: string[] = [];
     if (asset && prev && done && !wasDone && asset.status === "repair") {
       const others = db()
-        .prepare(`SELECT COUNT(*) AS n FROM tickets WHERE asset_id = ? AND id != ? AND prev_asset_status != '' AND status IN (${OPEN_TICKET_STATUS.map(() => "?").join(", ")})`)
+        .prepare(`SELECT COUNT(*) AS n FROM tickets WHERE asset_id = ? AND id != ? AND prev_asset_status != '' AND ${OPEN_CLAUSE}`)
         .get(asset.id, id, ...OPEN_TICKET_STATUS);
       if (!Number(others?.n)) {
         updateAsset(asset.id, { status: prev }, actor);
@@ -268,5 +265,5 @@ export function partsOfTicket(ticketId: string): Part[] {
 }
 
 export function openTicketCount(): number {
-  return Number(db().prepare(`SELECT COUNT(*) AS n FROM tickets WHERE status IN (${OPEN_TICKET_STATUS.map(() => "?").join(", ")})`).get(...OPEN_TICKET_STATUS)?.n ?? 0);
+  return Number(db().prepare(`SELECT COUNT(*) AS n FROM tickets WHERE ${OPEN_CLAUSE}`).get(...OPEN_TICKET_STATUS)?.n ?? 0);
 }

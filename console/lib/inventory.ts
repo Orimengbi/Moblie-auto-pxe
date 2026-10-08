@@ -3,6 +3,7 @@ import { OPTICS_BODY, opticsComponents, parseOptics } from "./optics.ts";
 import { parseOsPorts, PORTS_BODY } from "./ports.ts";
 import { buildTopology } from "./topology.ts";
 import type { BaselineIssue, BaselineRule, HwChange, HwComponent, HwKind, HwPort, InventorySource, Topology } from "./types.ts";
+import { markedSections } from "./process.ts";
 
 /**
  * 整机硬件清单：系统里采集的脚本和解析、Redfish 文档到部件的转换、两次采集的比对、基准配置。
@@ -205,15 +206,7 @@ export function sizeToGb(text: string): number | undefined {
 }
 
 export function splitSections(text: string): Map<string, string> {
-  const sections = new Map<string, string>();
-  const re = /^===PXEINV (\S+)===$/gm;
-  const marks = [...text.matchAll(re)];
-  marks.forEach((mark, index) => {
-    const start = (mark.index ?? 0) + mark[0].length + 1;
-    const end = index + 1 < marks.length ? marks[index + 1].index ?? text.length : text.length;
-    sections.set(mark[1], text.slice(start, end).replace(/\s+$/, ""));
-  });
-  return sections;
+  return new Map(markedSections(text, "PXEINV").map((item) => [item.head, item.body.replace(/\s+$/, "")]));
 }
 
 interface DmiBlock {

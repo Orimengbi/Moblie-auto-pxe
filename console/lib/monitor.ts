@@ -2,9 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { applyFindings, type Finding } from "./alerts.ts";
 import { assetBmcAccounts } from "./assets.ts";
-import { db } from "./db.ts";
-import { defaultIpmiExec, ipmiFailure, type IpmiExec } from "./ipmi-remote.ts";
+import { db, getSetting, putSetting } from "./db.ts";
+import { defaultIpmiExec, firstWorkingAccount, ipmiFailure, type IpmiExec } from "./ipmi-remote.ts";
 import { dataDir } from "./paths.ts";
+import { markedSections } from "./process.ts";
 import type { Asset, AssetStatus, DiskHealth, GpuHealth, MonitorSettings, MonitorState, SelEntry, SensorReading } from "./types.ts";
 
 /**
@@ -23,14 +24,7 @@ export const DEFAULT_MONITOR: MonitorSettings = {
 };
 
 export function getMonitorSettings(): MonitorSettings {
-  const row = db().prepare("SELECT value FROM settings WHERE key = 'monitor'").get();
-  let saved: Partial<MonitorSettings> = {};
-  try {
-    saved = row ? JSON.parse(String(row.value)) : {};
-  } catch {
-    saved = {};
-  }
-  return { ...DEFAULT_MONITOR, ...saved };
+  return { ...DEFAULT_MONITOR, ...getSetting<Partial<MonitorSettings>>("monitor") };
 }
 
 const STATUSES: AssetStatus[] = ["stock", "racked", "installing", "pending", "active", "repair", "offline", "scrapped"];
@@ -53,7 +47,7 @@ export function saveMonitorSettings(input: Partial<MonitorSettings>): MonitorSet
     ignoreSensors: String(input.ignoreSensors ?? current.ignoreSensors).slice(0, 2000),
     bmcFailuresToAlert: int(input.bmcFailuresToAlert, current.bmcFailuresToAlert, 1, 20, "BMC 连不上几次报警"),
   };
-  db().prepare("INSERT INTO settings (key, value) VALUES ('monitor', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify(next));
+  putSetting("monitor", next);
   return next;
 }
 
@@ -161,11 +155,7 @@ echo "===PXEMON end"
 `;
 
 function section(text: string, name: string): string {
-  const start = text.indexOf(`===PXEMON ${name}\n`);
-  if (start < 0) return "";
-  const rest = text.slice(start + name.length + 11);
-  const end = rest.indexOf("===PXEMON ");
-  return end < 0 ? rest : rest.slice(0, end);
+  return markedSections(text, "PXEMON").find((item) => item.head === name)?.body || "";
 }
 
 export function parseGpus(text: string): { gpus: GpuHealth[]; error: string; present: boolean } {
@@ -305,24 +295,21 @@ export async function checkBmc(asset: Asset, settings: MonitorSettings, exec: Mo
   const accounts = assetBmcAccounts(asset);
   const findings: Finding[] = [];
   const scopes: string[] = ["bmc:"];
-  let account = accounts[0];
+  let account: { user: string; password: string } | null = null;
   let failure = "";
-  if (!asset.bmcIp || !account) {
+  if (!asset.bmcIp || !accounts.length) {
     failure = !asset.bmcIp ? "没有 BMC 地址" : "没有 BMC 账号密码";
   } else {
-    let probe = await exec(asset.bmcIp, account.user, account.password, ["chassis", "power", "status"]);
-    if (probe.code !== 0 && accounts[1] && ipmiFailure(probe.stderr) === "denied") {
-      account = accounts[1];
-      probe = await exec(asset.bmcIp, account.user, account.password, ["chassis", "power", "status"]);
-    }
-    if (probe.code !== 0) failure = ipmiFailure(probe.stderr) === "denied" ? `BMC ${asset.bmcIp} 不接受资产里的账号密码` : `BMC ${asset.bmcIp} 没有回应`;
+    const found = await firstWorkingAccount(asset.bmcIp, accounts, exec);
+    account = found.account;
+    if (!account) failure = ipmiFailure(found.result.stderr) === "denied" ? `BMC ${asset.bmcIp} 不接受资产里的账号密码` : `BMC ${asset.bmcIp} 没有回应`;
   }
 
-  if (failure) {
+  if (failure || !account) {
     state.bmcOk = false;
     state.bmcError = failure;
     state.bmcFailures += 1;
-    if (asset.bmcIp && account && state.bmcFailures >= settings.bmcFailuresToAlert) {
+    if (asset.bmcIp && accounts.length && state.bmcFailures >= settings.bmcFailuresToAlert) {
       findings.push({ key: "bmc:down", source: "bmc", severity: "warning", title: "BMC 连不上", detail: `${failure}，连续 ${state.bmcFailures} 次` });
     }
     saveState(state);

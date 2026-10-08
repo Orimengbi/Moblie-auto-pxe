@@ -303,3 +303,53 @@ export function transaction<T>(database: Database, fn: () => T): T {
     depth--;
   }
 }
+
+// ---------- 共用的小工具 ----------
+
+/** settings 表里存的 JSON。读不出来当没存。 */
+export function getSetting<T>(key: string): T | null {
+  const row = db().prepare("SELECT value FROM settings WHERE key = ?").get(key);
+  if (!row) return null;
+  try {
+    return JSON.parse(String(row.value)) as T;
+  } catch {
+    return null;
+  }
+}
+
+export function putSetting(key: string, value: unknown): void {
+  db().prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key, JSON.stringify(value));
+}
+
+class Preview<T> extends Error {
+  readonly result: T;
+  constructor(result: T) {
+    super("preview");
+    this.result = result;
+  }
+}
+
+/** 在一个事务里跑 fn。dryRun 时照常跑完拿到结果，然后整个撤销（批量导入的预览）。 */
+export function runOrPreview<T>(dryRun: boolean | undefined, fn: () => T): T {
+  try {
+    return transaction(db(), () => {
+      const result = fn();
+      if (dryRun) throw new Preview(result);
+      return result;
+    });
+  } catch (error) {
+    if (error instanceof Preview) return error.result as T;
+    throw error;
+  }
+}
+
+/** 某张表里某一列等于 value 的行数。表名、列名只由代码传常量。 */
+export function countWhere(table: string, column: string, value: string): number {
+  return Number(db().prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${column} = ?`).get(value)?.n ?? 0);
+}
+
+/** 代码（客户代码、机房代码）在这张表里不能重复。 */
+export function assertCodeFree(table: string, code: string, selfId: string | null, label: string): void {
+  const clash = db().prepare(`SELECT name FROM ${table} WHERE code = ? AND id != ?`).get(code, selfId || "");
+  if (clash) throw new Error(`${label} ${code} 已经给了「${clash.name}」`);
+}

@@ -1,4 +1,5 @@
-import { db, transaction, type SqlValue } from "./db.ts";
+import { assertCodeFree, countWhere, db, runOrPreview, transaction, type SqlValue } from "./db.ts";
+import { cleanCode, cleanName, cleanText } from "./validate.ts";
 import type { Rack, Site } from "./types.ts";
 
 /** 机房和机柜。资产放在哪个机柜、哪几个 U 记在资产上（rack_id、u_start、u_height），这里只管机房和机柜本身。 */
@@ -61,13 +62,10 @@ export interface SiteInput {
 }
 
 function cleanSite(input: SiteInput, id: string | null): Pick<Site, "code" | "name" | "address" | "note"> {
-  const code = String(input.code ?? "").trim().toUpperCase();
-  if (!/^[A-Z0-9_-]{1,16}$/.test(code)) throw new Error("机房代码需要 1 到 16 位字母、数字、- 或 _");
-  const name = String(input.name ?? "").trim();
-  if (!name || name.length > 80) throw new Error("机房名称需要 1 到 80 个字符");
-  const clash = db().prepare("SELECT name FROM sites WHERE code = ? AND id != ?").get(code, id || "");
-  if (clash) throw new Error(`机房代码 ${code} 已经给了「${clash.name}」`);
-  return { code, name, address: String(input.address ?? "").trim().slice(0, 200), note: String(input.note ?? "").trim().slice(0, 1000) };
+  const code = cleanCode(input.code, "机房代码");
+  const name = cleanName(input.name, "机房名称");
+  assertCodeFree("sites", code, id, "机房代码");
+  return { code, name, address: cleanText(input.address, 200), note: cleanText(input.note, 1000) };
 }
 
 export function createSite(input: SiteInput): Site {
@@ -88,7 +86,7 @@ export function updateSite(id: string, input: SiteInput): Site {
 export function deleteSite(id: string): Site {
   const site = getSite(id);
   if (!site) throw new Error("机房不存在");
-  const racks = Number(db().prepare("SELECT COUNT(*) AS n FROM racks WHERE site_id = ?").get(id)?.n ?? 0);
+  const racks = countWhere("racks", "site_id", id);
   if (racks) throw new Error(`「${site.name}」里还有 ${racks} 个机柜，先删掉机柜`);
   db().prepare("DELETE FROM sites WHERE id = ?").run(id);
   return site;
@@ -225,8 +223,6 @@ export interface RackImportRow {
   message: string;
 }
 
-class DryRun extends Error {}
-
 /**
  * Excel 导入机柜：一行一个。机房写代码或名称，没有机房列时用 defaultSiteId。同一机房里已经有这个机柜号的只改填了的格子。
  * dryRun 只预览。一行出错只跳过这一行。
@@ -238,7 +234,7 @@ export function importRacks(rows: unknown[][], defaultSiteId: string | null, opt
   const fields = (rows[headerAt] || []).map((cell) => RACK_HEADER[key(cell)]);
   const result = { rows: [] as RackImportRow[], created: 0, updated: 0, errors: 0 };
   const sites = listSites();
-  const run = () => {
+  return runOrPreview(options.dryRun, () => {
     for (let i = headerAt + 1; i < rows.length; i++) {
       const raw = rows[i] || [];
       if (!raw.some((cell) => String(cell ?? "").trim())) continue;
@@ -281,14 +277,8 @@ export function importRacks(rows: unknown[][], defaultSiteId: string | null, opt
       }
       result.rows.push(entry);
     }
-    if (options.dryRun) throw new DryRun();
-  };
-  try {
-    transaction(db(), run);
-  } catch (error) {
-    if (!(error instanceof DryRun)) throw error;
-  }
-  return result;
+    return result;
+  });
 }
 
 export function updateRack(id: string, input: RackInput): Rack {
@@ -303,7 +293,7 @@ export function updateRack(id: string, input: RackInput): Rack {
 export function deleteRack(id: string): Rack {
   const rack = getRack(id);
   if (!rack) throw new Error("机柜不存在");
-  const used = Number(db().prepare("SELECT COUNT(*) AS n FROM assets WHERE rack_id = ?").get(id)?.n ?? 0);
+  const used = countWhere("assets", "rack_id", id);
   if (used) throw new Error(`机柜 ${rack.name} 里还有 ${used} 台设备，先把它们挪走`);
   db().prepare("DELETE FROM racks WHERE id = ?").run(id);
   return rack;

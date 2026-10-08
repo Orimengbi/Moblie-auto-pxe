@@ -1,7 +1,7 @@
 import { ASSET_STATUS, ASSET_TYPES, renderTag, TAG_TOKEN as TOKEN, type WarrantyState } from "./asset-labels.ts";
 import { parseStatus, parseType, type SheetCells } from "./asset-sheet.ts";
-import { db, transaction, type SqlValue } from "./db.ts";
-import { assertDate } from "./validate.ts";
+import { assertCodeFree, countWhere, db, getSetting, putSetting, runOrPreview, transaction, type SqlValue } from "./db.ts";
+import { assertDate, cleanCode, cleanName, cleanText } from "./validate.ts";
 import { cachedRackFinder, getRack, listRacks, listSites, MAX_RACK_U, placeLabel } from "./racks.ts";
 import { assertIpv4, normalizeMac, normalizeSn } from "./net.ts";
 import type { Asset, AssetEvent, AssetStatus, AssetType, AuditEntry, Customer, PublicAsset, Rack, ServerRow, Site, TagSettings } from "./types.ts";
@@ -15,20 +15,6 @@ export const DEFAULT_TAG_SETTINGS: TagSettings = {
 };
 
 // ---------- 设置 ----------
-
-function getSetting<T>(key: string): T | null {
-  const row = db().prepare("SELECT value FROM settings WHERE key = ?").get(key);
-  if (!row) return null;
-  try {
-    return JSON.parse(String(row.value)) as T;
-  } catch {
-    return null;
-  }
-}
-
-function putSetting(key: string, value: unknown): void {
-  db().prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key, JSON.stringify(value));
-}
 
 export function getTagSettings(): TagSettings {
   const saved = getSetting<Partial<TagSettings>>("asset.tag");
@@ -106,13 +92,10 @@ export interface CustomerInput {
 }
 
 function cleanCustomer(input: CustomerInput, id: string | null): Pick<Customer, "code" | "name" | "contact" | "note"> {
-  const code = String(input.code ?? "").trim().toUpperCase();
-  if (!/^[A-Z0-9_-]{1,16}$/.test(code)) throw new Error("客户代码需要 1 到 16 位字母、数字、- 或 _");
-  const name = String(input.name ?? "").trim();
-  if (!name || name.length > 80) throw new Error("客户名称需要 1 到 80 个字符");
-  const clash = db().prepare("SELECT name FROM customers WHERE code = ? AND id != ?").get(code, id || "");
-  if (clash) throw new Error(`客户代码 ${code} 已经给了「${clash.name}」`);
-  return { code, name, contact: String(input.contact ?? "").trim().slice(0, 200), note: String(input.note ?? "").trim().slice(0, 1000) };
+  const code = cleanCode(input.code, "客户代码");
+  const name = cleanName(input.name, "客户名称");
+  assertCodeFree("customers", code, id, "客户代码");
+  return { code, name, contact: cleanText(input.contact, 200), note: cleanText(input.note, 1000) };
 }
 
 export function createCustomer(input: CustomerInput): Customer {
@@ -137,7 +120,7 @@ export function updateCustomer(id: string, input: CustomerInput): Customer {
 export function deleteCustomer(id: string): void {
   const customer = getCustomer(id);
   if (!customer) throw new Error("客户不存在");
-  const used = Number(db().prepare("SELECT COUNT(*) AS n FROM assets WHERE customer_id = ?").get(id)?.n ?? 0);
+  const used = countWhere("assets", "customer_id", id);
   if (used) throw new Error(`还有 ${used} 台资产归属「${customer.name}」，先把它们改到别的客户`);
   db().prepare("DELETE FROM customers WHERE id = ?").run(id);
   forgetTagContext();
@@ -290,9 +273,7 @@ export function assetBmcAccounts(asset: Pick<Asset, "bmcUser" | "bmcPassword" | 
 
 export type AssetInput = Partial<Omit<Asset, "id" | "seq" | "tag" | "createdAt" | "updatedAt">>;
 
-function text(value: unknown, max: number): string {
-  return String(value ?? "").replace(/[\r\0]/g, "").trim().slice(0, max);
-}
+const text = cleanText;
 
 /** 只校验给了的字段。密码给空字符串表示不改。 */
 function cleanAssetInput(input: AssetInput, current: AssetRecord | null): Partial<AssetRecord> {
@@ -518,8 +499,6 @@ export interface ImportResult {
   rows: ImportRowResult[];
 }
 
-class DryRun extends Error {}
-
 /**
  * Excel 批量导入。按序列号对上已有资产就改填了的格子，没有就入库。一行出错只撤销这一行，别的照常。
  * dryRun 时整个撤销，只返回会发生什么，给页面预览。
@@ -535,7 +514,7 @@ export function importAssets(records: { row: number; cells: SheetCells }[], acto
   const seen = new Map<string, number>();
   // 机柜查找表整个导入只建一次（导入资产不会改机柜）。
   const rackFinder = cachedRackFinder();
-  const run = () => {
+  return runOrPreview(options.dryRun, () => {
     for (const record of records) {
       const cells = record.cells;
       let sn = cells.sn || "";
@@ -603,14 +582,8 @@ export function importAssets(records: { row: number; cells: SheetCells }[], acto
         result.rows.push({ row: record.row, sn, action: "error", message: error instanceof Error ? error.message : "这一行不对" });
       }
     }
-    if (options.dryRun) throw new DryRun();
-  };
-  try {
-    transaction(db(), run);
-  } catch (error) {
-    if (!(error instanceof DryRun)) throw error;
-  }
-  return result;
+    return result;
+  });
 }
 
 export function deleteAsset(id: string): Asset {

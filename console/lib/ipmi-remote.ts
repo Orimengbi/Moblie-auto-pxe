@@ -1,7 +1,5 @@
-import { spawn } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { runProcess, withSecretDir } from "./process.ts";
 
 export interface IpmiExecResult {
   code: number;
@@ -188,48 +186,39 @@ export async function powerStatus(host: string, username: string, password: stri
   return parsePowerStatus(result.stdout);
 }
 
-/** timeoutMs 默认 20 秒；读整张传感器表（sdr）要给长一点。 */
+/** timeoutMs 默认 20 秒；读整张传感器表（sdr）要给长一点。密码经临时文件（-f）给，不出现在命令行里。 */
 export async function defaultIpmiExec(host: string, username: string, password: string, args: string[], timeoutMs = 20000): Promise<IpmiExecResult> {
-  // 每次一个独立的临时目录：监控会在同一毫秒里并发查好几台，按时间起名会撞。
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pxe-ipmi-"));
-  const file = path.join(dir, "pw");
-  fs.writeFileSync(file, password, { mode: 0o600 });
-  try {
-    // -v 让 ipmitool 说出登录失败的原因，见 ipmiFailure。
-    return await runIpmitool(["-v", "-I", "lanplus", "-H", host, "-U", username, "-f", file, ...args], timeoutMs);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+  return withSecretDir(
+    "pxe-ipmi-",
+    () => ({ pw: password }),
+    async (dir) => {
+      let result;
+      try {
+        // -v 让 ipmitool 说出登录失败的原因，见 ipmiFailure。
+        result = await runProcess("ipmitool", ["-v", "-I", "lanplus", "-H", host, "-U", username, "-f", path.join(dir, "pw"), ...args], { timeoutMs });
+      } catch (error) {
+        throw (error as NodeJS.ErrnoException).code === "ENOENT" ? new Error("小主机没有 ipmitool，无法连 BMC") : error;
+      }
+      const noise = /^(Loading IANA PEN Registry\.\.\.|Using best available cipher suite \d+)$/;
+      return { code: result.code ?? 1, stdout: result.stdout, stderr: result.stderr.split("\n").filter((line) => line.trim() && !noise.test(line.trim())).join("\n") };
+    },
+  );
 }
 
-function runIpmitool(args: string[], timeoutMs: number): Promise<IpmiExecResult> {
-  return new Promise((resolve, reject) => {
-    const child = spawn("ipmitool", args, { stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-    }, timeoutMs);
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    child.on("error", (error: NodeJS.ErrnoException) => {
-      clearTimeout(timer);
-      if (error.code === "ENOENT") {
-        reject(new Error("小主机没有 ipmitool，无法修改 BMC 账号"));
-        return;
-      }
-      reject(error);
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      const noise = /^(Loading IANA PEN Registry\.\.\.|Using best available cipher suite \d+)$/;
-      resolve({ code: code ?? 1, stdout, stderr: stderr.split("\n").filter((line) => line.trim() && !noise.test(line.trim())).join("\n") });
-    });
-  });
+/**
+ * 按顺序试账号：前一个是被拒（不是连不上）才试下一个。用 chassis power status 探，结果里带着开关机状态。
+ * account 为 null 表示都没成功，result 是最后一次的结果。
+ */
+export async function firstWorkingAccount(
+  host: string,
+  accounts: { user: string; password: string }[],
+  exec: IpmiExec,
+): Promise<{ account: { user: string; password: string } | null; result: IpmiExecResult }> {
+  let result: IpmiExecResult = { code: 1, stdout: "", stderr: "没有账号" };
+  for (const account of accounts) {
+    result = await exec(host, account.user, account.password, ["chassis", "power", "status"]);
+    if (result.code === 0) return { account, result };
+    if (ipmiFailure(result.stderr) !== "denied") break;
+  }
+  return { account: null, result };
 }
