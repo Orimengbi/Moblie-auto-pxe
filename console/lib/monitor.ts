@@ -5,7 +5,7 @@ import { assetBmcAccounts } from "./assets.ts";
 import { db, getSetting, putSetting } from "./db.ts";
 import { defaultIpmiExec, firstWorkingAccount, ipmiFailure, type IpmiExec } from "./ipmi-remote.ts";
 import { dataDir } from "./paths.ts";
-import { markedSections } from "./process.ts";
+import { markedSections } from "./sections.ts";
 import type { Asset, AssetStatus, DiskHealth, GpuHealth, MonitorSettings, MonitorState, SelEntry, SensorReading } from "./types.ts";
 
 /**

@@ -3,7 +3,7 @@ import { OPTICS_BODY, opticsComponents, parseOptics } from "./optics.ts";
 import { parseOsPorts, PORTS_BODY } from "./ports.ts";
 import { buildTopology } from "./topology.ts";
 import type { BaselineIssue, BaselineRule, HwChange, HwComponent, HwKind, HwPort, InventorySource, Topology } from "./types.ts";
-import { markedSections } from "./process.ts";
+import { markedSections } from "./sections.ts";
 
 /**
  * 整机硬件清单：系统里采集的脚本和解析、Redfish 文档到部件的转换、两次采集的比对、基准配置。

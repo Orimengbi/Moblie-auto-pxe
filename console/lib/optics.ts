@@ -1,5 +1,5 @@
 import type { HwComponent, OpticsPort } from "./types.ts";
-import { markedSections } from "./process.ts";
+import { markedSections } from "./sections.ts";
 
 /**
  * 光模块：型号、序列号和收发光强度。NVIDIA/Mellanox 的网卡用 mlxlink 读（CMIS 的 OSFP/QSFP-DD 也能解），
