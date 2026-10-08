@@ -4,22 +4,20 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
+import { NativeSelect } from "@/components/ui/native-select";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ALERT_SEVERITY, ALERT_SOURCE, ALERT_STATUS } from "@/lib/asset-labels";
 import type { Alert } from "@/lib/types";
 import { formatTime } from "@/lib/time";
-
-const SELECT = "h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm";
+import { api } from "@/lib/client-api";
 
 export type AlertRow = Alert & { assetTag: string; assetSn: string };
 
 export async function alertAction(id: number, action: "ack" | "resolve" | "ticket"): Promise<{ error: string; ticketId?: string }> {
-  const response = await fetch(`/api/alerts/${id}/${action}`, { method: "POST" }).catch(() => null);
-  const body = await response?.json().catch(() => ({}));
-  if (!response?.ok) return { error: body?.error || "没有连上控制台" };
-  return { error: "", ticketId: action === "ticket" ? body.id : undefined };
+  const result = await api<{ id?: string }>(`/api/alerts/${id}/${action}`, "POST");
+  return { error: result.error, ticketId: result.ok && action === "ticket" ? result.data.id : undefined };
 }
 
 function when(at: string): string {
@@ -69,27 +67,27 @@ export function AlertBoard({ alerts, summary }: { alerts: AlertRow[]; summary: s
       <p className="text-sm text-muted-foreground">{summary}</p>
       <div className="flex flex-wrap items-center gap-2">
         <Input className="h-8 w-56" placeholder="搜标题、资产、详情…" value={q} onChange={(event) => setQ(event.target.value)} />
-        <select className={SELECT} value={status} onChange={(event) => setStatus(event.target.value)}>
+        <NativeSelect value={status} onChange={(event) => setStatus(event.target.value)}>
           <option value="open">没恢复的</option>
           <option value="resolved">已恢复的</option>
           <option value="all">全部</option>
-        </select>
-        <select className={SELECT} value={severity} onChange={(event) => setSeverity(event.target.value)}>
+        </NativeSelect>
+        <NativeSelect value={severity} onChange={(event) => setSeverity(event.target.value)}>
           <option value="">全部级别</option>
           {Object.entries(ALERT_SEVERITY).map(([value, label]) => (
             <option key={value} value={value}>
               {label}
             </option>
           ))}
-        </select>
-        <select className={SELECT} value={source} onChange={(event) => setSource(event.target.value)}>
+        </NativeSelect>
+        <NativeSelect value={source} onChange={(event) => setSource(event.target.value)}>
           <option value="">全部来源</option>
           {Object.entries(ALERT_SOURCE).map(([value, label]) => (
             <option key={value} value={value}>
               {label}
             </option>
           ))}
-        </select>
+        </NativeSelect>
       </div>
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
       <div className="overflow-x-auto">

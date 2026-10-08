@@ -2,34 +2,27 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { ImportDialog } from "@/components/import-dialog";
 import { ServerSidebar } from "@/components/server-sidebar";
+import { NativeSelect } from "@/components/ui/native-select";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import type { AssetRow } from "@/lib/asset-view";
 import { ASSET_STATUS } from "@/lib/asset-labels";
+import type { RackImportRow } from "@/lib/racks";
 import type { AssetStatus, Rack, Site } from "@/lib/types";
+import { Labeled } from "@/components/ui/labeled";
+import { api } from "@/lib/client-api";
 
 const U_PX = 20;
-const SELECT = "h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm";
-
 /** 设备块的颜色按状态：在用实心，维修醒目，其余浅色。 */
 function tone(status: AssetStatus): string {
   if (status === "active") return "bg-primary text-primary-foreground border-primary";
   if (status === "repair") return "bg-destructive/15 text-destructive border-destructive";
   if (status === "offline" || status === "scrapped") return "bg-muted text-muted-foreground border-dashed border-border";
   return "bg-secondary text-secondary-foreground border-border";
-}
-
-async function send(url: string, method: string, body?: unknown): Promise<{ ok: boolean; data: Record<string, unknown> }> {
-  const response = await fetch(url, {
-    method,
-    headers: body ? { "content-type": "application/json" } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
-  }).catch(() => null);
-  const data = ((await response?.json().catch(() => ({}))) || {}) as Record<string, unknown>;
-  return { ok: Boolean(response?.ok), data: response ? data : { error: "没有连上控制台" } };
 }
 
 /** 机房页：选一个机房，它的机柜并排显示，U1 在最下面。点设备看资产，点空 U 位放一台进去。 */
@@ -79,15 +72,15 @@ export function RackBoard({ sites, racks, assets }: { sites: Site[]; racks: Rack
 
   async function removeRack(rack: Rack) {
     if (!window.confirm(`删除机柜 ${rack.name}？`)) return;
-    const result = await send(`/api/racks/${rack.id}`, "DELETE");
-    setError(result.ok ? "" : String(result.data.error || "删除失败"));
+    const result = await api(`/api/racks/${rack.id}`, "DELETE");
+    setError(result.ok ? "" : result.error);
     router.refresh();
   }
 
   async function removeSite(target: Site) {
     if (!window.confirm(`删除机房「${target.name}」？`)) return;
-    const result = await send(`/api/sites/${target.id}`, "DELETE");
-    setError(result.ok ? "" : String(result.data.error || "删除失败"));
+    const result = await api(`/api/sites/${target.id}`, "DELETE");
+    setError(result.ok ? "" : result.error);
     router.refresh();
   }
 
@@ -260,14 +253,6 @@ function RackColumn({
   );
 }
 
-function Labeled({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="grid gap-1.5 text-sm">
-      <span className="font-medium">{label}</span>
-      {children}
-    </label>
-  );
-}
 
 function SiteDialog({ site, onClose, onSaved }: { site: Site | "new" | null; onClose: () => void; onSaved: (id: string) => void }) {
   const editing = site && site !== "new" ? site : null;
@@ -281,9 +266,9 @@ function SiteDialog({ site, onClose, onSaved }: { site: Site | "new" | null; onC
 
   async function save(event: React.FormEvent) {
     event.preventDefault();
-    const result = await send(editing ? `/api/sites/${editing.id}` : "/api/sites", editing ? "PATCH" : "POST", form);
+    const result = await api(editing ? `/api/sites/${editing.id}` : "/api/sites", editing ? "PATCH" : "POST", form);
     if (!result.ok) {
-      setError(String(result.data.error || "保存失败"));
+      setError(result.error);
       return;
     }
     onSaved(String(result.data.id));
@@ -366,12 +351,12 @@ function RackDialog({ rack, sites, siteId, onClose, onSaved }: { rack: Rack | "n
     event.preventDefault();
     const base = { siteId: form.siteId, rowLabel: form.rowLabel, heightU: Number(form.heightU), powerKw: form.powerKw, note: form.note };
     const result = editing
-      ? await send(`/api/racks/${editing.id}`, "PATCH", { ...base, name: form.name })
+      ? await api(`/api/racks/${editing.id}`, "PATCH", { ...base, name: form.name })
       : batch
-        ? await send("/api/racks", "POST", { ...base, prefix: form.prefix, from: Number(form.from), to: Number(form.to), pad: Number(form.pad) })
-        : await send("/api/racks", "POST", { ...base, name: form.name });
+        ? await api("/api/racks", "POST", { ...base, prefix: form.prefix, from: Number(form.from), to: Number(form.to), pad: Number(form.pad) })
+        : await api("/api/racks", "POST", { ...base, name: form.name });
     if (!result.ok) {
-      setError(String(result.data.error || "保存失败"));
+      setError(result.error);
       return;
     }
     onSaved();
@@ -400,13 +385,13 @@ function RackDialog({ rack, sites, siteId, onClose, onSaved }: { rack: Rack | "n
           ) : null}
           <div className="grid gap-3 sm:grid-cols-2">
             <Labeled label="机房">
-              <select className={SELECT} {...field("siteId")}>
+              <NativeSelect {...field("siteId")}>
                 {sites.map((site) => (
                   <option key={site.id} value={site.id}>
                     {site.code} · {site.name}
                   </option>
                 ))}
-              </select>
+              </NativeSelect>
             </Labeled>
             {batch ? (
               <Labeled label="前缀（一排一个）">
@@ -487,9 +472,9 @@ function PlaceDialog({ target, assets, occupied, onClose, onSaved }: { target: {
   async function save(event: React.FormEvent) {
     event.preventDefault();
     if (!target || !assetId) return;
-    const result = await send(`/api/assets/${assetId}`, "PATCH", { rackId: target.rack.id, uStart: target.u, uHeight: Number(height) });
+    const result = await api(`/api/assets/${assetId}`, "PATCH", { rackId: target.rack.id, uStart: target.u, uHeight: Number(height) });
     if (!result.ok) {
-      setError(String(result.data.error || "放不进去"));
+      setError(result.error);
       return;
     }
     onSaved();
@@ -510,8 +495,7 @@ function PlaceDialog({ target, assets, occupied, onClose, onSaved }: { target: {
           {candidates.length === 0 ? (
             <p className="text-sm text-muted-foreground">所有资产都已经放进机柜了。</p>
           ) : (
-            <select
-              className={`${SELECT} h-40`}
+            <NativeSelect className="h-40"
               size={8}
               value={assetId}
               onChange={(event) => {
@@ -527,7 +511,7 @@ function PlaceDialog({ target, assets, occupied, onClose, onSaved }: { target: {
                   {asset.customerName ? ` · ${asset.customerName}` : ""}
                 </option>
               ))}
-            </select>
+            </NativeSelect>
           )}
           <Labeled label="占用 U">
             <Input type="number" min={1} max={room || 1} value={height} onChange={(event) => setHeight(event.target.value)} className="w-28" />
@@ -548,123 +532,20 @@ function PlaceDialog({ target, assets, occupied, onClose, onSaved }: { target: {
   );
 }
 
-type RackImportResult = { rows: { row: number; site: string; name: string; action: "create" | "update" | "same" | "error"; message: string }[]; created: number; updated: number; errors: number };
-
-const IMPORT_ACTION = { create: "新建", update: "更新", same: "没变", error: "出错" };
-
-/** Excel 导入机柜：先预览，确认后写入。没有「机房」列的行放到当前机房。 */
+/** Excel 导入机柜。没有「机房」列的行放到当前机房。 */
 function RackImportDialog({ open, siteId, siteCode, onClose, onDone }: { open: boolean; siteId: string; siteCode: string; onClose: () => void; onDone: () => void }) {
-  const [file, setFile] = useState<File | null>(null);
-  const [preview, setPreview] = useState<RackImportResult | null>(null);
-  const [done, setDone] = useState<RackImportResult | null>(null);
-  const [error, setError] = useState("");
-  const [pending, setPending] = useState(false);
-
-  function reset() {
-    setFile(null);
-    setPreview(null);
-    setDone(null);
-    setError("");
-  }
-
-  async function upload(target: File, dryRun: boolean) {
-    setPending(true);
-    setError("");
-    const form = new FormData();
-    form.set("file", target);
-    form.set("dryRun", dryRun ? "1" : "0");
-    form.set("siteId", siteId);
-    const response = await fetch("/api/racks/import", { method: "POST", body: form }).catch(() => null);
-    const body = await response?.json().catch(() => ({}));
-    setPending(false);
-    if (!response?.ok) {
-      setError(body?.error || "没有连上控制台");
-      return;
-    }
-    if (dryRun) setPreview(body as RackImportResult);
-    else {
-      setDone(body as RackImportResult);
-      onDone();
-    }
-  }
-
-  const result = done || preview;
   return (
-    <Dialog
+    <ImportDialog<RackImportRow>
       open={open}
-      onOpenChange={(next) => {
-        if (next || pending) return;
-        reset();
-        onClose();
-      }}
-    >
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>Excel 导入机柜</DialogTitle>
-          <DialogDescription>
-            一行一个机柜：机房（代码或名称，留空就放到当前的 {siteCode || "机房"}）、机柜号、列/排、高度U（留空 42）、额定功率、备注。同一机房已经有的机柜号只改填了的格子。先预览，确认后才写入。
-          </DialogDescription>
-        </DialogHeader>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button type="button" size="sm" variant="outline" onClick={() => window.location.assign("/api/racks/template")}>
-            下载模板
-          </Button>
-          {!done ? (
-            <input
-              type="file"
-              accept=".xlsx,.xls,.csv"
-              className="text-sm"
-              onChange={(event) => {
-                const picked = event.target.files?.[0] || null;
-                setFile(picked);
-                setPreview(null);
-                if (picked) void upload(picked, true);
-              }}
-            />
-          ) : null}
-          {pending ? <span className="text-sm text-muted-foreground">正在读表</span> : null}
-        </div>
-        {error ? <p className="text-sm text-destructive">{error}</p> : null}
-        {result ? (
-          <div className="grid gap-2">
-            <p className="text-sm">
-              {done ? "已导入：" : "预览，还没有写入："}新建 {result.created} 个，更新 {result.updated} 个
-              {result.errors ? <span className="text-destructive">，{result.errors} 行有问题{done ? "没有导入" : "，确认后跳过"}</span> : null}。
-            </p>
-            <ul className="grid max-h-72 gap-1 overflow-y-auto text-sm">
-              {result.rows
-                .filter((row) => row.action !== "same")
-                .map((row) => (
-                  <li key={row.row} className="grid grid-cols-[3.5rem_3rem_7rem_1fr] gap-2">
-                    <span className="text-xs text-muted-foreground">第 {row.row} 行</span>
-                    <span className={`text-xs ${row.action === "error" ? "text-destructive" : ""}`}>{IMPORT_ACTION[row.action]}</span>
-                    <span className="font-mono text-xs">
-                      {row.site} {row.name}
-                    </span>
-                    <span className={`text-xs ${row.action === "error" ? "text-destructive" : "text-muted-foreground"}`}>{row.message}</span>
-                  </li>
-                ))}
-            </ul>
-          </div>
-        ) : null}
-        <div className="flex justify-end gap-2">
-          {done ? (
-            <Button
-              type="button"
-              onClick={() => {
-                reset();
-                onClose();
-              }}
-            >
-              完成
-            </Button>
-          ) : (
-            <Button type="button" disabled={pending || !file || !preview || preview.created + preview.updated === 0} onClick={() => file && void upload(file, false)}>
-              {preview ? `确认导入 ${preview.created + preview.updated} 个` : "确认导入"}
-            </Button>
-          )}
-        </div>
-      </DialogContent>
-    </Dialog>
+      title="Excel 导入机柜"
+      description={`一行一个机柜：机房（代码或名称，留空就放到当前的 ${siteCode || "机房"}）、机柜号、列/排、高度U（留空 42）、额定功率、备注。同一机房已经有的机柜号只改填了的格子。先预览，确认后才写入。`}
+      endpoint="/api/racks/import"
+      links={[{ label: "下载模板", href: "/api/racks/template" }]}
+      fields={{ siteId }}
+      unit="个"
+      label={(row) => `${row.site} ${row.name}`.trim()}
+      onClose={onClose}
+      onDone={onDone}
+    />
   );
 }

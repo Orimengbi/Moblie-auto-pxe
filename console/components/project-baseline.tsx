@@ -8,6 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { ATTR_LABEL, KIND_LABEL, KIND_ORDER, SOURCE_LABEL } from "@/lib/inventory";
 import type { Baseline, BaselineRule, HwKind } from "@/lib/types";
 import { formatTime } from "@/lib/time";
+import { NativeSelect } from "@/components/ui/native-select";
 
 /** 装机批次的基准配置：从一台好机器生成后，在这里改数量、固件要求，删掉不想检查的条目。 */
 export function ProjectBaseline({ projectId, baseline, matched, mismatched }: { projectId: string; baseline: Baseline | null; matched: number; mismatched: number }) {
@@ -115,13 +116,13 @@ export function ProjectBaseline({ projectId, baseline, matched, mismatched }: { 
         </Table>
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <select className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm" value={kind} onChange={(event) => setKind(event.target.value as HwKind)}>
+        <NativeSelect value={kind} onChange={(event) => setKind(event.target.value as HwKind)}>
           {KIND_ORDER.map((value) => (
             <option key={value} value={value}>
               {KIND_LABEL[value]}
             </option>
           ))}
-        </select>
+        </NativeSelect>
         <Input className="h-8 w-72" value={model} placeholder="型号，和采集结果里的写法一致" onChange={(event) => setModel(event.target.value)} />
         <Button type="button" size="sm" variant="outline" onClick={add}>
           加一条

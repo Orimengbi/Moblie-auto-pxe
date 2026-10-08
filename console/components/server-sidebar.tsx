@@ -28,20 +28,27 @@ interface Row {
 
 type Tab = "overview" | "netports" | "monitor" | "tickets" | "hardware" | "changes" | "ports" | "topology" | "optics" | "history";
 
-/** 网络设备只有这几页：服务器的硬件、接口、拓扑、光模块页对它没意义。 */
-const NETWORK_TABS: Tab[] = ["overview", "netports", "changes", "monitor", "tickets", "history"];
+interface TabContext {
+  row: Row;
+  projectId?: string;
+  onChanged?: () => void;
+}
 
-const TABS: [Tab, string][] = [
-  ["netports", "端口"],
-  ["overview", "概况"],
-  ["monitor", "监控"],
-  ["tickets", "工单"],
-  ["hardware", "硬件配置"],
-  ["changes", "变更记录"],
-  ["ports", "接口"],
-  ["topology", "GPU / 网卡拓扑"],
-  ["optics", "光模块"],
-  ["history", "记录"],
+/**
+ * 每页的名字、给谁看、显示什么。where：server 只给服务器，network 只给网络设备，all 都有。
+ * 按这个顺序显示标签。
+ */
+const TABS: { id: Tab; label: string; where: "server" | "network" | "all"; render: (context: TabContext) => React.ReactNode }[] = [
+  { id: "netports", label: "端口", where: "network", render: ({ row }) => <NetworkDevice assetId={row.id} /> },
+  { id: "overview", label: "概况", where: "all", render: ({ row, onChanged }) => <AssetOverview assetId={row.id} onChanged={onChanged} /> },
+  { id: "monitor", label: "监控", where: "all", render: ({ row }) => <AssetMonitor assetId={row.id} /> },
+  { id: "tickets", label: "工单", where: "all", render: ({ row, onChanged }) => <AssetTickets asset={{ id: row.id, tag: row.tag || row.sn, sn: row.sn, model: "" }} onChanged={onChanged} /> },
+  { id: "hardware", label: "硬件配置", where: "server", render: ({ row, projectId }) => <ServerInventory projectId={projectId} row={row} /> },
+  { id: "changes", label: "变更记录", where: "all", render: ({ row }) => <ServerChanges row={row} /> },
+  { id: "ports", label: "接口", where: "server", render: ({ row }) => <ServerPorts row={row} /> },
+  { id: "topology", label: "GPU / 网卡拓扑", where: "server", render: ({ row }) => <ServerTopology row={row} /> },
+  { id: "optics", label: "光模块", where: "server", render: ({ row }) => <ServerOptics row={row} /> },
+  { id: "history", label: "记录", where: "all", render: ({ row }) => <AssetHistory assetId={row.id} /> },
 ];
 
 /**
@@ -52,8 +59,8 @@ export function ServerSidebar({ projectId, row, initialTab = "overview", onClose
   // 换一台机器时停在同一个标签上，方便一台台对比。
   const [tab, setTab] = useState<Tab>(initialTab);
   const network = Boolean(row?.type && row.type !== "server");
-  const tabs = TABS.filter(([value]) => (network ? NETWORK_TABS.includes(value) : value !== "netports"));
-  const current = tabs.some(([value]) => value === tab) ? tab : "overview";
+  const tabs = TABS.filter((item) => item.where === "all" || item.where === (network ? "network" : "server"));
+  const current = tabs.find((item) => item.id === tab) || tabs.find((item) => item.id === "overview")!;
   return (
     <Sheet
       open={Boolean(row)}
@@ -73,25 +80,15 @@ export function ServerSidebar({ projectId, row, initialTab = "overview", onClose
               <SheetTitle className="font-mono">{row.sn}</SheetTitle>
               <SheetDescription>{row.description}</SheetDescription>
               <div className="mt-2 flex flex-wrap gap-1">
-                {tabs.map(([value, label]) => (
-                  <Button key={value} type="button" size="sm" variant={current === value ? "default" : "ghost"} onClick={() => setTab(value)}>
-                    {label}
+                {tabs.map((item) => (
+                  <Button key={item.id} type="button" size="sm" variant={current.id === item.id ? "default" : "ghost"} onClick={() => setTab(item.id)}>
+                    {item.label}
                   </Button>
                 ))}
               </div>
             </SheetHeader>
-            <SheetBody>
-              {current === "netports" ? <NetworkDevice key={row.id} assetId={row.id} /> : null}
-              {current === "overview" ? <AssetOverview key={row.id} assetId={row.id} onChanged={onChanged} /> : null}
-              {current === "monitor" ? <AssetMonitor key={row.id} assetId={row.id} /> : null}
-              {current === "tickets" ? <AssetTickets key={row.id} asset={{ id: row.id, tag: row.tag || row.sn, sn: row.sn, model: "" }} onChanged={onChanged} /> : null}
-              {current === "hardware" ? <ServerInventory key={row.id} projectId={projectId} row={row} /> : null}
-              {current === "changes" ? <ServerChanges key={row.id} row={row} /> : null}
-              {current === "ports" ? <ServerPorts key={row.id} row={row} /> : null}
-              {current === "topology" ? <ServerTopology key={row.id} row={row} /> : null}
-              {current === "optics" ? <ServerOptics key={row.id} row={row} /> : null}
-              {current === "history" ? <AssetHistory key={row.id} assetId={row.id} /> : null}
-            </SheetBody>
+            {/* 换台时用 key 让这一页重新挂载、重新读数据。 */}
+            <SheetBody key={`${row.id}-${current.id}`}>{current.render({ row, projectId, onChanged })}</SheetBody>
           </>
         ) : null}
       </SheetContent>

@@ -1,12 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { NativeSelect } from "@/components/ui/native-select";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { ASSET_STATUS, ASSET_TYPES } from "@/lib/asset-labels";
 import type { AssetStatus, AssetType, Customer, PublicAsset, PublicSnmpProfile, Rack, Site } from "@/lib/types";
+import { Labeled } from "@/components/ui/labeled";
 
 /** 表单里的值都按文字存，密码留空表示不改。 */
 type Form = {
@@ -84,8 +86,6 @@ function formOf(asset: PublicAsset | null): Form {
     note: asset?.note || "",
   };
 }
-
-const SELECT = "h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm";
 
 /** 新建或修改一台资产。asset 为空是新建。 */
 export function AssetEditDialog({
@@ -173,22 +173,22 @@ export function AssetEditDialog({
               <Input {...field("sn")} required className="font-mono" />
             </Labeled>
             <Labeled label="类型">
-              <select className={SELECT} {...field("type")}>
+              <NativeSelect {...field("type")}>
                 {Object.entries(ASSET_TYPES).map(([value, label]) => (
                   <option key={value} value={value}>
                     {label}
                   </option>
                 ))}
-              </select>
+              </NativeSelect>
             </Labeled>
             <Labeled label="状态">
-              <select className={SELECT} {...field("status")}>
+              <NativeSelect {...field("status")}>
                 {Object.entries(ASSET_STATUS).map(([value, label]) => (
                   <option key={value} value={value}>
                     {label}
                   </option>
                 ))}
-              </select>
+              </NativeSelect>
             </Labeled>
             <Labeled label="厂商">
               <Input {...field("vendor")} placeholder="如 Gigabyte" />
@@ -203,14 +203,14 @@ export function AssetEditDialog({
 
           <Group title="归属">
             <Labeled label="归属客户">
-              <select className={SELECT} {...field("customerId")}>
+              <NativeSelect {...field("customerId")}>
                 <option value="">无（自有）</option>
                 {customers.map((customer) => (
                   <option key={customer.id} value={customer.id}>
                     {customer.code} · {customer.name}
                   </option>
                 ))}
-              </select>
+              </NativeSelect>
             </Labeled>
             <Labeled label="负责人">
               <Input {...field("owner")} />
@@ -219,17 +219,17 @@ export function AssetEditDialog({
 
           <Group title="位置">
             <Labeled label="机房">
-              <select className={SELECT} value={form.siteId} onChange={(event) => setForm({ ...form, siteId: event.target.value, rackId: "", uStart: "" })}>
+              <NativeSelect value={form.siteId} onChange={(event) => setForm({ ...form, siteId: event.target.value, rackId: "", uStart: "" })}>
                 {sites.length ? null : <option value="">还没有机房</option>}
                 {sites.map((site) => (
                   <option key={site.id} value={site.id}>
                     {site.code} · {site.name}
                   </option>
                 ))}
-              </select>
+              </NativeSelect>
             </Labeled>
             <Labeled label="机柜">
-              <select className={SELECT} value={form.rackId} onChange={(event) => setForm({ ...form, rackId: event.target.value, uStart: event.target.value ? form.uStart : "" })}>
+              <NativeSelect value={form.rackId} onChange={(event) => setForm({ ...form, rackId: event.target.value, uStart: event.target.value ? form.uStart : "" })}>
                 <option value="">不在机柜里</option>
                 {racks
                   .filter((rack) => rack.siteId === form.siteId)
@@ -238,7 +238,7 @@ export function AssetEditDialog({
                       {rack.name}（{rack.heightU}U）
                     </option>
                   ))}
-              </select>
+              </NativeSelect>
             </Labeled>
             <span />
             <Labeled label="起始 U">
@@ -258,14 +258,14 @@ export function AssetEditDialog({
                 <Input {...field("mgmtIp")} className="font-mono" placeholder="交换机、PDU 的管理 IP" />
               </Labeled>
               <Labeled label="SNMP 凭据">
-                <select className={SELECT} {...field("snmpProfileId")}>
+                <NativeSelect {...field("snmpProfileId")}>
                   <option value="">不用 SNMP</option>
                   {profiles.map((profile) => (
                     <option key={profile.id} value={profile.id}>
                       {profile.name}（{profile.version}）
                     </option>
                   ))}
-                </select>
+                </NativeSelect>
               </Labeled>
               <span className="self-end pb-2 text-xs text-muted-foreground">{profiles.length ? "" : "凭据在「设置 → SNMP 凭据」里建"}</span>
             </Group>
@@ -367,11 +367,3 @@ function Group({ title, children }: { title: string; children: React.ReactNode }
   );
 }
 
-function Labeled({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="grid gap-1.5 text-sm">
-      <span className="font-medium">{label}</span>
-      {children}
-    </label>
-  );
-}

@@ -4,15 +4,13 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { HOST_SOURCE, TARGET } from "@/components/project-task-runner";
 import { Badge } from "@/components/ui/badge";
+import { taskTargetVariant } from "@/lib/asset-labels";
 import { Button } from "@/components/ui/button";
 import type { RemoteTask, TaskTargetStatus } from "@/lib/types";
 import { formatTime } from "@/lib/time";
 
 const KIND: Record<RemoteTask["kind"], string> = { script: "执行脚本", inventory: "采集硬件配置", revoke: "交付清理" };
 
-function variant(status: TaskTargetStatus): "default" | "outline" | "destructive" {
-  return status === "ok" ? "default" : status === "running" || status === "pending" ? "outline" : "destructive";
-}
 
 /** 一个批量任务的详情：每台机器的状态、地址、退出码和输出。执行中每 3 秒刷新。 */
 export function TaskDetail({ initial, project, tags }: { initial: RemoteTask; project: { id: string; name: string } | null; tags: Record<string, string> }) {
@@ -92,7 +90,7 @@ export function TaskDetail({ initial, project, tags }: { initial: RemoteTask; pr
                 className="flex w-full flex-wrap items-center gap-2 px-3 py-2 text-left text-sm"
                 onClick={() => setOpen(expanded ? open.filter((id) => id !== target.serverId) : [...open, target.serverId])}
               >
-                <Badge variant={variant(target.status)}>{TARGET[target.status]}</Badge>
+                <Badge variant={taskTargetVariant(target.status)}>{TARGET[target.status]}</Badge>
                 <span className="font-mono text-xs">{tags[target.serverId] ? `${tags[target.serverId]} · ` : ""}{target.sn}</span>
                 <span className="text-xs text-muted-foreground">
                   {target.host || "无地址"}

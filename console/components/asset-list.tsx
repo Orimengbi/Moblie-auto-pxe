@@ -10,6 +10,7 @@ import { ResizeHandle, useColumnWidths } from "@/components/resizable-columns";
 import { ServerPowerDialog } from "@/components/server-power-dialog";
 import { ServerSidebar } from "@/components/server-sidebar";
 import { Badge } from "@/components/ui/badge";
+import { NativeSelect } from "@/components/ui/native-select";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -17,8 +18,6 @@ import type { AssetRow } from "@/lib/asset-view";
 import { ASSET_STATUS, ASSET_TYPES, WARRANTY_LABEL } from "@/lib/asset-labels";
 import type { AssetStatus, Customer, RemoteFile, RemoteTask, Site } from "@/lib/types";
 import { formatTime } from "@/lib/time";
-
-const SELECT = "h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm";
 
 const COLUMNS = [
   { key: "select", label: "" },
@@ -160,15 +159,15 @@ export function AssetList({
     <div className="grid gap-4">
       <div className="flex flex-wrap items-center gap-2">
         <Input className="h-8 w-56" placeholder="搜编号、序列号、型号、IP…" value={filters.q} onChange={(event) => setFilter("q", event.target.value)} />
-        <select className={SELECT} value={filters.status} onChange={(event) => setFilter("status", event.target.value)}>
+        <NativeSelect value={filters.status} onChange={(event) => setFilter("status", event.target.value)}>
           <option value="">全部状态</option>
           {Object.entries(ASSET_STATUS).map(([value, label]) => (
             <option key={value} value={value}>
               {label}（{rows.filter((row) => row.status === value).length}）
             </option>
           ))}
-        </select>
-        <select className={SELECT} value={filters.customer} onChange={(event) => setFilter("customer", event.target.value)}>
+        </NativeSelect>
+        <NativeSelect value={filters.customer} onChange={(event) => setFilter("customer", event.target.value)}>
           <option value="">全部归属</option>
           <option value="none">无（自有）</option>
           {customers.map((customer) => (
@@ -176,8 +175,8 @@ export function AssetList({
               {customer.code} · {customer.name}
             </option>
           ))}
-        </select>
-        <select className={SELECT} value={filters.site} onChange={(event) => setFilter("site", event.target.value)}>
+        </NativeSelect>
+        <NativeSelect value={filters.site} onChange={(event) => setFilter("site", event.target.value)}>
           <option value="">全部机房</option>
           <option value="none">没放进机柜的</option>
           {sites.map((site) => (
@@ -185,15 +184,15 @@ export function AssetList({
               {site.code} · {site.name}
             </option>
           ))}
-        </select>
-        <select className={SELECT} value={filters.type} onChange={(event) => setFilter("type", event.target.value)}>
+        </NativeSelect>
+        <NativeSelect value={filters.type} onChange={(event) => setFilter("type", event.target.value)}>
           <option value="">全部类型</option>
           {Object.entries(ASSET_TYPES).map(([value, label]) => (
             <option key={value} value={value}>
               {label}
             </option>
           ))}
-        </select>
+        </NativeSelect>
         <label className="flex items-center gap-1.5 text-sm">
           <input type="checkbox" checked={Boolean(filters.warranty)} onChange={(event) => setFilter("warranty", event.target.checked ? "1" : "")} />
           只看过保和快到期的
@@ -223,18 +222,18 @@ export function AssetList({
         </span>
         {picked.length ? (
           <>
-            <select className={SELECT} value={bulkStatus} onChange={(event) => setBulkStatus(event.target.value)}>
+            <NativeSelect value={bulkStatus} onChange={(event) => setBulkStatus(event.target.value)}>
               <option value="">改状态为…</option>
               {Object.entries(ASSET_STATUS).map(([value, label]) => (
                 <option key={value} value={value}>
                   {label}
                 </option>
               ))}
-            </select>
+            </NativeSelect>
             <Button type="button" size="xs" variant="outline" disabled={!bulkStatus} onClick={() => void bulkUpdate({ status: bulkStatus }, `改成「${ASSET_STATUS[bulkStatus as AssetStatus]}」`)}>
               改状态
             </Button>
-            <select className={SELECT} value={bulkCustomer} onChange={(event) => setBulkCustomer(event.target.value)}>
+            <NativeSelect value={bulkCustomer} onChange={(event) => setBulkCustomer(event.target.value)}>
               <option value="">改归属为…</option>
               <option value="none">无（自有）</option>
               {customers.map((customer) => (
@@ -242,7 +241,7 @@ export function AssetList({
                   {customer.code} · {customer.name}
                 </option>
               ))}
-            </select>
+            </NativeSelect>
             <Button
               type="button"
               size="xs"

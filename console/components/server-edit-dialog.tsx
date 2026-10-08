@@ -8,6 +8,8 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import type { ServerCells } from "@/lib/server-sheet";
 import type { ServerRow } from "@/lib/types";
+import { Labeled } from "@/components/ui/labeled";
+import { NativeSelect } from "@/components/ui/native-select";
 
 type EditableRow = Omit<ServerRow, "originalPassword" | "targetPassword">;
 
@@ -150,7 +152,7 @@ export function ServerEditDialog({
               <Input {...field("ipmiVlan")} placeholder="可留空" />
             </Labeled>
             <Labeled label="安装系统">
-              <select className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm" {...field("osName")} required>
+              <NativeSelect {...field("osName")} required>
                 <option value="">选择安装设置</option>
                 {osChoices.map((name) => (
                   <option key={name} value={name}>
@@ -158,7 +160,7 @@ export function ServerEditDialog({
                     {osNames.includes(name) ? "" : "（项目里没有这条安装设置）"}
                   </option>
                 ))}
-              </select>
+              </NativeSelect>
             </Labeled>
             <Labeled label="系统地址">
               <Input {...field("osAddress")} placeholder="可留空，留空不改系统网络" />
@@ -194,11 +196,3 @@ export function ServerEditDialog({
   );
 }
 
-function Labeled({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="grid gap-1.5 text-sm">
-      <span className="font-medium">{label}</span>
-      {children}
-    </label>
-  );
-}

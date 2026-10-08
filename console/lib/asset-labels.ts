@@ -93,3 +93,18 @@ export const OPEN_TICKET_STATUS: TicketStatus[] = ["open", "processing", "waitin
 export const ALERT_SEVERITY: Record<AlertSeverity, string> = { critical: "严重", warning: "警告" };
 export const ALERT_STATUS: Record<AlertStatus, string> = { active: "告警中", acked: "已确认", resolved: "已恢复" };
 export const ALERT_SOURCE: Record<AlertSource, string> = { sensor: "传感器", sel: "BMC 事件", bmc: "BMC", gpu: "GPU", xid: "GPU Xid", disk: "硬盘", snmp: "SNMP", port: "端口" };
+
+type BadgeVariant = "default" | "outline" | "destructive";
+
+/** 状态标签的配色：正常实心，进行中描边，出问题红色。各列表共用。 */
+export function partStatusVariant(status: PartStatus): BadgeVariant {
+  return status === "stock" ? "default" : status === "faulty" || status === "rma" ? "destructive" : "outline";
+}
+
+export function priorityVariant(priority: TicketPriority): BadgeVariant {
+  return priority === "urgent" ? "destructive" : priority === "high" ? "default" : "outline";
+}
+
+export function taskTargetVariant(status: string): BadgeVariant {
+  return status === "ok" ? "default" : status === "running" || status === "pending" ? "outline" : "destructive";
+}

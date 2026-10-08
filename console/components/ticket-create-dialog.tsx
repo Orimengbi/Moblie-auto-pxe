@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { NativeSelect } from "@/components/ui/native-select";
+import { useUserNames } from "@/components/use-user-names";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -8,14 +10,12 @@ import { Textarea } from "@/components/ui/textarea";
 import { TICKET_KINDS, TICKET_PRIORITY } from "@/lib/asset-labels";
 import type { Ticket } from "@/lib/types";
 
-const SELECT = "h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm";
-
 type AssetChoice = { id: string; tag: string; sn: string; model: string };
 
 /** 新建工单。从资产侧边栏打开时带上那台资产，从工单页打开时自己挑。 */
 export function TicketCreateDialog({ open, asset, onClose, onCreated }: { open: boolean; asset?: AssetChoice | null; onClose: () => void; onCreated: (ticket: Ticket) => void }) {
   const [assets, setAssets] = useState<AssetChoice[]>([]);
-  const [names, setNames] = useState<string[]>([]);
+  const names = useUserNames(open);
   const [q, setQ] = useState("");
   const [form, setForm] = useState({ assetId: "", title: "", kind: "fault", priority: "normal", assignee: "", vendorCase: "", description: "", setRepair: true });
   const [error, setError] = useState("");
@@ -26,10 +26,6 @@ export function TicketCreateDialog({ open, asset, onClose, onCreated }: { open: 
     setForm({ assetId: asset?.id || "", title: "", kind: "fault", priority: "normal", assignee: "", vendorCase: "", description: "", setRepair: true });
     setQ("");
     setError("");
-    void fetch("/api/users/names")
-      .then((response) => response.json())
-      .then((list: string[]) => setNames(Array.isArray(list) ? list : []))
-      .catch(() => undefined);
     if (!asset) {
       void fetch("/api/assets?light=1")
         .then((response) => response.json())
@@ -78,7 +74,7 @@ export function TicketCreateDialog({ open, asset, onClose, onCreated }: { open: 
             <div className="grid gap-1.5 text-sm">
               <span className="font-medium">资产</span>
               <Input placeholder="搜编号、序列号、型号…" value={q} onChange={(event) => setQ(event.target.value)} />
-              <select className={`${SELECT} h-28`} size={5} value={form.assetId} onChange={(event) => setForm({ ...form, assetId: event.target.value })}>
+              <NativeSelect className="h-28" size={5} value={form.assetId} onChange={(event) => setForm({ ...form, assetId: event.target.value })}>
                 <option value="">不关联资产</option>
                 {shown.map((item) => (
                   <option key={item.id} value={item.id}>
@@ -86,7 +82,7 @@ export function TicketCreateDialog({ open, asset, onClose, onCreated }: { open: 
                     {item.model ? ` · ${item.model}` : ""}
                   </option>
                 ))}
-              </select>
+              </NativeSelect>
             </div>
           ) : null}
           <label className="grid gap-1.5 text-sm">
@@ -96,23 +92,23 @@ export function TicketCreateDialog({ open, asset, onClose, onCreated }: { open: 
           <div className="grid gap-3 sm:grid-cols-3">
             <label className="grid gap-1.5 text-sm">
               <span className="font-medium">类型</span>
-              <select className={SELECT} {...field("kind")}>
+              <NativeSelect {...field("kind")}>
                 {Object.entries(TICKET_KINDS).map(([value, label]) => (
                   <option key={value} value={value}>
                     {label}
                   </option>
                 ))}
-              </select>
+              </NativeSelect>
             </label>
             <label className="grid gap-1.5 text-sm">
               <span className="font-medium">优先级</span>
-              <select className={SELECT} {...field("priority")}>
+              <NativeSelect {...field("priority")}>
                 {Object.entries(TICKET_PRIORITY).map(([value, label]) => (
                   <option key={value} value={value}>
                     {label}
                   </option>
                 ))}
-              </select>
+              </NativeSelect>
             </label>
             <label className="grid gap-1.5 text-sm">
               <span className="font-medium">负责人</span>

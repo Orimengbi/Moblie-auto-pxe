@@ -2,11 +2,11 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { NativeSelect } from "@/components/ui/native-select";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { PublicSnmpProfile } from "@/lib/types";
 
-const SELECT = "h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm";
 const BLANK = { name: "", version: "v2c", community: "", username: "", authProto: "SHA", authPass: "", privProto: "AES", privPass: "" };
 
 /** SNMP 凭据：交换机、PDU 选用其中一套。密码保存后不再显示，留空表示不改。 */
@@ -77,10 +77,10 @@ export function SnmpProfileManager({ profiles }: { profiles: PublicSnmpProfile[]
             </label>
             <label className="grid gap-1.5 text-sm">
               <span className="font-medium">版本</span>
-              <select className={SELECT} {...field("version")}>
+              <NativeSelect {...field("version")}>
                 <option value="v2c">v2c</option>
                 <option value="v3">v3</option>
-              </select>
+              </NativeSelect>
             </label>
             {form.version === "v2c" ? (
               <label className="grid gap-1.5 text-sm">
@@ -98,14 +98,14 @@ export function SnmpProfileManager({ profiles }: { profiles: PublicSnmpProfile[]
             <div className="grid gap-3 sm:grid-cols-4">
               <label className="grid gap-1.5 text-sm">
                 <span className="font-medium">认证</span>
-                <select className={SELECT} {...field("authProto")}>
+                <NativeSelect {...field("authProto")}>
                   <option value="">不认证</option>
                   {["MD5", "SHA", "SHA-256", "SHA-512"].map((value) => (
                     <option key={value} value={value}>
                       {value}
                     </option>
                   ))}
-                </select>
+                </NativeSelect>
               </label>
               <label className="grid gap-1.5 text-sm">
                 <span className="font-medium">认证密码</span>
@@ -113,14 +113,14 @@ export function SnmpProfileManager({ profiles }: { profiles: PublicSnmpProfile[]
               </label>
               <label className="grid gap-1.5 text-sm">
                 <span className="font-medium">加密</span>
-                <select className={SELECT} {...field("privProto")}>
+                <NativeSelect {...field("privProto")}>
                   <option value="">不加密</option>
                   {["DES", "AES", "AES-256"].map((value) => (
                     <option key={value} value={value}>
                       {value}
                     </option>
                   ))}
-                </select>
+                </NativeSelect>
               </label>
               <label className="grid gap-1.5 text-sm">
                 <span className="font-medium">加密密码</span>

@@ -3,10 +3,9 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { TicketCreateDialog } from "@/components/ticket-create-dialog";
-import { priorityVariant } from "@/components/ticket-list";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { PART_KINDS, TICKET_PRIORITY, TICKET_STATUS } from "@/lib/asset-labels";
+import { PART_KINDS, priorityVariant, TICKET_PRIORITY, TICKET_STATUS } from "@/lib/asset-labels";
 import type { Part, Ticket } from "@/lib/types";
 import { formatTime } from "@/lib/time";
 

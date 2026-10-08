@@ -8,6 +8,8 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { DISK_LABEL, DISK_MODE_LABEL, FAMILY_LABEL, type DiskMode, type DiskPartition, type DiskPick, type DiskPolicy, type ImageRecord, type PartitionFs } from "@/lib/types";
+import { Labeled } from "@/components/ui/labeled";
+import { NativeSelect } from "@/components/ui/native-select";
 
 interface PublicProfile {
   id: string;
@@ -240,12 +242,11 @@ export function ProfileManager({
                   : "安装会按磁盘策略清空目标盘。"}
               </DialogDescription>
             </DialogHeader>
-            <Field label="名称">
+            <Labeled label="名称">
               <Input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required />
-            </Field>
-            <Field label="镜像">
-              <select
-                className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm"
+            </Labeled>
+            <Labeled label="镜像">
+              <NativeSelect
                 value={form.imageId}
                 onChange={(event) => setForm({ ...form, imageId: event.target.value })}
               >
@@ -255,35 +256,33 @@ export function ProfileManager({
                     {image.kind === "disk" ? " · 整盘镜像" : ""}
                   </option>
                 ))}
-              </select>
-            </Field>
-            <Field label="主机名">
+              </NativeSelect>
+            </Labeled>
+            <Labeled label="主机名">
               <Input value={form.hostnamePattern} onChange={(event) => setForm({ ...form, hostnamePattern: event.target.value })} />
-            </Field>
+            </Labeled>
             <div className="grid gap-3 sm:grid-cols-2">
-              <Field label={diskImage ? "用户名（留空则用镜像里的账号）" : "用户名"}>
+              <Labeled label={diskImage ? "用户名（留空则用镜像里的账号）" : "用户名"}>
                 <Input value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} required={!diskImage} />
-              </Field>
-              <Field label={diskImage ? "密码（留空则不改密码）" : editing ? "新密码（留空则不变）" : "密码"}>
+              </Labeled>
+              <Labeled label={diskImage ? "密码（留空则不改密码）" : editing ? "新密码（留空则不变）" : "密码"}>
                 <Input type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} required={!editing && !diskImage} disabled={diskImage && !form.username.trim()} />
-              </Field>
+              </Labeled>
             </div>
             {diskImage ? (
-              <Field label="启动方式">
-                <select
-                  className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm"
+              <Labeled label="启动方式">
+                <NativeSelect
                   value={form.diskMode}
                   onChange={(event) => setForm({ ...form, diskMode: event.target.value as DiskMode })}
                 >
                   <option value="deploy">落盘部署（清空所选磁盘，写入镜像）</option>
                   <option value="live">内存运行（不碰硬盘，内存需大于根分区）</option>
-                </select>
-              </Field>
+                </NativeSelect>
+              </Labeled>
             ) : null}
             <div className="grid gap-3 sm:grid-cols-2">
-              <Field label={live ? "磁盘策略（菜单里手动选落盘时用）" : "磁盘策略"}>
-                <select
-                  className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm"
+              <Labeled label={live ? "磁盘策略（菜单里手动选落盘时用）" : "磁盘策略"}>
+                <NativeSelect
                   value={form.diskPolicy}
                   onChange={(event) => {
                     const diskPolicy = event.target.value as DiskPolicy;
@@ -301,25 +300,24 @@ export function ProfileManager({
                   <option value="smallest">最小的磁盘</option>
                   <option value="named">指定盘符</option>
                   {diskImage ? null : <option value="custom">自定义分区</option>}
-                </select>
-              </Field>
-              <Field label="盘符">
+                </NativeSelect>
+              </Labeled>
+              <Labeled label="盘符">
                 <Input value={form.diskName} disabled={form.diskPolicy !== "named" && !(form.diskPolicy === "custom" && form.diskPick === "named")} onChange={(event) => setForm({ ...form, diskName: event.target.value })} />
-              </Field>
+              </Labeled>
             </div>
             {form.diskPolicy === "custom" && !diskImage ? (
               <div className="grid gap-3">
-                <Field label="用哪块盘">
-                  <select
-                    className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm"
+                <Labeled label="用哪块盘">
+                  <NativeSelect
                     value={form.diskPick}
                     onChange={(event) => setForm({ ...form, diskPick: event.target.value as DiskPick })}
                   >
                     <option value="largest">最大的磁盘</option>
                     <option value="smallest">最小的磁盘</option>
                     <option value="named">指定盘符</option>
-                  </select>
-                </Field>
+                  </NativeSelect>
+                </Labeled>
                 <div className="grid gap-2">
                   <span className="text-sm font-medium">分区</span>
                   <p className="text-sm text-muted-foreground">大小填 MB。其中一个填 rest，表示用完这块盘的剩余空间。需要 EFI 时加上 /boot/efi。</p>
@@ -327,8 +325,7 @@ export function ProfileManager({
                     <div key={index} className="grid grid-cols-[1.2fr_0.8fr_0.8fr_auto] gap-2">
                       <Input value={part.mount} placeholder="/" onChange={(event) => updatePartition(index, { mount: event.target.value })} />
                       <Input value={part.size} placeholder="rest" onChange={(event) => updatePartition(index, { size: event.target.value })} />
-                      <select
-                        className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm"
+                      <NativeSelect
                         value={part.fs}
                         onChange={(event) => updatePartition(index, { fs: event.target.value as PartitionFs })}
                       >
@@ -336,7 +333,7 @@ export function ProfileManager({
                         <option value="xfs">xfs</option>
                         <option value="fat32">fat32</option>
                         <option value="swap">swap</option>
-                      </select>
+                      </NativeSelect>
                       <Button type="button" variant="ghost" size="sm" onClick={() => setForm({ ...form, partitions: form.partitions.filter((_, item) => item !== index) })}>
                         删除
                       </Button>
@@ -355,12 +352,11 @@ export function ProfileManager({
             ) : null}
             {diskImage ? null : (
               <>
-                <Field label="软件包，用逗号分隔">
+                <Labeled label="软件包，用逗号分隔">
                   <Input value={form.packages} onChange={(event) => setForm({ ...form, packages: event.target.value })} />
-                </Field>
-                <Field label="语言">
-                  <select
-                    className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm"
+                </Labeled>
+                <Labeled label="语言">
+                  <NativeSelect
                     value={form.locale}
                     onChange={(event) => setForm({ ...form, locale: event.target.value })}
                   >
@@ -369,11 +365,10 @@ export function ProfileManager({
                         {label} · {value}
                       </option>
                     ))}
-                  </select>
-                </Field>
-                <Field label="时区">
-                  <select
-                    className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm"
+                  </NativeSelect>
+                </Labeled>
+                <Labeled label="时区">
+                  <NativeSelect
                     value={form.timezone}
                     onChange={(event) => setForm({ ...form, timezone: event.target.value })}
                   >
@@ -382,18 +377,18 @@ export function ProfileManager({
                         {label} · {value}
                       </option>
                     ))}
-                  </select>
-                </Field>
+                  </NativeSelect>
+                </Labeled>
               </>
             )}
-            <Field label="安装后脚本">
+            <Labeled label="安装后脚本">
               <Textarea
                 value={form.postScript}
                 onChange={(event) => setForm({ ...form, postScript: event.target.value })}
                 rows={4}
                 placeholder={diskImage ? "可选。写盘后在新系统里以 root 执行（chroot），内存运行时不执行。" : "可选。在装好的系统里以 root 执行。"}
               />
-            </Field>
+            </Labeled>
             {error ? <p className="text-sm text-destructive">{error}</p> : null}
             <Button type="submit" disabled={pending}>
               {pending ? "保存中" : "保存配置"}
@@ -405,11 +400,3 @@ export function ProfileManager({
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="grid gap-1.5 text-sm">
-      <span className="font-medium">{label}</span>
-      {children}
-    </label>
-  );
-}

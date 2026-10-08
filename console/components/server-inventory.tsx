@@ -8,6 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { ATTR_LABEL, KIND_LABEL, KIND_ORDER, SOURCE_LABEL } from "@/lib/inventory";
 import type { Baseline, BaselineIssue, HwComponent, HwKind, InventoryMeta, InventorySnapshot, InventorySource, RemoteTask } from "@/lib/types";
 import { formatTime } from "@/lib/time";
+import { NativeSelect } from "@/components/ui/native-select";
 
 interface View {
   history: InventoryMeta[];
@@ -204,8 +205,7 @@ export function ServerInventory({ projectId, row }: { projectId?: string; row: {
           </Button>
         ))}
         {history.length > 1 ? (
-          <select
-            className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm"
+          <NativeSelect
             value={snapshot?.id || ""}
             onChange={(event) => void load(`?id=${encodeURIComponent(event.target.value)}`)}
           >
@@ -215,7 +215,7 @@ export function ServerInventory({ projectId, row }: { projectId?: string; row: {
                 {index === 0 ? "（最近）" : ""} · {item.components} 个部件
               </option>
             ))}
-          </select>
+          </NativeSelect>
         ) : null}
         {snapshot && projectId ? (
           <Button type="button" size="sm" variant="outline" className="ml-auto" onClick={makeBaseline}>

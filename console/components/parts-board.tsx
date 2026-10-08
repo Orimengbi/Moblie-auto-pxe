@@ -3,30 +3,20 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
+import { NativeSelect } from "@/components/ui/native-select";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
-import { PART_KINDS, PART_STATUS } from "@/lib/asset-labels";
+import { PART_KINDS, PART_STATUS, partStatusVariant } from "@/lib/asset-labels";
 import type { Part, PartEvent, PartKind, PartStatus, Site } from "@/lib/types";
 import { formatTime } from "@/lib/time";
-
-const SELECT = "h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm";
+import { Labeled } from "@/components/ui/labeled";
+import { api } from "@/lib/client-api";
 
 type AssetRef = { id: string; tag: string };
 
-async function call(url: string, method: string, body?: unknown): Promise<{ ok: boolean; data: Record<string, unknown> }> {
-  const response = await fetch(url, { method, headers: body ? { "content-type": "application/json" } : undefined, body: body ? JSON.stringify(body) : undefined }).catch(() => null);
-  const data = ((await response?.json().catch(() => ({}))) || {}) as Record<string, unknown>;
-  return { ok: Boolean(response?.ok), data: response ? data : { error: "没有连上控制台" } };
-}
-
-function statusVariant(status: PartStatus): "default" | "destructive" | "outline" {
-  if (status === "stock") return "default";
-  if (status === "faulty" || status === "rma") return "destructive";
-  return "outline";
-}
 
 /** 备件库：上面按类型和型号汇总在库数量，下面是每一件。 */
 export function PartsBoard({ parts, summary, sites, assets }: { parts: Part[]; summary: { kind: PartKind; model: string; count: number }[]; sites: Site[]; assets: AssetRef[] }) {
@@ -58,8 +48,8 @@ export function PartsBoard({ parts, summary, sites, assets }: { parts: Part[]; s
   async function changeStatus(part: Part, next: PartStatus) {
     const note = window.prompt(`${part.model} ${part.sn || ""} 改成「${PART_STATUS[next]}」。备注（可留空）：`);
     if (note === null) return;
-    const result = await call(`/api/parts/${part.id}/status`, "POST", { status: next, note });
-    setError(result.ok ? "" : String(result.data.error || "没改成"));
+    const result = await api(`/api/parts/${part.id}/status`, "POST", { status: next, note });
+    setError(result.ok ? "" : result.error);
     router.refresh();
   }
 
@@ -91,22 +81,22 @@ export function PartsBoard({ parts, summary, sites, assets }: { parts: Part[]; s
 
       <div className="flex flex-wrap items-center gap-2">
         <Input className="h-8 w-56" placeholder="搜型号、序列号、库位、单号…" value={q} onChange={(event) => setQ(event.target.value)} />
-        <select className={SELECT} value={status} onChange={(event) => setStatus(event.target.value)}>
+        <NativeSelect value={status} onChange={(event) => setStatus(event.target.value)}>
           <option value="">全部状态</option>
           {Object.entries(PART_STATUS).map(([value, label]) => (
             <option key={value} value={value}>
               {label}（{parts.filter((part) => part.status === value).length}）
             </option>
           ))}
-        </select>
-        <select className={SELECT} value={kind} onChange={(event) => setKind(event.target.value)}>
+        </NativeSelect>
+        <NativeSelect value={kind} onChange={(event) => setKind(event.target.value)}>
           <option value="">全部类型</option>
           {Object.entries(PART_KINDS).map(([value, label]) => (
             <option key={value} value={value}>
               {label}
             </option>
           ))}
-        </select>
+        </NativeSelect>
         {q || status || kind ? (
           <Button type="button" size="sm" variant="ghost" onClick={() => {
               setQ("");
@@ -152,7 +142,7 @@ export function PartsBoard({ parts, summary, sites, assets }: { parts: Part[]; s
                 </TableCell>
                 <TableCell className="font-mono text-xs">{part.sn || <span className="font-sans text-muted-foreground">无</span>}</TableCell>
                 <TableCell>
-                  <Badge variant={statusVariant(part.status)}>{PART_STATUS[part.status]}</Badge>
+                  <Badge variant={partStatusVariant(part.status)}>{PART_STATUS[part.status]}</Badge>
                 </TableCell>
                 <TableCell className="text-xs">{where(part) || <span className="text-muted-foreground">—</span>}</TableCell>
                 <TableCell className="text-xs">
@@ -160,8 +150,7 @@ export function PartsBoard({ parts, summary, sites, assets }: { parts: Part[]; s
                   {part.warrantyEnd ? <span className="block text-muted-foreground">保修到 {part.warrantyEnd}</span> : null}
                 </TableCell>
                 <TableCell className="text-right whitespace-nowrap">
-                  <select
-                    className={`${SELECT} h-7 text-xs`}
+                  <NativeSelect className="h-7 text-xs"
                     value=""
                     onChange={(event) => {
                       if (event.target.value) void changeStatus(part, event.target.value as PartStatus);
@@ -175,7 +164,7 @@ export function PartsBoard({ parts, summary, sites, assets }: { parts: Part[]; s
                           {PART_STATUS[value]}
                         </option>
                       ))}
-                  </select>
+                  </NativeSelect>
                   <Button type="button" size="xs" variant="ghost" onClick={() => setDetail(part)}>
                     详情
                   </Button>
@@ -193,14 +182,6 @@ export function PartsBoard({ parts, summary, sites, assets }: { parts: Part[]; s
   );
 }
 
-function Labeled({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="grid gap-1.5 text-sm">
-      <span className="font-medium">{label}</span>
-      {children}
-    </label>
-  );
-}
 
 function ReceiveDialog({ open, sites, onClose, onDone }: { open: boolean; sites: Site[]; onClose: () => void; onDone: () => void }) {
   const blank = { kind: "gpu", model: "", vendor: "", siteId: "", bin: "", supplier: "", purchaseOrder: "", warrantyEnd: "", note: "", sns: "", quantity: "1" };
@@ -213,10 +194,10 @@ function ReceiveDialog({ open, sites, onClose, onDone }: { open: boolean; sites:
   async function save(event: React.FormEvent) {
     event.preventDefault();
     setPending(true);
-    const result = await call("/api/parts", "POST", { ...form, siteId: form.siteId || null, quantity: count ? undefined : Number(form.quantity) });
+    const result = await api("/api/parts", "POST", { ...form, siteId: form.siteId || null, quantity: count ? undefined : Number(form.quantity) });
     setPending(false);
     if (!result.ok) {
-      setError(String(result.data.error || "没有入库"));
+      setError(result.error);
       return;
     }
     setForm(blank);
@@ -235,13 +216,13 @@ function ReceiveDialog({ open, sites, onClose, onDone }: { open: boolean; sites:
           </DialogHeader>
           <div className="grid gap-3 sm:grid-cols-3">
             <Labeled label="类型">
-              <select className={SELECT} {...field("kind")}>
+              <NativeSelect {...field("kind")}>
                 {Object.entries(PART_KINDS).map(([value, label]) => (
                   <option key={value} value={value}>
                     {label}
                   </option>
                 ))}
-              </select>
+              </NativeSelect>
             </Labeled>
             <Labeled label="型号">
               <Input {...field("model")} required placeholder="例如 NVIDIA B300" />
@@ -250,14 +231,14 @@ function ReceiveDialog({ open, sites, onClose, onDone }: { open: boolean; sites:
               <Input {...field("vendor")} />
             </Labeled>
             <Labeled label="存放机房">
-              <select className={SELECT} {...field("siteId")}>
+              <NativeSelect {...field("siteId")}>
                 <option value="">不指定</option>
                 {sites.map((site) => (
                   <option key={site.id} value={site.id}>
                     {site.code} · {site.name}
                   </option>
                 ))}
-              </select>
+              </NativeSelect>
             </Labeled>
             <Labeled label="库位">
               <Input {...field("bin")} placeholder="例如 备件柜 2 层" />
@@ -323,9 +304,9 @@ function PartDialog({ part, sites, onClose, onChanged }: { part: Part | null; si
   async function save(event: React.FormEvent) {
     event.preventDefault();
     if (!part) return;
-    const result = await call(`/api/parts/${part.id}`, "PATCH", { ...form, siteId: form.siteId || null });
+    const result = await api(`/api/parts/${part.id}`, "PATCH", { ...form, siteId: form.siteId || null });
     if (!result.ok) {
-      setError(String(result.data.error || "保存失败"));
+      setError(result.error);
       return;
     }
     onChanged();
@@ -362,14 +343,14 @@ function PartDialog({ part, sites, onClose, onChanged }: { part: Part | null; si
                 <Input {...field("sn")} className="font-mono" />
               </Labeled>
               <Labeled label="存放机房">
-                <select className={SELECT} {...field("siteId")}>
+                <NativeSelect {...field("siteId")}>
                   <option value="">不指定</option>
                   {sites.map((site) => (
                     <option key={site.id} value={site.id}>
                       {site.code} · {site.name}
                     </option>
                   ))}
-                </select>
+                </NativeSelect>
               </Labeled>
               <Labeled label="库位">
                 <Input {...field("bin")} />

@@ -5,18 +5,14 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { TicketCreateDialog } from "@/components/ticket-create-dialog";
 import { Badge } from "@/components/ui/badge";
+import { NativeSelect } from "@/components/ui/native-select";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { OPEN_TICKET_STATUS, TICKET_KINDS, TICKET_PRIORITY, TICKET_STATUS } from "@/lib/asset-labels";
-import type { Ticket, TicketPriority } from "@/lib/types";
+import { OPEN_TICKET_STATUS, priorityVariant, TICKET_KINDS, TICKET_PRIORITY, TICKET_STATUS } from "@/lib/asset-labels";
+import type { Ticket } from "@/lib/types";
 import { formatTime } from "@/lib/time";
 
-const SELECT = "h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm";
-
-export function priorityVariant(priority: TicketPriority): "destructive" | "default" | "outline" {
-  return priority === "urgent" ? "destructive" : priority === "high" ? "default" : "outline";
-}
 
 export type TicketRow = Ticket & { assetTag: string; assetSn: string };
 
@@ -50,7 +46,7 @@ export function TicketList({ tickets, me }: { tickets: TicketRow[]; me: string }
     <div className="grid gap-4">
       <div className="flex flex-wrap items-center gap-2">
         <Input className="h-8 w-56" placeholder="搜编号、标题、资产、厂商单号…" value={q} onChange={(event) => setQ(event.target.value)} />
-        <select className={SELECT} value={status} onChange={(event) => setStatus(event.target.value)}>
+        <NativeSelect value={status} onChange={(event) => setStatus(event.target.value)}>
           <option value="open">没解决的</option>
           <option value="all">全部</option>
           {Object.entries(TICKET_STATUS).map(([value, label]) => (
@@ -58,15 +54,15 @@ export function TicketList({ tickets, me }: { tickets: TicketRow[]; me: string }
               {label}（{tickets.filter((ticket) => ticket.status === value).length}）
             </option>
           ))}
-        </select>
-        <select className={SELECT} value={priority} onChange={(event) => setPriority(event.target.value)}>
+        </NativeSelect>
+        <NativeSelect value={priority} onChange={(event) => setPriority(event.target.value)}>
           <option value="">全部优先级</option>
           {Object.entries(TICKET_PRIORITY).map(([value, label]) => (
             <option key={value} value={value}>
               {label}
             </option>
           ))}
-        </select>
+        </NativeSelect>
         <label className="flex items-center gap-1.5 text-sm">
           <input type="checkbox" checked={mine} onChange={(event) => setMine(event.target.checked)} />
           只看我负责的

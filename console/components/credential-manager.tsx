@@ -7,20 +7,16 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import type { PublicUser } from "@/lib/auth";
+import { api } from "@/lib/client-api";
 
 function day(iso?: string) {
   return iso ? iso.slice(0, 10) : "从未";
 }
 
 async function send(url: string, method: string, body?: unknown) {
-  const response = await fetch(url, {
-    method,
-    headers: body ? { "content-type": "application/json" } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || "操作失败");
-  return data;
+  const result = await api(url, method, body);
+  if (!result.ok) throw new Error(result.error);
+  return result.data;
 }
 
 /** 一个用户的 SSH 公钥和访问密钥。我的账号页和用户管理页共用。 */
@@ -61,7 +57,7 @@ export function CredentialManager({ user }: { user: PublicUser }) {
     run(async () => {
       const result = await send(`${base}/access-keys`, "POST", { name: keyName });
       setKeyName("");
-      setCreated(result.secret);
+      setCreated(String(result.secret));
     });
   }
 

@@ -9,6 +9,8 @@ import { Input } from "@/components/ui/input";
 import { CredentialManager } from "@/components/credential-manager";
 import { PasswordForm } from "@/components/password-form";
 import type { PublicUser } from "@/lib/auth";
+import { NativeSelect } from "@/components/ui/native-select";
+import { api } from "@/lib/client-api";
 
 export function UserAdmin({ users, selfId }: { users: PublicUser[]; selfId: string }) {
   const router = useRouter();
@@ -23,19 +25,14 @@ export function UserAdmin({ users, selfId }: { users: PublicUser[]; selfId: stri
   async function send(url: string, method: string, body?: unknown) {
     setPending(true);
     setError("");
-    const response = await fetch(url, {
-      method,
-      headers: body ? { "content-type": "application/json" } : undefined,
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    const data = await response.json();
+    const result = await api(url, method, body);
     setPending(false);
-    if (!response.ok) {
-      setError(data.error || "操作失败");
+    if (!result.ok) {
+      setError(result.error);
       return null;
     }
     router.refresh();
-    return data;
+    return result.data;
   }
 
   async function create(event: React.FormEvent) {
@@ -46,7 +43,7 @@ export function UserAdmin({ users, selfId }: { users: PublicUser[]; selfId: stri
     setUsername("");
     setPassword("");
     setRole("user");
-    setExpanded(created.id);
+    setExpanded(String(created.id));
   }
 
   function remove(user: PublicUser) {
@@ -137,14 +134,13 @@ export function UserAdmin({ users, selfId }: { users: PublicUser[]; selfId: stri
             </label>
             <label className="grid gap-1.5 text-sm">
               <span className="font-medium">角色</span>
-              <select
+              <NativeSelect
                 value={role}
                 onChange={(event) => setRole(event.target.value as "user" | "admin")}
-                className="h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm"
               >
                 <option value="user">普通用户</option>
                 <option value="admin">管理员</option>
-              </select>
+              </NativeSelect>
             </label>
             {error ? <p className="text-sm text-destructive">{error}</p> : null}
             <Button type="submit" disabled={pending}>

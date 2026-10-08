@@ -2,17 +2,17 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { priorityVariant } from "@/components/ticket-list";
+import { useUserNames } from "@/components/use-user-names";
 import { Badge } from "@/components/ui/badge";
+import { NativeSelect } from "@/components/ui/native-select";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { ASSET_STATUS, PART_KINDS, PART_STATUS, TICKET_KINDS, TICKET_PRIORITY, TICKET_STATUS } from "@/lib/asset-labels";
+import { ASSET_STATUS, PART_KINDS, PART_STATUS, priorityVariant, TICKET_KINDS, TICKET_PRIORITY, TICKET_STATUS } from "@/lib/asset-labels";
 import type { AssetStatus, HwComponent, HwKind, InventorySnapshot, Part, PartKind, Ticket, TicketLog, TicketStatus } from "@/lib/types";
 import { formatTime } from "@/lib/time";
-
-const SELECT = "h-8 rounded-lg border border-input bg-transparent px-2.5 text-sm";
+import { api } from "@/lib/client-api";
 
 interface View {
   ticket: Ticket;
@@ -46,18 +46,16 @@ const NEXT: Record<TicketStatus, [TicketStatus, string][]> = {
   closed: [["processing", "重新打开"]],
 };
 
+/** 发请求，成功返回空字符串，失败返回提示。 */
 async function post(url: string, body: unknown, method = "POST"): Promise<string> {
-  const response = await fetch(url, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).catch(() => null);
-  if (response?.ok) return "";
-  const data = await response?.json().catch(() => ({}));
-  return data?.error || "没有连上控制台";
+  return (await api(url, method, body)).error;
 }
 
 export function TicketDetail({ id }: { id: string }) {
   const [view, setView] = useState<View | null>(null);
   const [error, setError] = useState("");
   const [comment, setComment] = useState("");
-  const [names, setNames] = useState<string[]>([]);
+  const names = useUserNames();
   const [edit, setEdit] = useState({ kind: "", priority: "", assignee: "", vendorCase: "", description: "" });
 
   const load = useCallback(async () => {
@@ -74,10 +72,6 @@ export function TicketDetail({ id }: { id: string }) {
 
   useEffect(() => {
     void load();
-    void fetch("/api/users/names")
-      .then((response) => response.json())
-      .then((list: string[]) => setNames(Array.isArray(list) ? list : []))
-      .catch(() => undefined);
   }, [load]);
 
   async function act(work: Promise<string>) {
@@ -136,23 +130,23 @@ export function TicketDetail({ id }: { id: string }) {
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="grid gap-1.5 text-sm">
                 <span className="font-medium">类型</span>
-                <select className={SELECT} value={edit.kind} onChange={(event) => setEdit({ ...edit, kind: event.target.value })}>
+                <NativeSelect value={edit.kind} onChange={(event) => setEdit({ ...edit, kind: event.target.value })}>
                   {Object.entries(TICKET_KINDS).map(([value, label]) => (
                     <option key={value} value={value}>
                       {label}
                     </option>
                   ))}
-                </select>
+                </NativeSelect>
               </label>
               <label className="grid gap-1.5 text-sm">
                 <span className="font-medium">优先级</span>
-                <select className={SELECT} value={edit.priority} onChange={(event) => setEdit({ ...edit, priority: event.target.value })}>
+                <NativeSelect value={edit.priority} onChange={(event) => setEdit({ ...edit, priority: event.target.value })}>
                   {Object.entries(TICKET_PRIORITY).map(([value, label]) => (
                     <option key={value} value={value}>
                       {label}
                     </option>
                   ))}
-                </select>
+                </NativeSelect>
               </label>
               <label className="grid gap-1.5 text-sm">
                 <span className="font-medium">负责人</span>
@@ -290,13 +284,13 @@ function ReplaceForm({ ticketId, assetId, onDone }: { ticketId: string; assetId:
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="grid gap-1.5">
           <span className="font-medium">部件类型</span>
-          <select className={SELECT} value={kind} onChange={(event) => setKind(event.target.value as PartKind)}>
+          <NativeSelect value={kind} onChange={(event) => setKind(event.target.value as PartKind)}>
             {Object.entries(PART_KINDS).map(([value, label]) => (
               <option key={value} value={value}>
                 {label}
               </option>
             ))}
-          </select>
+          </NativeSelect>
         </label>
         <label className="grid gap-1.5">
           <span className="font-medium">槽位</span>
@@ -306,8 +300,7 @@ function ReplaceForm({ ticketId, assetId, onDone }: { ticketId: string; assetId:
       <fieldset className="grid gap-2 rounded-md border p-3">
         <legend className="px-1 text-xs text-muted-foreground">换下来的旧件</legend>
         {installed.length ? (
-          <select
-            className={SELECT}
+          <NativeSelect
             value=""
             onChange={(event) => {
               const item = installed[Number(event.target.value)];
@@ -320,23 +313,23 @@ function ReplaceForm({ ticketId, assetId, onDone }: { ticketId: string; assetId:
                 {item.slot} · {item.model} · {item.sn || "无序列号"}
               </option>
             ))}
-          </select>
+          </NativeSelect>
         ) : (
           <p className="text-xs text-muted-foreground">采集里没有这类部件，手填。</p>
         )}
         <div className="grid gap-2 sm:grid-cols-3">
           <Input {...field("oldSn")} placeholder="序列号" className="font-mono" />
           <Input {...field("oldModel")} placeholder="型号" />
-          <select className={SELECT} {...field("oldStatus")}>
+          <NativeSelect {...field("oldStatus")}>
             <option value="faulty">待返修</option>
             <option value="removed">已拆下（没坏）</option>
             <option value="scrapped">报废</option>
-          </select>
+          </NativeSelect>
         </div>
       </fieldset>
       <fieldset className="grid gap-2 rounded-md border p-3">
         <legend className="px-1 text-xs text-muted-foreground">装上去的新件</legend>
-        <select className={SELECT} {...field("newPartId")}>
+        <NativeSelect {...field("newPartId")}>
           <option value="">{spares.length ? `从库里挑（${spares.length} 件可用）` : "库里没有这类备件，下面直接填"}</option>
           {spares.map((part) => (
             <option key={part.id} value={part.id}>
@@ -345,7 +338,7 @@ function ReplaceForm({ ticketId, assetId, onDone }: { ticketId: string; assetId:
               {part.status === "removed" ? "（已拆下）" : ""}
             </option>
           ))}
-        </select>
+        </NativeSelect>
         {!form.newPartId ? (
           <div className="grid gap-2 sm:grid-cols-2">
             <Input {...field("newSn")} placeholder="或者直接填序列号" className="font-mono" />
