@@ -146,29 +146,149 @@ export function createRack(input: RackInput): Rack {
 }
 
 /**
- * 批量建机柜：前缀加一段编号，例如 A + 1..20、补零 2 位 → A01…A20。已经有的跳过。
+ * 把前缀写法展开成一组前缀：「A」「A,B,C」「A-H」「A1-A3」都行。字母范围按字母表，带数字的范围按数字。
+ */
+export function expandPrefixes(raw: string): string[] {
+  const out: string[] = [];
+  for (const part of raw.split(/[,，、\s]+/).map((item) => item.trim()).filter(Boolean)) {
+    const letters = /^([A-Za-z])-([A-Za-z])$/.exec(part);
+    const numbered = /^([A-Za-z_-]*?)(\d+)-\1?(\d+)$/.exec(part);
+    if (letters) {
+      const [a, b] = [letters[1].charCodeAt(0), letters[2].charCodeAt(0)];
+      if (b < a) throw new Error(`前缀范围 ${part} 反了`);
+      for (let code = a; code <= b; code++) out.push(String.fromCharCode(code));
+    } else if (numbered) {
+      const [from, to] = [Number(numbered[2]), Number(numbered[3])];
+      if (to < from || to - from > 100) throw new Error(`前缀范围 ${part} 不对`);
+      for (let n = from; n <= to; n++) out.push(`${numbered[1]}${String(n).padStart(numbered[2].length, "0")}`);
+    } else {
+      if (!/^[A-Za-z0-9._-]{0,16}$/.test(part)) throw new Error(`前缀「${part}」只能用字母、数字、点、- 和 _`);
+      out.push(part);
+    }
+  }
+  return out.length ? [...new Set(out)] : [""];
+}
+
+/**
+ * 批量建机柜：每个前缀（每一排）加一段编号，例如 A-C + 1..20、补零 2 位 → A01…A20、B01…B20、C01…C20。
+ * 「列 / 排」没填时用前缀。已经有的跳过。
  */
 export function createRacks(input: RackInput & { prefix?: string; from?: number | string; to?: number | string; pad?: number | string }): { created: Rack[]; skipped: string[] } {
   const from = Number(input.from);
   const to = Number(input.to);
   const pad = Number(input.pad ?? 2);
   if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < from) throw new Error("编号范围不对");
-  if (to - from >= 200) throw new Error("一次最多建 200 个机柜");
   if (!Number.isInteger(pad) || pad < 0 || pad > 4) throw new Error("补零位数需要 0 到 4");
-  const prefix = String(input.prefix ?? "").trim();
+  const prefixes = expandPrefixes(String(input.prefix ?? ""));
+  if (prefixes.length * (to - from + 1) > 1000) throw new Error(`一次最多建 1000 个机柜，这次是 ${prefixes.length} 排 × ${to - from + 1} 个`);
   return transaction(db(), () => {
     const created: Rack[] = [];
     const skipped: string[] = [];
-    for (let n = from; n <= to; n++) {
-      const name = `${prefix}${String(n).padStart(pad, "0")}`;
-      if (db().prepare("SELECT id FROM racks WHERE site_id = ? AND name = ?").get(String(input.siteId ?? ""), name)) {
-        skipped.push(name);
-        continue;
+    for (const prefix of prefixes) {
+      for (let n = from; n <= to; n++) {
+        const name = `${prefix}${String(n).padStart(pad, "0")}`;
+        if (db().prepare("SELECT id FROM racks WHERE site_id = ? AND name = ?").get(String(input.siteId ?? ""), name)) {
+          skipped.push(name);
+          continue;
+        }
+        created.push(insertRack(cleanRack({ ...input, name, rowLabel: String(input.rowLabel ?? "").trim() || prefix }, null)));
       }
-      created.push(insertRack(cleanRack({ ...input, name }, null)));
     }
     return { created, skipped };
   });
+}
+
+export const RACK_SHEET_HEADERS = ["机房", "机柜号", "列/排", "高度U", "额定功率", "备注"];
+
+const RACK_HEADER: Record<string, "site" | "name" | "rowLabel" | "heightU" | "powerKw" | "note"> = {
+  机房: "site",
+  机房代码: "site",
+  机柜: "name",
+  机柜号: "name",
+  机柜名: "name",
+  "列/排": "rowLabel",
+  列: "rowLabel",
+  排: "rowLabel",
+  高度u: "heightU",
+  高度: "heightU",
+  u数: "heightU",
+  额定功率: "powerKw",
+  功率: "powerKw",
+  备注: "note",
+};
+
+export interface RackImportRow {
+  row: number;
+  site: string;
+  name: string;
+  action: "create" | "update" | "same" | "error";
+  message: string;
+}
+
+class DryRun extends Error {}
+
+/**
+ * Excel 导入机柜：一行一个。机房写代码或名称，没有机房列时用 defaultSiteId。同一机房里已经有这个机柜号的只改填了的格子。
+ * dryRun 只预览。一行出错只跳过这一行。
+ */
+export function importRacks(rows: unknown[][], defaultSiteId: string | null, options: { dryRun?: boolean } = {}): { rows: RackImportRow[]; created: number; updated: number; errors: number } {
+  const key = (value: unknown) => String(value ?? "").trim().toLowerCase().replace(/[\s*＊]+/g, "").replace("／", "/");
+  const headerAt = rows.slice(0, 8).findIndex((row) => (row || []).some((cell) => RACK_HEADER[key(cell)] === "name"));
+  if (headerAt < 0) throw new Error("没有找到表头。表头那一行要有「机柜号」，可以先下载模板对照");
+  const fields = (rows[headerAt] || []).map((cell) => RACK_HEADER[key(cell)]);
+  const result = { rows: [] as RackImportRow[], created: 0, updated: 0, errors: 0 };
+  const sites = listSites();
+  const run = () => {
+    for (let i = headerAt + 1; i < rows.length; i++) {
+      const raw = rows[i] || [];
+      if (!raw.some((cell) => String(cell ?? "").trim())) continue;
+      const cells: Partial<Record<"site" | "name" | "rowLabel" | "heightU" | "powerKw" | "note", string>> = {};
+      fields.forEach((field, column) => {
+        const value = String(raw[column] ?? "").trim();
+        if (field && value) cells[field] = value;
+      });
+      const entry: RackImportRow = { row: i + 1, site: cells.site || "", name: cells.name || "", action: "error", message: "" };
+      try {
+        const site = cells.site ? sites.find((item) => item.code.toLowerCase() === cells.site!.toLowerCase() || item.name === cells.site) : defaultSiteId ? getSite(defaultSiteId) : null;
+        if (!site) throw new Error(cells.site ? `没有机房「${cells.site}」，先建好` : "没写机房");
+        entry.site = site.code;
+        if (!cells.name) throw new Error("没写机柜号");
+        transaction(db(), () => {
+          const existing = listRacks(site.id).find((rack) => rack.name === cells.name);
+          if (!existing) {
+            createRack({ siteId: site.id, name: cells.name, rowLabel: cells.rowLabel, heightU: cells.heightU ?? 42, powerKw: cells.powerKw, note: cells.note });
+            entry.action = "create";
+            result.created++;
+            return;
+          }
+          const next = updateRack(existing.id, {
+            siteId: site.id,
+            name: existing.name,
+            rowLabel: cells.rowLabel ?? existing.rowLabel,
+            heightU: cells.heightU ?? existing.heightU,
+            powerKw: cells.powerKw ?? existing.powerKw,
+            note: cells.note ?? existing.note,
+          });
+          const changed = (["rowLabel", "heightU", "powerKw", "note"] as const).filter((field) => next[field] !== existing[field]);
+          entry.action = changed.length ? "update" : "same";
+          entry.message = changed.map((field) => `${{ rowLabel: "列/排", heightU: "高度", powerKw: "功率", note: "备注" }[field]}：${existing[field] || "空"} → ${next[field] || "空"}`).join("，");
+          if (changed.length) result.updated++;
+        });
+      } catch (error) {
+        entry.action = "error";
+        entry.message = error instanceof Error ? error.message : "这一行不对";
+        result.errors++;
+      }
+      result.rows.push(entry);
+    }
+    if (options.dryRun) throw new DryRun();
+  };
+  try {
+    transaction(db(), run);
+  } catch (error) {
+    if (!(error instanceof DryRun)) throw error;
+  }
+  return result;
 }
 
 export function updateRack(id: string, input: RackInput): Rack {

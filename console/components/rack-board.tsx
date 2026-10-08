@@ -41,6 +41,7 @@ export function RackBoard({ sites, racks, assets }: { sites: Site[]; racks: Rack
   const [siteForm, setSiteForm] = useState<Site | "new" | null>(null);
   const [rackForm, setRackForm] = useState<Rack | "new" | null>(null);
   const [placing, setPlacing] = useState<{ rack: Rack; u: number } | null>(null);
+  const [importing, setImporting] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -120,7 +121,10 @@ export function RackBoard({ sites, racks, assets }: { sites: Site[]; racks: Rack
             <Button type="button" size="xs" variant="ghost" onClick={() => void removeSite(site)}>
               删除机房
             </Button>
-            <Button type="button" size="sm" className="ml-auto" onClick={() => setRackForm("new")}>
+            <Button type="button" size="sm" variant="outline" className="ml-auto" onClick={() => setImporting(true)}>
+              Excel 导入机柜
+            </Button>
+            <Button type="button" size="sm" onClick={() => setRackForm("new")}>
               新建机柜
             </Button>
           </div>
@@ -151,6 +155,7 @@ export function RackBoard({ sites, racks, assets }: { sites: Site[]; racks: Rack
           router.refresh();
         }} />
       <RackDialog rack={rackForm} sites={sites} siteId={siteId} onClose={() => setRackForm(null)} onSaved={() => router.refresh()} />
+      <RackImportDialog open={importing} siteId={siteId} siteCode={site?.code || ""} onClose={() => setImporting(false)} onDone={() => router.refresh()} />
       <PlaceDialog target={placing} assets={assets} occupied={placing ? byRack.get(placing.rack.id) || [] : []} onClose={() => setPlacing(null)} onSaved={() => router.refresh()} />
       <ServerSidebar
         row={sideRow ? { id: sideRow.id, sn: sideRow.sn, tag: sideRow.tag, type: sideRow.type, description: [sideRow.tag, ASSET_STATUS[sideRow.status], sideRow.place, [sideRow.vendor, sideRow.model].filter(Boolean).join(" ")].filter(Boolean).join(" · ") } : null}
@@ -320,6 +325,21 @@ function SiteDialog({ site, onClose, onSaved }: { site: Site | "new" | null; onC
   );
 }
 
+/** 「A01…A20、B01…B20（2 排 40 个）」，前缀写错时给提示。 */
+function batchPreview(prefix: string, from: number, to: number, pad: number): string {
+  const parts = prefix.split(/[,，、\s]+/).filter(Boolean);
+  const rows: string[] = [];
+  for (const part of parts.length ? parts : [""]) {
+    const range = /^([A-Za-z])-([A-Za-z])$/.exec(part);
+    if (range) for (let code = range[1].charCodeAt(0); code <= range[2].charCodeAt(0); code++) rows.push(String.fromCharCode(code));
+    else rows.push(part);
+  }
+  if (!Number.isInteger(from) || !Number.isInteger(to) || to < from) return "编号范围不对";
+  const name = (row: string, n: number) => `${row}${String(n).padStart(pad || 0, "0")}`;
+  const shown = rows.slice(0, 3).map((row) => `${name(row, from)}…${name(row, to)}`).join("、");
+  return `${shown}${rows.length > 3 ? " 等" : ""}（${rows.length} 排 ${rows.length * (to - from + 1)} 个）`;
+}
+
 function RackDialog({ rack, sites, siteId, onClose, onSaved }: { rack: Rack | "new" | null; sites: Site[]; siteId: string; onClose: () => void; onSaved: () => void }) {
   const editing = rack && rack !== "new" ? rack : null;
   const [batch, setBatch] = useState(false);
@@ -340,7 +360,7 @@ function RackDialog({ rack, sites, siteId, onClose, onSaved }: { rack: Rack | "n
     }));
   }, [rack, editing, siteId]);
 
-  const preview = batch ? `${form.prefix}${String(Number(form.from) || 0).padStart(Number(form.pad) || 0, "0")} … ${form.prefix}${String(Number(form.to) || 0).padStart(Number(form.pad) || 0, "0")}` : "";
+  const preview = batch ? batchPreview(form.prefix, Number(form.from), Number(form.to), Number(form.pad)) : "";
 
   async function save(event: React.FormEvent) {
     event.preventDefault();
@@ -366,7 +386,7 @@ function RackDialog({ rack, sites, siteId, onClose, onSaved }: { rack: Rack | "n
         <form onSubmit={save} className="grid gap-4">
           <DialogHeader>
             <DialogTitle>{editing ? `编辑机柜 ${editing.name}` : "新建机柜"}</DialogTitle>
-            <DialogDescription>{editing ? "改矮时不能低于已经放着的设备。" : "可以建一个，也可以按前缀加编号一次建一排；已经有的机柜号会跳过。"}</DialogDescription>
+            <DialogDescription>{editing ? "改矮时不能低于已经放着的设备。" : "可以建一个，也可以按前缀加编号批量建：前缀写 A,B,C 或 A-H 就一次建多排。已经有的机柜号会跳过。很多排、每个柜子高度不一样的，用「Excel 导入」。"}</DialogDescription>
           </DialogHeader>
           {!editing ? (
             <div className="flex gap-2">
@@ -374,7 +394,7 @@ function RackDialog({ rack, sites, siteId, onClose, onSaved }: { rack: Rack | "n
                 建一个
               </Button>
               <Button type="button" size="sm" variant={batch ? "default" : "ghost"} onClick={() => setBatch(true)}>
-                批量建一排
+                批量建
               </Button>
             </div>
           ) : null}
@@ -389,8 +409,8 @@ function RackDialog({ rack, sites, siteId, onClose, onSaved }: { rack: Rack | "n
               </select>
             </Labeled>
             {batch ? (
-              <Labeled label="前缀">
-                <Input {...field("prefix")} className="font-mono" />
+              <Labeled label="前缀（一排一个）">
+                <Input {...field("prefix")} className="font-mono" placeholder="A，或 A,B,C，或 A-H" />
               </Labeled>
             ) : (
               <Labeled label="机柜号">
@@ -412,7 +432,7 @@ function RackDialog({ rack, sites, siteId, onClose, onSaved }: { rack: Rack | "n
               </>
             ) : null}
             <Labeled label="列 / 排">
-              <Input {...field("rowLabel")} placeholder="可留空，例如 A 列" />
+              <Input {...field("rowLabel")} placeholder={batch ? "留空就用前缀" : "可留空，例如 A 列"} />
             </Labeled>
             <Labeled label="高度（U）">
               <Input {...field("heightU")} type="number" min={1} max={60} required />
@@ -523,6 +543,127 @@ function PlaceDialog({ target, assets, occupied, onClose, onSaved }: { target: {
             </Button>
           </div>
         </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+type RackImportResult = { rows: { row: number; site: string; name: string; action: "create" | "update" | "same" | "error"; message: string }[]; created: number; updated: number; errors: number };
+
+const IMPORT_ACTION = { create: "新建", update: "更新", same: "没变", error: "出错" };
+
+/** Excel 导入机柜：先预览，确认后写入。没有「机房」列的行放到当前机房。 */
+function RackImportDialog({ open, siteId, siteCode, onClose, onDone }: { open: boolean; siteId: string; siteCode: string; onClose: () => void; onDone: () => void }) {
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<RackImportResult | null>(null);
+  const [done, setDone] = useState<RackImportResult | null>(null);
+  const [error, setError] = useState("");
+  const [pending, setPending] = useState(false);
+
+  function reset() {
+    setFile(null);
+    setPreview(null);
+    setDone(null);
+    setError("");
+  }
+
+  async function upload(target: File, dryRun: boolean) {
+    setPending(true);
+    setError("");
+    const form = new FormData();
+    form.set("file", target);
+    form.set("dryRun", dryRun ? "1" : "0");
+    form.set("siteId", siteId);
+    const response = await fetch("/api/racks/import", { method: "POST", body: form }).catch(() => null);
+    const body = await response?.json().catch(() => ({}));
+    setPending(false);
+    if (!response?.ok) {
+      setError(body?.error || "没有连上控制台");
+      return;
+    }
+    if (dryRun) setPreview(body as RackImportResult);
+    else {
+      setDone(body as RackImportResult);
+      onDone();
+    }
+  }
+
+  const result = done || preview;
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (next || pending) return;
+        reset();
+        onClose();
+      }}
+    >
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Excel 导入机柜</DialogTitle>
+          <DialogDescription>
+            一行一个机柜：机房（代码或名称，留空就放到当前的 {siteCode || "机房"}）、机柜号、列/排、高度U（留空 42）、额定功率、备注。同一机房已经有的机柜号只改填了的格子。先预览，确认后才写入。
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="button" size="sm" variant="outline" onClick={() => window.location.assign("/api/racks/template")}>
+            下载模板
+          </Button>
+          {!done ? (
+            <input
+              type="file"
+              accept=".xlsx,.xls,.csv"
+              className="text-sm"
+              onChange={(event) => {
+                const picked = event.target.files?.[0] || null;
+                setFile(picked);
+                setPreview(null);
+                if (picked) void upload(picked, true);
+              }}
+            />
+          ) : null}
+          {pending ? <span className="text-sm text-muted-foreground">正在读表</span> : null}
+        </div>
+        {error ? <p className="text-sm text-destructive">{error}</p> : null}
+        {result ? (
+          <div className="grid gap-2">
+            <p className="text-sm">
+              {done ? "已导入：" : "预览，还没有写入："}新建 {result.created} 个，更新 {result.updated} 个
+              {result.errors ? <span className="text-destructive">，{result.errors} 行有问题{done ? "没有导入" : "，确认后跳过"}</span> : null}。
+            </p>
+            <ul className="grid max-h-72 gap-1 overflow-y-auto text-sm">
+              {result.rows
+                .filter((row) => row.action !== "same")
+                .map((row) => (
+                  <li key={row.row} className="grid grid-cols-[3.5rem_3rem_7rem_1fr] gap-2">
+                    <span className="text-xs text-muted-foreground">第 {row.row} 行</span>
+                    <span className={`text-xs ${row.action === "error" ? "text-destructive" : ""}`}>{IMPORT_ACTION[row.action]}</span>
+                    <span className="font-mono text-xs">
+                      {row.site} {row.name}
+                    </span>
+                    <span className={`text-xs ${row.action === "error" ? "text-destructive" : "text-muted-foreground"}`}>{row.message}</span>
+                  </li>
+                ))}
+            </ul>
+          </div>
+        ) : null}
+        <div className="flex justify-end gap-2">
+          {done ? (
+            <Button
+              type="button"
+              onClick={() => {
+                reset();
+                onClose();
+              }}
+            >
+              完成
+            </Button>
+          ) : (
+            <Button type="button" disabled={pending || !file || !preview || preview.created + preview.updated === 0} onClick={() => file && void upload(file, false)}>
+              {preview ? `确认导入 ${preview.created + preview.updated} 个` : "确认导入"}
+            </Button>
+          )}
+        </div>
       </DialogContent>
     </Dialog>
   );

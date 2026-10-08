@@ -256,3 +256,36 @@ test("racks hold assets in U slots without overlap and moving in marks them rack
   assert.equal(round.errors, 0, JSON.stringify(round.rows.filter((row) => row.action === "error")));
   assert.equal(round.updated + round.created, 0);
 });
+
+test("racks can be created several rows at a time and imported from a sheet", async () => {
+  const racks = await import("./racks.ts");
+  assert.deepEqual(racks.expandPrefixes("A-C"), ["A", "B", "C"]);
+  assert.deepEqual(racks.expandPrefixes("A, E，H"), ["A", "E", "H"]);
+  assert.deepEqual(racks.expandPrefixes("R01-R03"), ["R01", "R02", "R03"]);
+  assert.throws(() => racks.expandPrefixes("C-A"), /反了/);
+  const site = racks.createSite({ code: "BJ2", name: "北京二号" });
+  const made = racks.createRacks({ siteId: site.id, prefix: "A-C", from: 1, to: 4, pad: 2 });
+  assert.equal(made.created.length, 12);
+  assert.deepEqual(made.created.filter((rack) => rack.rowLabel === "B").map((rack) => rack.name), ["B01", "B02", "B03", "B04"]);
+  assert.throws(() => racks.createRacks({ siteId: site.id, prefix: "A-Z", from: 1, to: 50 }), /最多建 1000 个/);
+
+  const rows = [
+    ["机房", "机柜号", "列/排", "高度U", "额定功率", "备注"],
+    ["BJ2", "A01", "", "48", "", ""],
+    ["", "D01", "D", "", "10kW", ""],
+    ["北京二号", "D02", "D", "52", "", ""],
+    ["XX9", "Z01", "", "", "", ""],
+    ["BJ2", "", "", "", "", ""],
+    ["BJ2", "D03", "", "abc", "", ""],
+  ];
+  const preview = racks.importRacks(rows, site.id, { dryRun: true });
+  assert.deepEqual(preview.rows.map((row) => row.action), ["update", "create", "create", "error", "error", "error"]);
+  assert.match(preview.rows[0].message, /高度：42 → 48/);
+  assert.match(preview.rows[3].message, /没有机房「XX9」/);
+  assert.match(preview.rows[5].message, /高度需要/);
+  assert.equal(racks.listRacks(site.id).length, 12, "预览不写入");
+  const done = racks.importRacks(rows, site.id);
+  assert.deepEqual([done.created, done.updated, done.errors], [2, 1, 3]);
+  assert.equal(racks.listRacks(site.id).find((rack) => rack.name === "D01")?.powerKw, "10kW");
+  assert.equal(racks.listRacks(site.id).find((rack) => rack.name === "D02")?.heightU, 52);
+});
