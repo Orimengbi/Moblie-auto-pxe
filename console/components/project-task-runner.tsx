@@ -103,10 +103,13 @@ export function ProjectTaskRunner({
   const [pending, setPending] = useState(false);
   const [uploading, setUploading] = useState("");
   const [sources, setSources] = useState<InventorySource[]>(["os", "bmc"]);
-  const [showAllTasks, setShowAllTasks] = useState(false);
+  // 0 表示收起，只看最近 3 条；展开后按页看，一页 10 条。
+  const [taskPage, setTaskPage] = useState(0);
   const running = tasks.some((task) => task.status === "running");
-  // 默认只显示最近 3 条，执行中的任务始终显示。
-  const shownTasks = showAllTasks ? tasks : tasks.filter((task, index) => index < 3 || task.status === "running");
+  const taskPages = Math.max(1, Math.ceil(tasks.length / 10));
+  const page = Math.min(taskPage, taskPages);
+  // 收起时执行中的任务也始终显示。
+  const shownTasks = page ? tasks.slice((page - 1) * 10, page * 10) : tasks.filter((task, index) => index < 3 || task.status === "running");
 
   useEffect(() => {
     if (!running) return;
@@ -325,9 +328,24 @@ export function ProjectTaskRunner({
             </div>
           </details>
         ))}
-        {tasks.length > 3 && (showAllTasks || tasks.length > shownTasks.length) ? (
-          <Button type="button" variant="ghost" size="sm" className="w-fit" onClick={() => setShowAllTasks((value) => !value)}>
-            {showAllTasks ? "收起" : `显示其余 ${tasks.length - shownTasks.length} 条`}
+        {page ? (
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <Button type="button" variant="outline" size="sm" disabled={page <= 1} onClick={() => setTaskPage(page - 1)}>
+              上一页
+            </Button>
+            <span className="text-muted-foreground">
+              第 {page} / {taskPages} 页，共 {tasks.length} 条
+            </span>
+            <Button type="button" variant="outline" size="sm" disabled={page >= taskPages} onClick={() => setTaskPage(page + 1)}>
+              下一页
+            </Button>
+            <Button type="button" variant="ghost" size="sm" onClick={() => setTaskPage(0)}>
+              收起
+            </Button>
+          </div>
+        ) : tasks.length > shownTasks.length ? (
+          <Button type="button" variant="ghost" size="sm" className="w-fit" onClick={() => setTaskPage(1)}>
+            显示更多
           </Button>
         ) : null}
       </div>

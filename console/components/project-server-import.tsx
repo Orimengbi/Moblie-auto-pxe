@@ -38,12 +38,14 @@ export function ProjectServerImport({ projectId }: { projectId: string }) {
       <a className="w-fit text-sm underline underline-offset-4" href={`/api/projects/${projectId}/template`}>
         下载 Excel 模板
       </a>
-      <Input name="file" type="file" accept=".xlsx,.xls,.csv" required />
+      <div className="flex flex-wrap items-center gap-2">
+        <Input className="w-full max-w-sm" name="file" type="file" accept=".xlsx,.xls,.csv" required />
+        <Button className="w-fit" type="submit" disabled={pending}>
+          {pending ? "导入中" : "上传服务器表"}
+        </Button>
+      </div>
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
       {summary ? <p className="text-sm text-muted-foreground">{summary}</p> : null}
-      <Button className="w-fit" type="submit" disabled={pending}>
-        {pending ? "导入中" : "上传服务器表"}
-      </Button>
     </form>
   );
 }
