@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { changeDetail, checkBaseline, clean, diffComponents, generateBaseline, INVENTORY_SCRIPT, parseDmidecode, parseOsInventory, redfishComponents, sizeToGb, summarizeComponents } from "./inventory.ts";
+import { changeDetail, checkBaseline, clean, diffComponents, generateBaseline, INVENTORY_SCRIPT, nicCards, parseDmidecode, parseOsInventory, redfishComponents, sizeToGb, summarizeComponents } from "./inventory.ts";
 import { crawlRedfish, RedfishAuthError, type RedfishDoc, type RedfishGet } from "./redfish.ts";
 import { linkBetween, linkText, parseNvlinks } from "./topology.ts";
 import type { HwComponent } from "./types.ts";
@@ -257,7 +257,7 @@ test("parses the in-system collection output into components", () => {
   assert.equal(nics[1].model, "Nvidia ConnectX8 XDR IB/800GBE");
   assert.equal(nics[1].sn, "NICSN0001");
   assert.equal(nics[1].attrs.partNumber, "MLX000647");
-  assert.equal(nics[1].attrs.speedMbps, 400000);
+  assert.equal(nics[1].attrs.speedMbps, undefined, "协商速率是口上的，不算硬件");
 
   const optics = components.filter((c) => c.kind === "transceiver");
   assert.deepEqual(optics.map((c) => [c.slot, c.vendor, c.model, c.sn, c.firmware]), [["enp115s0f0np0", "ACCELINK", "RTXM600-2401", "MODSN0001", "80.1.0"]]);
@@ -408,6 +408,25 @@ test("diffs two collections of the same machine", () => {
   );
   assert.equal(changeDetail(changes[0]), "内存 DIMM_P1_M0：M321RAJA0MB2-CCPWC SN DIMMM0 → M321RAJA0MB2-CCPWC SN NEWDIMM");
   assert.equal(changeDetail(changes[1]), "GPU 0000:06:00.0：固件 97.10.52.00.17 → 97.10.7E.00.03");
+});
+
+test("lists one NIC per physical card, not one per PCI function", () => {
+  const port = (slot: string, pci: string, mac: string, link: string): HwComponent => ({
+    kind: "nic",
+    slot,
+    model: "Nvidia ConnectX7 mezz",
+    vendor: "",
+    sn: "CX7SN",
+    firmware: "28.43.1014",
+    attrs: { mac, pci, driver: "mlx5_core", link, partNumber: "V000S4N03X" },
+  });
+  const ports = [port("ibs11f1", "0000:d9:00.1", "m1", "down"), port("ibs11f0", "0000:d9:00.0", "m0", "up"), port("eno1", "0000:51:00.0", "e0", "up")];
+  const cards = nicCards(ports);
+  assert.deepEqual(cards.map((c) => c.slot), ["ibs11f0", "eno1"]);
+  assert.deepEqual(cards[0].attrs, { mac: "m0", pci: "0000:d9:00.0", driver: "mlx5_core", partNumber: "V000S4N03X", portCount: 2, portNames: "ibs11f0, ibs11f1" });
+  assert.equal(cards[1].attrs.link, undefined, "口上的链路状态不算硬件信息");
+  assert.deepEqual(nicCards(cards), cards, "合并过的再合并不变");
+  assert.deepEqual(diffComponents(ports, cards), [], "旧记录按口列的，和新记录比没有变化");
 });
 
 test("generates a baseline from one machine and checks others against it", () => {

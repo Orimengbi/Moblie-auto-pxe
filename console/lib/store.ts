@@ -6,7 +6,7 @@ import { parseLeases, renderBootIpxe, renderDnsmasq } from "./dnsmasq.ts";
 import { assetBmcAccounts, findAssetBySn, getAsset, syncAssetFromRow } from "./assets.ts";
 import { refreshBootScript } from "./disk-image.ts";
 import { recordHardwareChanges } from "./parts.ts";
-import { checkBaseline, diffComponents, generateBaseline, KIND_LABEL } from "./inventory.ts";
+import { checkBaseline, diffComponents, generateBaseline, KIND_LABEL, nicCards } from "./inventory.ts";
 import {
   BOOT_DEVICES,
   POWER_ACTIONS,
@@ -2029,7 +2029,9 @@ function snapshotIds(serverId: string, source?: InventorySource): string[] {
 
 export function getInventory(serverId: string, id: string): InventorySnapshot | null {
   if (!SNAPSHOT_ID.test(id) || !/^[0-9a-f-]{36}$/.test(serverId)) return null;
-  return readJson<InventorySnapshot>(path.join(inventoryDir(serverId), `${id}.json`));
+  const snapshot = readJson<InventorySnapshot>(path.join(inventoryDir(serverId), `${id}.json`));
+  // 旧记录里网卡是按口列的，读出来时按物理卡合并。
+  return snapshot ? { ...snapshot, components: nicCards(snapshot.components) } : null;
 }
 
 /** 新的在前。 */
