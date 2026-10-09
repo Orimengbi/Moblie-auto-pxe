@@ -3,17 +3,23 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Badge } from "@/components/ui/badge";
-import { NativeSelect } from "@/components/ui/native-select";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { ALERT_SEVERITY, ALERT_SOURCE, ALERT_STATUS } from "@/lib/asset-labels";
+import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
+import MuiLink from "@mui/material/Link";
+import Stack from "@mui/material/Stack";
+import TextField from "@mui/material/TextField";
+import Typography from "@mui/material/Typography";
+import { DataGrid, type GridColDef } from "@mui/x-data-grid";
+import { StatusChip } from "@/components/mui/status-chip";
+import { ALERT_SEVERITY, ALERT_SEVERITY_TONE, ALERT_SOURCE, ALERT_STATUS } from "@/lib/asset-labels";
 import type { Alert } from "@/lib/types";
 import { formatTime } from "@/lib/time";
 import { api } from "@/lib/client-api";
 
 export type AlertRow = Alert & { assetTag: string; assetSn: string };
+
+const MONO = "var(--font-geist-mono), monospace";
+const NATIVE = { select: { native: true } } as const;
 
 export async function alertAction(id: number, action: "ack" | "resolve" | "ticket"): Promise<{ error: string; ticketId?: string }> {
   const result = await api<{ id?: string }>(`/api/alerts/${id}/${action}`, "POST");
@@ -62,109 +68,144 @@ export function AlertBoard({ alerts, summary }: { alerts: AlertRow[]; summary: s
     else router.refresh();
   }
 
+  const columns: GridColDef<AlertRow>[] = [
+    {
+      field: "severity",
+      headerName: "级别",
+      width: 80,
+      renderCell: ({ row }) => <StatusChip tone={ALERT_SEVERITY_TONE[row.severity]} label={ALERT_SEVERITY[row.severity]} />,
+    },
+    {
+      field: "title",
+      headerName: "告警",
+      flex: 1,
+      minWidth: 280,
+      renderCell: ({ row }) => (
+        <Box sx={{ whiteSpace: "normal", py: 0.75 }}>
+          <Typography component="span" variant="body2" sx={{ fontWeight: 500 }}>
+            {row.title}
+          </Typography>
+          {row.count > 1 ? (
+            <Typography component="span" variant="caption" sx={{ ml: 0.5, color: "text.secondary" }}>
+              ×{row.count}
+            </Typography>
+          ) : null}
+          <Typography variant="caption" sx={{ display: "block", wordBreak: "break-all", color: "text.secondary" }}>
+            {row.detail}
+          </Typography>
+        </Box>
+      ),
+    },
+    {
+      field: "assetTag",
+      headerName: "资产",
+      width: 170,
+      renderCell: ({ row }) => (
+        <Box sx={{ fontFamily: MONO, fontSize: 12, py: 0.75 }}>
+          <MuiLink component={Link} href={`/assets?open=${row.assetId}`} underline="hover" color="inherit">
+            {row.assetTag}
+          </MuiLink>
+          <Box sx={{ color: "text.secondary" }}>{row.assetSn}</Box>
+        </Box>
+      ),
+    },
+    { field: "source", headerName: "来源", width: 100, valueGetter: (_value, row) => ALERT_SOURCE[row.source] },
+    {
+      field: "status",
+      headerName: "状态",
+      width: 110,
+      valueGetter: (_value, row) => ALERT_STATUS[row.status],
+      renderCell: ({ row }) => (
+        <Box sx={{ fontSize: 12, py: 0.75 }}>
+          {ALERT_STATUS[row.status]}
+          {row.status === "acked" && row.ackedBy ? <Box sx={{ color: "text.secondary" }}>{row.ackedBy}</Box> : null}
+          {row.status === "resolved" ? <Box sx={{ color: "text.secondary" }}>{row.resolvedBy}</Box> : null}
+        </Box>
+      ),
+    },
+    {
+      field: "firstAt",
+      headerName: "时间",
+      width: 150,
+      renderCell: ({ row }) => (
+        <Box sx={{ fontSize: 12, whiteSpace: "nowrap", color: "text.secondary", py: 0.75 }}>
+          {when(row.firstAt)}
+          {row.lastAt !== row.firstAt ? <Box>最近 {when(row.lastAt)}</Box> : null}
+          {row.resolvedAt ? <Box>恢复 {when(row.resolvedAt)}</Box> : null}
+        </Box>
+      ),
+    },
+    {
+      field: "actions",
+      headerName: "",
+      width: 220,
+      sortable: false,
+      filterable: false,
+      disableColumnMenu: true,
+      renderCell: ({ row }) => (
+        <Stack direction="row" spacing={0.5} sx={{ width: "100%", alignItems: "center", justifyContent: "flex-end" }}>
+          {row.ticketId ? (
+            <MuiLink component={Link} href={`/tickets/${row.ticketId}`} variant="caption" sx={{ mr: 1 }}>
+              工单
+            </MuiLink>
+          ) : null}
+          {row.status === "active" ? <Button onClick={() => void act(row, "ack")}>确认</Button> : null}
+          {row.status !== "resolved" && !row.ticketId ? <Button onClick={() => void act(row, "ticket")}>转工单</Button> : null}
+          {row.status !== "resolved" ? <Button onClick={() => void act(row, "resolve")}>处理完</Button> : null}
+        </Stack>
+      ),
+    },
+  ];
+
   return (
-    <div className="grid gap-4">
-      <p className="text-sm text-muted-foreground">{summary}</p>
-      <div className="flex flex-wrap items-center gap-2">
-        <Input className="h-8 w-56" placeholder="搜标题、资产、详情…" value={q} onChange={(event) => setQ(event.target.value)} />
-        <NativeSelect value={status} onChange={(event) => setStatus(event.target.value)}>
+    <Stack spacing={2}>
+      <Typography variant="body2" sx={{ color: "text.secondary" }}>
+        {summary}
+      </Typography>
+      <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center" }}>
+        <TextField placeholder="搜标题、资产、详情…" value={q} onChange={(event) => setQ(event.target.value)} sx={{ width: 224 }} />
+        <TextField select slotProps={NATIVE} value={status} onChange={(event) => setStatus(event.target.value)}>
           <option value="open">没恢复的</option>
           <option value="resolved">已恢复的</option>
           <option value="all">全部</option>
-        </NativeSelect>
-        <NativeSelect value={severity} onChange={(event) => setSeverity(event.target.value)}>
+        </TextField>
+        <TextField select slotProps={NATIVE} value={severity} onChange={(event) => setSeverity(event.target.value)}>
           <option value="">全部级别</option>
           {Object.entries(ALERT_SEVERITY).map(([value, label]) => (
             <option key={value} value={value}>
               {label}
             </option>
           ))}
-        </NativeSelect>
-        <NativeSelect value={source} onChange={(event) => setSource(event.target.value)}>
+        </TextField>
+        <TextField select slotProps={NATIVE} value={source} onChange={(event) => setSource(event.target.value)}>
           <option value="">全部来源</option>
           {Object.entries(ALERT_SOURCE).map(([value, label]) => (
             <option key={value} value={value}>
               {label}
             </option>
           ))}
-        </NativeSelect>
-      </div>
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
-      <div className="overflow-x-auto">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>级别</TableHead>
-              <TableHead>告警</TableHead>
-              <TableHead>资产</TableHead>
-              <TableHead>来源</TableHead>
-              <TableHead>状态</TableHead>
-              <TableHead>时间</TableHead>
-              <TableHead />
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {shown.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={7} className="py-6 text-center text-sm text-muted-foreground">
-                  {status === "open" ? "没有告警。" : "没有符合条件的告警。"}
-                </TableCell>
-              </TableRow>
-            ) : null}
-            {shown.map((alert) => (
-              <TableRow key={alert.id} className={alert.status === "resolved" ? "opacity-60" : ""}>
-                <TableCell>
-                  <Badge variant={alert.severity === "critical" ? "destructive" : "warning"}>{ALERT_SEVERITY[alert.severity]}</Badge>
-                </TableCell>
-                <TableCell className="max-w-md whitespace-normal">
-                  <span className="font-medium">{alert.title}</span>
-                  {alert.count > 1 ? <span className="ml-1 text-xs text-muted-foreground">×{alert.count}</span> : null}
-                  <span className="block text-xs break-all text-muted-foreground">{alert.detail}</span>
-                </TableCell>
-                <TableCell className="font-mono text-xs">
-                  <Link href={`/assets?open=${alert.assetId}`} className="underline-offset-4 hover:underline">
-                    {alert.assetTag}
-                  </Link>
-                  <span className="block text-muted-foreground">{alert.assetSn}</span>
-                </TableCell>
-                <TableCell className="text-xs">{ALERT_SOURCE[alert.source]}</TableCell>
-                <TableCell className="text-xs">
-                  {ALERT_STATUS[alert.status]}
-                  {alert.status === "acked" && alert.ackedBy ? <span className="block text-muted-foreground">{alert.ackedBy}</span> : null}
-                  {alert.status === "resolved" ? <span className="block text-muted-foreground">{alert.resolvedBy}</span> : null}
-                </TableCell>
-                <TableCell className="text-xs whitespace-nowrap text-muted-foreground">
-                  {when(alert.firstAt)}
-                  {alert.lastAt !== alert.firstAt ? <span className="block">最近 {when(alert.lastAt)}</span> : null}
-                  {alert.resolvedAt ? <span className="block">恢复 {when(alert.resolvedAt)}</span> : null}
-                </TableCell>
-                <TableCell className="text-right whitespace-nowrap">
-                  {alert.ticketId ? (
-                    <Link href={`/tickets/${alert.ticketId}`} className="mr-2 text-xs underline underline-offset-4">
-                      工单
-                    </Link>
-                  ) : null}
-                  {alert.status === "active" ? (
-                    <Button type="button" size="xs" variant="ghost" onClick={() => void act(alert, "ack")}>
-                      确认
-                    </Button>
-                  ) : null}
-                  {alert.status !== "resolved" && !alert.ticketId ? (
-                    <Button type="button" size="xs" variant="ghost" onClick={() => void act(alert, "ticket")}>
-                      转工单
-                    </Button>
-                  ) : null}
-                  {alert.status !== "resolved" ? (
-                    <Button type="button" size="xs" variant="ghost" onClick={() => void act(alert, "resolve")}>
-                      处理完
-                    </Button>
-                  ) : null}
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </div>
-    </div>
+        </TextField>
+      </Stack>
+      {error ? (
+        <Typography variant="body2" color="error">
+          {error}
+        </Typography>
+      ) : null}
+      <Box sx={{ width: "100%", minWidth: 0 }}>
+        <DataGrid
+          rows={shown}
+          columns={columns}
+          autoHeight
+          getRowHeight={() => "auto"}
+          // 已恢复的变淡，一眼分出还要处理的
+          getRowClassName={({ row }) => (row.status === "resolved" ? "alert-resolved" : "")}
+          initialState={{ pagination: { paginationModel: { pageSize: 100 } } }}
+          pageSizeOptions={[25, 50, 100]}
+          hideFooter={shown.length <= 100}
+          localeText={{ noRowsLabel: status === "open" ? "没有告警。" : "没有符合条件的告警。" }}
+          sx={{ "& .alert-resolved": { opacity: 0.6 }, "& .MuiDataGrid-cell": { display: "flex", alignItems: "center" } }}
+        />
+      </Box>
+    </Stack>
   );
 }

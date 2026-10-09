@@ -3,11 +3,18 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { AssetEditDialog } from "@/components/asset-edit-dialog";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
+import Chip from "@mui/material/Chip";
+import MuiLink from "@mui/material/Link";
+import Stack from "@mui/material/Stack";
+import Typography from "@mui/material/Typography";
+import { StatusChip } from "@/components/mui/status-chip";
 import type { AssetRow } from "@/lib/asset-view";
-import { ASSET_STATUS, ASSET_STATUS_VARIANT, ASSET_TYPES, WARRANTY_LABEL } from "@/lib/asset-labels";
+import { ASSET_STATUS, ASSET_STATUS_TONE, ASSET_TYPES, WARRANTY_LABEL } from "@/lib/asset-labels";
 import type { Customer } from "@/lib/types";
+
+const MONO = "var(--font-geist-mono), monospace";
 
 /** 侧边栏「概况」：资产的资料，按块显示，可以编辑。 */
 type Uplink = { switchId: string; switchTag: string; port: string; remotePort: string; oper: string };
@@ -35,21 +42,31 @@ export function AssetOverview({ assetId, onChanged }: { assetId: string; onChang
     void load();
   }, [load]);
 
-  if (error) return <p className="text-sm text-destructive">{error}</p>;
-  if (!asset) return <p className="text-sm text-muted-foreground">正在读取</p>;
+  if (error)
+    return (
+      <Typography variant="body2" color="error">
+        {error}
+      </Typography>
+    );
+  if (!asset)
+    return (
+      <Typography variant="body2" sx={{ color: "text.secondary" }}>
+        正在读取
+      </Typography>
+    );
 
-  const warrantyTone = asset.warranty === "expired" ? "destructive" : asset.warranty === "expiring" ? "outline" : "default";
   return (
-    <section className="grid gap-5">
-      <div className="flex flex-wrap items-center gap-2">
-        <Badge variant={ASSET_STATUS_VARIANT[asset.status]}>{ASSET_STATUS[asset.status]}</Badge>
-        <Badge variant="outline">{ASSET_TYPES[asset.type]}</Badge>
-        {asset.warranty !== "none" ? <Badge variant={warrantyTone}>{WARRANTY_LABEL[asset.warranty]}</Badge> : null}
-        <Button type="button" size="sm" variant="outline" className="ml-auto" onClick={() => setEditing(true)}>
+    <Stack spacing={2.5}>
+      <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center" }}>
+        <StatusChip tone={ASSET_STATUS_TONE[asset.status]} label={ASSET_STATUS[asset.status]} />
+        <Chip variant="outlined" label={ASSET_TYPES[asset.type]} />
+        {asset.warranty !== "none" ? (
+          <StatusChip tone={asset.warranty === "expired" ? "error" : asset.warranty === "expiring" ? "warning" : "success"} label={WARRANTY_LABEL[asset.warranty]} />
+        ) : null}
+        <Button variant="outlined" sx={{ ml: "auto" }} onClick={() => setEditing(true)}>
           编辑资料
         </Button>
-      </div>
-
+      </Stack>
       <Block
         title="基本"
         items={[
@@ -78,17 +95,19 @@ export function AssetOverview({ assetId, onChanged }: { assetId: string; onChang
         />
       ) : null}
       {asset.uplinks?.length ? (
-        <section className="grid gap-1.5">
-          <h4 className="text-xs font-medium tracking-wide text-muted-foreground">上联（交换机 LLDP 看到的）</h4>
-          <ul className="grid gap-0.5 text-sm">
+        <Section title="上联（交换机 LLDP 看到的）">
+          <Stack component="ul" spacing={0.25} sx={{ m: 0, p: 0, listStyle: "none" }}>
             {asset.uplinks.map((link) => (
-              <li key={`${link.switchId}-${link.port}`} className="font-mono text-xs">
+              <Box component="li" key={`${link.switchId}-${link.port}`} sx={{ fontFamily: MONO, fontSize: 12 }}>
                 {link.remotePort || "?"} → {link.switchTag} {link.port}
-                <span className={link.oper === "up" ? "text-muted-foreground" : "text-destructive"}> {link.oper}</span>
-              </li>
+                <Box component="span" sx={{ color: link.oper === "up" ? "text.secondary" : "error.main" }}>
+                  {" "}
+                  {link.oper}
+                </Box>
+              </Box>
             ))}
-          </ul>
-        </section>
+          </Stack>
+        </Section>
       ) : null}
       <Block
         title="BMC"
@@ -125,22 +144,22 @@ export function AssetOverview({ assetId, onChanged }: { assetId: string; onChang
         ]}
       />
       {asset.batch ? (
-        <section className="grid gap-1 text-sm">
-          <h4 className="text-xs font-medium tracking-wide text-muted-foreground">最近一次装机</h4>
-          <p>
-            <Link href={`/projects/${asset.batch.projectId}`} className="underline underline-offset-4">
+        <Section title="最近一次装机">
+          <Typography variant="body2">
+            <MuiLink component={Link} href={`/projects/${asset.batch.projectId}`}>
               {asset.batch.name || "装机批次"}
-            </Link>
+            </MuiLink>
             {asset.batch.osName ? ` · ${asset.batch.osName}` : ""}
             {asset.batch.installed === "yes" ? " · 已安装" : asset.batch.installed === "installing" ? " · 安装中" : ""}
-          </p>
-        </section>
+          </Typography>
+        </Section>
       ) : null}
       {asset.note ? (
-        <section className="grid gap-1 text-sm">
-          <h4 className="text-xs font-medium tracking-wide text-muted-foreground">备注</h4>
-          <p className="whitespace-pre-wrap">{asset.note}</p>
-        </section>
+        <Section title="备注">
+          <Typography variant="body2" sx={{ whiteSpace: "pre-wrap" }}>
+            {asset.note}
+          </Typography>
+        </Section>
       ) : null}
 
       <AssetEditDialog
@@ -153,22 +172,36 @@ export function AssetOverview({ assetId, onChanged }: { assetId: string; onChang
           onChanged?.();
         }}
       />
-    </section>
+    </Stack>
+  );
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <Stack spacing={0.75}>
+      <Typography variant="caption" component="h4" sx={{ fontWeight: 500, letterSpacing: "0.02em", color: "text.secondary" }}>
+        {title}
+      </Typography>
+      {children}
+    </Stack>
   );
 }
 
 function Block({ title, items }: { title: string; items: [string, string, boolean?][] }) {
   return (
-    <section className="grid gap-1.5">
-      <h4 className="text-xs font-medium tracking-wide text-muted-foreground">{title}</h4>
-      <dl className="grid grid-cols-[6rem_1fr] gap-x-3 gap-y-1 text-sm">
+    <Section title={title}>
+      <Box component="dl" sx={{ m: 0, display: "grid", gridTemplateColumns: "6rem 1fr", columnGap: 1.5, rowGap: 0.5, fontSize: 13 }}>
         {items.map(([label, value, mono]) => (
-          <div key={label} className="contents">
-            <dt className="text-muted-foreground">{label}</dt>
-            <dd className={`break-all ${mono ? "font-mono text-xs leading-5" : ""}`}>{value || <span className="text-muted-foreground">—</span>}</dd>
-          </div>
+          <Box key={label} sx={{ display: "contents" }}>
+            <Box component="dt" sx={{ color: "text.secondary" }}>
+              {label}
+            </Box>
+            <Box component="dd" sx={{ m: 0, wordBreak: "break-all", ...(mono ? { fontFamily: MONO, fontSize: 12, lineHeight: "20px" } : {}) }}>
+              {value || <Box component="span" sx={{ color: "text.secondary" }}>—</Box>}
+            </Box>
+          </Box>
         ))}
-      </dl>
-    </section>
+      </Box>
+    </Section>
   );
 }

@@ -3,9 +3,20 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
+import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
+import Card from "@mui/material/Card";
+import CardContent from "@mui/material/CardContent";
+import Dialog from "@mui/material/Dialog";
+import DialogActions from "@mui/material/DialogActions";
+import DialogContent from "@mui/material/DialogContent";
+import DialogContentText from "@mui/material/DialogContentText";
+import DialogTitle from "@mui/material/DialogTitle";
+import FormControlLabel from "@mui/material/FormControlLabel";
+import Stack from "@mui/material/Stack";
+import Switch from "@mui/material/Switch";
+import TextField from "@mui/material/TextField";
+import Typography from "@mui/material/Typography";
 import type { Project } from "@/lib/types";
 
 export function ProjectManager({ projects }: { projects: Project[] }) {
@@ -73,72 +84,81 @@ export function ProjectManager({ projects }: { projects: Project[] }) {
   }
 
   return (
-    <div className="grid gap-4">
-      <Button className="w-fit" onClick={() => setOpen(true)}>
-        新建装机批次
-      </Button>
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
+    <Stack spacing={2}>
+      <Box>
+        <Button variant="contained" onClick={() => setOpen(true)}>
+          新建装机批次
+        </Button>
+      </Box>
+      {error ? (
+        <Typography variant="body2" sx={{ color: "error.main" }}>
+          {error}
+        </Typography>
+      ) : null}
       {projects.length === 0 ? (
-        <p className="text-sm text-muted-foreground">还没有装机批次。新建后再到里面填写安装设置、DHCP，上传服务器表。</p>
+        <Typography variant="body2" sx={{ color: "text.secondary" }}>
+          还没有装机批次。新建后再到里面填写安装设置、DHCP，上传服务器表。
+        </Typography>
       ) : (
-        <div className="grid gap-3">
+        <Stack spacing={1.5}>
           {projects.map((project) => (
-            <article key={project.id} className="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <h2 className="font-medium">{project.name}</h2>
-                  <p className="mt-1 text-sm text-muted-foreground">{project.note || "还没有备注"}</p>
-                </div>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={project.enabled}
-                  onClick={() => toggle(project)}
-                  disabled={Boolean(switching)}
-                  className={`inline-flex h-8 items-center gap-2 rounded-full px-3 text-sm disabled:opacity-60 ${project.enabled ? "bg-primary text-primary-foreground" : "bg-muted text-foreground"}`}
-                >
-                  <span className={`inline-block size-3 rounded-full ${project.enabled ? "bg-primary-foreground" : "bg-foreground/40"}`} />
-                  {switching === project.id ? "切换中" : project.enabled ? "已启用" : "未启用"}
-                </button>
-              </div>
-              <p className="mt-3 text-sm text-muted-foreground">
-                {project.dhcp ? `DHCP ${project.dhcp.start} – ${project.dhcp.end}` : "还没写 DHCP"}
-                {project.enabled ? " · 当前装机使用这套配置" : ""}
-              </p>
-              <div className="mt-3 flex gap-2">
-                <Button size="sm" variant="secondary" render={<Link href={`/projects/${project.id}`} />}>
-                  进入批次
-                </Button>
-                <Button size="sm" variant="ghost" onClick={() => remove(project.id)}>
-                  删除
-                </Button>
-              </div>
-            </article>
+            <Card key={project.id} component="article">
+              <CardContent>
+                <Stack direction="row" spacing={1.5} useFlexGap sx={{ flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
+                  <Box sx={{ minWidth: 0 }}>
+                    <Typography variant="h3" component="h2">
+                      {project.name}
+                    </Typography>
+                    <Typography variant="body2" sx={{ mt: 0.5, color: "text.secondary" }}>
+                      {project.note || "还没有备注"}
+                    </Typography>
+                  </Box>
+                  <FormControlLabel
+                    control={<Switch checked={project.enabled} disabled={Boolean(switching)} onChange={() => toggle(project)} />}
+                    label={switching === project.id ? "切换中" : project.enabled ? "已启用" : "未启用"}
+                    sx={{ mr: 0 }}
+                  />
+                </Stack>
+                <Typography variant="body2" sx={{ mt: 1.5, color: "text.secondary" }}>
+                  {project.dhcp ? `DHCP ${project.dhcp.start} – ${project.dhcp.end}` : "还没写 DHCP"}
+                  {project.enabled ? " · 当前装机使用这套配置" : ""}
+                </Typography>
+                <Stack direction="row" spacing={1} sx={{ mt: 1.5 }}>
+                  <Button variant="outlined" component={Link} href={`/projects/${project.id}`}>
+                    进入批次
+                  </Button>
+                  <Button color="error" onClick={() => remove(project.id)}>
+                    删除
+                  </Button>
+                </Stack>
+              </CardContent>
+            </Card>
           ))}
-        </div>
+        </Stack>
       )}
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent>
-          <form onSubmit={create} className="grid gap-3">
-            <DialogHeader>
-              <DialogTitle>新建装机批次</DialogTitle>
-              <DialogDescription>安装设置、DHCP 和服务器表进去之后再填。同一时间只能打开一个批次。表里的机器会自动入库成资产，已经入库的按序列号对上。</DialogDescription>
-            </DialogHeader>
-            <label className="grid gap-1.5 text-sm">
-              <span className="font-medium">名称</span>
-              <Input value={name} onChange={(event) => setName(event.target.value)} required />
-            </label>
-            <label className="grid gap-1.5 text-sm">
-              <span className="font-medium">备注</span>
-              <Input value={note} onChange={(event) => setNote(event.target.value)} />
-            </label>
-            {error ? <p className="text-sm text-destructive">{error}</p> : null}
-            <Button type="submit" disabled={pending}>
+      <Dialog open={open} onClose={() => setOpen(false)}>
+        <form onSubmit={create}>
+          <DialogTitle>新建装机批次</DialogTitle>
+          <DialogContent>
+            <Stack spacing={2}>
+              <DialogContentText variant="body2">安装设置、DHCP 和服务器表进去之后再填。同一时间只能打开一个批次。表里的机器会自动入库成资产，已经入库的按序列号对上。</DialogContentText>
+              <TextField label="名称" value={name} onChange={(event) => setName(event.target.value)} required fullWidth autoFocus />
+              <TextField label="备注" value={note} onChange={(event) => setNote(event.target.value)} fullWidth />
+              {error ? (
+                <Typography variant="body2" sx={{ color: "error.main" }}>
+                  {error}
+                </Typography>
+              ) : null}
+            </Stack>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setOpen(false)}>取消</Button>
+            <Button type="submit" variant="contained" disabled={pending}>
               {pending ? "创建中" : "创建"}
             </Button>
-          </form>
-        </DialogContent>
+          </DialogActions>
+        </form>
       </Dialog>
-    </div>
+    </Stack>
   );
 }

@@ -1,14 +1,19 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ResizeHandle, useColumnWidths } from "@/components/resizable-columns";
-import { Button } from "@/components/ui/button";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import Button from "@mui/material/Button";
+import Checkbox from "@mui/material/Checkbox";
+import FormControlLabel from "@mui/material/FormControlLabel";
+import Stack from "@mui/material/Stack";
+import TextField from "@mui/material/TextField";
+import Typography from "@mui/material/Typography";
+import { DataGrid, type GridColDef, type GridEventListener } from "@mui/x-data-grid";
 import { ATTR_LABEL, KIND_LABEL, KIND_ORDER, SOURCE_LABEL } from "@/lib/inventory";
 import type { Baseline, BaselineIssue, HwComponent, HwKind, InventoryMeta, InventorySnapshot, InventorySource, RemoteTask } from "@/lib/types";
 import { formatTime } from "@/lib/time";
-import { NativeSelect } from "@/components/ui/native-select";
+
+const MONO = "var(--font-geist-mono), monospace";
 
 interface View {
   history: InventoryMeta[];
@@ -17,16 +22,48 @@ interface View {
   issues: BaselineIssue[] | null;
 }
 
+/**
+ * DataGrid 的列宽记在这个浏览器里（键名和以前的可拖表格一样，存 { 列 key: 宽度 }）。
+ * 拖过的列按记下的宽度，没拖过的照列定义排。
+ */
+export function useGridColumnWidths(storageKey: string) {
+  const [widths, setWidths] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(storageKey) || "null");
+      setWidths(saved && typeof saved === "object" ? saved : {});
+    } catch {
+      // 读不到就按默认宽度排。
+    }
+  }, [storageKey]);
+
+  const onColumnWidthChange: GridEventListener<"columnWidthChange"> = (params) => {
+    const next = { ...widths, [params.colDef.field]: Math.round(params.width) };
+    setWidths(next);
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(next));
+    } catch {
+      // 存不了也照样能拖，只是刷新后要重来。
+    }
+  };
+
+  const apply = useCallback(
+    <T extends GridColDef>(columns: T[]): T[] => columns.map((column) => (widths[column.field] ? { ...column, width: widths[column.field], flex: undefined } : column)),
+    [widths],
+  );
+  return { apply, onColumnWidthChange };
+}
+
 /** 每类部件一张表，列都一样，列宽按类别各记各的。 */
-const PART_COLUMNS = [
-  { key: "slot", label: "槽位" },
-  { key: "model", label: "型号" },
-  { key: "vendor", label: "厂商" },
-  { key: "sn", label: "序列号" },
-  { key: "firmware", label: "固件" },
-  { key: "attrs", label: "属性" },
+const PART_COLUMNS: GridColDef<HwComponent & { id: number }>[] = [
+  { field: "slot", headerName: "槽位", width: 130 },
+  { field: "model", headerName: "型号", flex: 1, minWidth: 180, valueGetter: (value) => value || "—" },
+  { field: "vendor", headerName: "厂商", width: 110, valueGetter: (value) => value || "—" },
+  { field: "sn", headerName: "序列号", width: 170, valueGetter: (value) => value || "—" },
+  { field: "firmware", headerName: "固件", width: 130, valueGetter: (value) => value || "—" },
+  { field: "attrs", headerName: "属性", flex: 1, minWidth: 200, sortable: false, valueGetter: (_value, item) => attrText(item) || "—" },
 ];
-const PART_KEYS = PART_COLUMNS.map((column) => column.key);
 
 function when(at: string): string {
   return formatTime(at);
@@ -49,34 +86,26 @@ function kindHeading(kind: HwComponent["kind"], items: HwComponent[], all: HwCom
 
 /** 一类部件的表格。列宽按类别记，比如 GPU 表把序列号拉宽不影响内存表。 */
 function PartTable({ kind, items }: { kind: HwKind; items: HwComponent[] }) {
-  const columnWidths = useColumnWidths(`pxe-inventory-columns:${kind}`, PART_KEYS);
+  const { apply, onColumnWidthChange } = useGridColumnWidths(`pxe-inventory-columns:${kind}`);
+  const columns = useMemo(() => apply(PART_COLUMNS), [apply]);
+  const rows = useMemo(() => items.map((item, index) => ({ ...item, id: index })), [items]);
   return (
-    <div className="overflow-x-auto">
-      <Table className={columnWidths.tableClassName} style={columnWidths.tableStyle}>
-        <TableHeader>
-          <TableRow>
-            {PART_COLUMNS.map((column) => (
-              <TableHead key={column.key} data-col={column.key} className="relative" style={columnWidths.headStyle(column.key)}>
-                {column.label}
-                <ResizeHandle onStart={(event) => columnWidths.startResize(column.key, event)} onReset={columnWidths.reset} />
-              </TableHead>
-            ))}
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {items.map((item, index) => (
-            <TableRow key={`${item.slot}-${index}`}>
-              <TableCell className="font-mono text-xs">{item.slot}</TableCell>
-              <TableCell className="max-w-72 text-xs whitespace-normal">{item.model || "—"}</TableCell>
-              <TableCell className="text-xs">{item.vendor || "—"}</TableCell>
-              <TableCell className="font-mono text-xs">{item.sn || "—"}</TableCell>
-              <TableCell className="font-mono text-xs">{item.firmware || "—"}</TableCell>
-              <TableCell className="max-w-96 text-xs whitespace-normal text-muted-foreground">{attrText(item) || "—"}</TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-    </div>
+    <DataGrid
+      rows={rows}
+      columns={columns}
+      onColumnWidthChange={onColumnWidthChange}
+      autoHeight
+      hideFooter
+      disableColumnMenu
+      getRowHeight={() => "auto"}
+      sx={{
+        fontSize: 12,
+        // 型号、属性可能很长，换行显示而不是截断。
+        "& .MuiDataGrid-cell": { py: 0.75, whiteSpace: "normal", wordBreak: "break-word", lineHeight: 1.5 },
+        "& .MuiDataGrid-cell[data-field=slot], & .MuiDataGrid-cell[data-field=sn], & .MuiDataGrid-cell[data-field=firmware]": { fontFamily: MONO },
+        "& .MuiDataGrid-cell[data-field=attrs]": { color: "text.secondary" },
+      }}
+    />
   );
 }
 
@@ -175,39 +204,53 @@ export function ServerInventory({ projectId, row }: { projectId?: string; row: {
     await load(`?source=${source}`);
   }
 
-  return (
-    <section className="grid gap-4">
-      <div className="grid gap-1">
-        <h3 className="font-medium">硬件配置</h3>
-        <p className="text-xs text-muted-foreground">系统内是 SSH 进系统读的，BMC 是从 Redfish 读的。和上一次采集比出的变化在「变更记录」里。</p>
-      </div>
+  const muted = (text: React.ReactNode) => (
+    <Typography variant="body2" color="text.secondary">
+      {text}
+    </Typography>
+  );
 
-      <div className="flex flex-wrap items-center gap-3 text-sm">
+  return (
+    <Stack component="section" spacing={2}>
+      <Stack spacing={0.5}>
+        <Typography variant="h3">硬件配置</Typography>
+        <Typography variant="caption" color="text.secondary">
+          系统内是 SSH 进系统读的，BMC 是从 Redfish 读的。和上一次采集比出的变化在「变更记录」里。
+        </Typography>
+      </Stack>
+
+      <Stack direction="row" useFlexGap spacing={1.5} sx={{ flexWrap: "wrap", alignItems: "center" }}>
         {(["os", "bmc"] as const).map((value) => (
-          <label key={value} className="flex items-center gap-1.5">
-            <input
-              type="checkbox"
-              checked={sources.includes(value)}
-              onChange={() => setSources((list) => (list.includes(value) ? list.filter((item) => item !== value) : [...list, value]))}
-            />
-            {value === "os" ? "系统内（SSH）" : "BMC（Redfish）"}
-          </label>
+          <FormControlLabel
+            key={value}
+            sx={{ mr: 0 }}
+            control={
+              <Checkbox
+                checked={sources.includes(value)}
+                onChange={() => setSources((list) => (list.includes(value) ? list.filter((item) => item !== value) : [...list, value]))}
+              />
+            }
+            label={<Typography variant="body2">{value === "os" ? "系统内（SSH）" : "BMC（Redfish）"}</Typography>}
+          />
         ))}
-        <Button type="button" size="sm" disabled={Boolean(collecting) || !sources.length} onClick={collect}>
+        <Button type="button" variant="contained" disabled={Boolean(collecting) || !sources.length} onClick={collect}>
           {collecting ? "采集中，一两分钟" : "采集硬件配置"}
         </Button>
-      </div>
+      </Stack>
 
-      <div className="flex flex-wrap items-center gap-2">
+      <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center" }}>
         {(["os", "bmc"] as const).map((value) => (
-          <Button key={value} type="button" size="sm" variant={source === value && snapshot ? "default" : "outline"} disabled={!hasSource(value) || loading} onClick={() => void load(`?source=${value}`)}>
+          <Button key={value} type="button" variant={source === value && snapshot ? "contained" : "outlined"} disabled={!hasSource(value) || loading} onClick={() => void load(`?source=${value}`)}>
             {SOURCE_LABEL[value]}
           </Button>
         ))}
         {history.length > 1 ? (
-          <NativeSelect
+          <TextField
+            select
             value={snapshot?.id || ""}
             onChange={(event) => void load(`?id=${encodeURIComponent(event.target.value)}`)}
+            slotProps={{ select: { native: true } }}
+            aria-label="历史采集"
           >
             {history.map((item, index) => (
               <option key={item.id} value={item.id}>
@@ -215,68 +258,79 @@ export function ServerInventory({ projectId, row }: { projectId?: string; row: {
                 {index === 0 ? "（最近）" : ""} · {item.components} 个部件
               </option>
             ))}
-          </NativeSelect>
+          </TextField>
         ) : null}
         {snapshot && projectId ? (
-          <Button type="button" size="sm" variant="outline" className="ml-auto" onClick={makeBaseline}>
+          <Button type="button" variant="outlined" sx={{ ml: "auto" }} onClick={makeBaseline}>
             设为批次基准
           </Button>
         ) : null}
-      </div>
+      </Stack>
 
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
-      {message ? <p className="text-sm text-muted-foreground">{message}</p> : null}
-      {loading && !view ? <p className="text-sm text-muted-foreground">正在读取</p> : null}
-      {view && !snapshot ? <p className="text-sm text-muted-foreground">还没有采集过。点上面的「采集硬件配置」。</p> : null}
+      {error ? (
+        <Typography variant="body2" color="error">
+          {error}
+        </Typography>
+      ) : null}
+      {message ? muted(message) : null}
+      {loading && !view ? muted("正在读取") : null}
+      {view && !snapshot ? muted("还没有采集过。点上面的「采集硬件配置」。") : null}
 
       {snapshot ? (
-        <div className="grid gap-4">
-          <p className="text-sm text-muted-foreground">
-            {SOURCE_LABEL[snapshot.source]}采集于 {when(snapshot.at)}，地址 <span className="font-mono">{snapshot.host}</span>
-          </p>
+        <Stack spacing={2}>
+          {muted(
+            <>
+              {SOURCE_LABEL[snapshot.source]}采集于 {when(snapshot.at)}，地址{" "}
+              <Typography component="span" variant="inherit" sx={{ fontFamily: MONO }}>
+                {snapshot.host}
+              </Typography>
+            </>,
+          )}
 
-          <section className="grid gap-1">
-            <h4 className="text-sm font-medium">基准检查</h4>
+          <Stack component="section" spacing={0.5}>
+            <Typography variant="subtitle2">基准检查</Typography>
             {!view?.baseline ? (
-              <p className="text-sm text-muted-foreground">
-                {projectId ? "这个装机批次还没有基准。挑一台确认没问题的机器，点「设为批次基准」。" : "最近一次装机批次没有基准。基准在装机批次里设。"}
-              </p>
+              muted(projectId ? "这个装机批次还没有基准。挑一台确认没问题的机器，点「设为批次基准」。" : "最近一次装机批次没有基准。基准在装机批次里设。")
             ) : view.baseline.source !== snapshot.source ? (
-              <p className="text-sm text-muted-foreground">批次基准是按{SOURCE_LABEL[view.baseline.source]}采集生成的，切到「{SOURCE_LABEL[view.baseline.source]}」查看比对。</p>
+              muted(`批次基准是按${SOURCE_LABEL[view.baseline.source]}采集生成的，切到「${SOURCE_LABEL[view.baseline.source]}」查看比对。`)
             ) : view.issues?.length ? (
-              <ul className="grid gap-1 text-sm text-destructive">
+              <Stack component="ul" spacing={0.5} sx={{ m: 0, pl: 0, listStyle: "none" }}>
                 {view.issues.map((issue, index) => (
-                  <li key={index}>{issue.message}</li>
+                  <Typography key={index} component="li" variant="body2" color="error">
+                    {issue.message}
+                  </Typography>
                 ))}
-              </ul>
+              </Stack>
             ) : (
-              <p className="text-sm">符合基准{view.baseline.fromSn ? `（按 ${view.baseline.fromSn} 生成）` : ""}。</p>
+              <Typography variant="body2">符合基准{view.baseline.fromSn ? `（按 ${view.baseline.fromSn} 生成）` : ""}。</Typography>
             )}
-          </section>
+          </Stack>
 
           {snapshot.warnings.length ? (
-            <section className="grid gap-1">
-              <h4 className="text-sm font-medium">提示</h4>
-              <ul className="grid gap-1 text-sm text-muted-foreground">
+            <Stack component="section" spacing={0.5}>
+              <Typography variant="subtitle2">提示</Typography>
+              <Stack component="ul" spacing={0.5} sx={{ m: 0, pl: 0, listStyle: "none" }}>
                 {snapshot.warnings.map((warning, index) => (
-                  <li key={index}>{warning}</li>
+                  <Typography key={index} component="li" variant="body2" color="text.secondary">
+                    {warning}
+                  </Typography>
                 ))}
-              </ul>
-            </section>
+              </Stack>
+            </Stack>
           ) : null}
 
           {KIND_ORDER.map((kind) => {
             const items = snapshot.components.filter((item) => item.kind === kind);
             if (!items.length) return null;
             return (
-              <section key={kind} className="grid gap-1">
-                <h4 className="text-sm font-medium">{kindHeading(kind, items, snapshot.components)}</h4>
+              <Stack key={kind} component="section" spacing={0.5}>
+                <Typography variant="subtitle2">{kindHeading(kind, items, snapshot.components)}</Typography>
                 <PartTable kind={kind} items={items} />
-              </section>
+              </Stack>
             );
           })}
-        </div>
+        </Stack>
       ) : null}
-    </section>
+    </Stack>
   );
 }

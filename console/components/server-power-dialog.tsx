@@ -2,8 +2,19 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
+import Checkbox from "@mui/material/Checkbox";
+import Dialog from "@mui/material/Dialog";
+import DialogActions from "@mui/material/DialogActions";
+import DialogContent from "@mui/material/DialogContent";
+import DialogContentText from "@mui/material/DialogContentText";
+import DialogTitle from "@mui/material/DialogTitle";
+import FormControlLabel from "@mui/material/FormControlLabel";
+import Stack from "@mui/material/Stack";
+import ToggleButton from "@mui/material/ToggleButton";
+import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
+import Typography from "@mui/material/Typography";
 
 type PowerAction = "on" | "soft" | "off" | "reset" | "cycle";
 type BootDevice = "pxe" | "usb" | "cdrom" | "disk" | "bios";
@@ -76,82 +87,91 @@ export function ServerPowerDialog({ targets, onClose }: { targets: Target[]; onC
     run(body, restart ? `${persistent ? "以后都" : "下次"}从${label}启动，并立即断电重启` : undefined);
   }
 
-  return (
-    <Dialog open={targets.length > 0} onOpenChange={(open) => !open && !pending && onClose()}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>电源和引导 · {names}</DialogTitle>
-          <DialogDescription>
-            通过 IPMI 操作，用 BMC 当前的账号登录。
-            {targets.some((item) => !item.bmcIp) ? " 有机器还没有 IPMI 地址，会跳过并报错。" : ""}
-          </DialogDescription>
-        </DialogHeader>
+  const checkboxes: [string, boolean, (value: boolean) => void][] = [
+    ["设置后立即断电重启（关着的机器直接开机）", restart, setRestart],
+    ["一直生效（不勾只管下一次启动）", persistent, setPersistent],
+    ["传统 BIOS 引导（不勾按 UEFI）", legacy, setLegacy],
+  ];
 
-        <section className="grid gap-2">
-          <h3 className="text-sm font-medium">电源</h3>
-          <div className="flex flex-wrap gap-2">
+  return (
+    <Dialog open={targets.length > 0} onClose={() => !pending && onClose()}>
+      <DialogTitle>电源和引导 · {names}</DialogTitle>
+      <DialogContent>
+        <DialogContentText variant="body2" sx={{ mb: 2 }}>
+          通过 IPMI 操作，用 BMC 当前的账号登录。
+          {targets.some((item) => !item.bmcIp) ? " 有机器还没有 IPMI 地址，会跳过并报错。" : ""}
+        </DialogContentText>
+
+        <Stack component="section" spacing={1}>
+          <Typography variant="subtitle2">电源</Typography>
+          <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap" }}>
             {POWER.map((item) => (
               <Button
                 key={item.id}
-                size="sm"
-                variant={item.id === "off" ? "destructive" : "outline"}
+                variant={item.id === "off" ? "contained" : "outlined"}
+                color={item.id === "off" ? "error" : "primary"}
                 disabled={pending}
                 onClick={() => run({ power: item.id }, item.confirm)}
               >
                 {item.label}
               </Button>
             ))}
-          </div>
-          <p className="text-xs text-muted-foreground">关机是通知系统关机，系统没响应时用强制关机。关着的机器点重启会直接开机。</p>
-        </section>
+          </Stack>
+          <Typography variant="caption" color="text.secondary">
+            关机是通知系统关机，系统没响应时用强制关机。关着的机器点重启会直接开机。
+          </Typography>
+        </Stack>
 
-        <section className="grid gap-3 border-t pt-4">
-          <h3 className="text-sm font-medium">引导设备</h3>
-          <div className="flex flex-wrap gap-1 rounded-lg bg-muted p-1" role="radiogroup">
+        <Stack component="section" spacing={1.5} sx={{ borderTop: 1, borderColor: "divider", pt: 2, mt: 2 }}>
+          <Typography variant="subtitle2">引导设备</Typography>
+          <ToggleButtonGroup exclusive value={boot} onChange={(_, next: BootDevice | null) => next && setBoot(next)} sx={{ flexWrap: "wrap" }} aria-label="引导设备">
             {BOOT.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                role="radio"
-                aria-checked={boot === item.id}
-                onClick={() => setBoot(item.id)}
-                className={`rounded-md px-3 py-1.5 text-sm ${boot === item.id ? "bg-background shadow-sm" : "text-muted-foreground"}`}
-              >
+              <ToggleButton key={item.id} value={item.id} sx={{ px: 1.5 }}>
                 {item.label}
-              </button>
+              </ToggleButton>
             ))}
-          </div>
-          <div className="grid gap-1.5 text-sm">
-            <label className="flex items-center gap-2">
-              <input type="checkbox" checked={restart} onChange={(event) => setRestart(event.target.checked)} />
-              设置后立即断电重启（关着的机器直接开机）
-            </label>
-            <label className="flex items-center gap-2">
-              <input type="checkbox" checked={persistent} onChange={(event) => setPersistent(event.target.checked)} />
-              一直生效（不勾只管下一次启动）
-            </label>
-            <label className="flex items-center gap-2">
-              <input type="checkbox" checked={legacy} onChange={(event) => setLegacy(event.target.checked)} />
-              传统 BIOS 引导（不勾按 UEFI）
-            </label>
-          </div>
-          {boot === "usb" ? <p className="text-xs text-muted-foreground">U 盘走 IPMI 的「可移动介质」。个别机型不认时，进 BIOS 把 U 盘排到最前。</p> : null}
-          {boot === "pxe" ? <p className="text-xs text-muted-foreground">已安装的机器从网卡启动后，菜单超时默认回硬盘；要重装请用「重装」。</p> : null}
-          <Button className="w-fit" disabled={pending} onClick={applyBoot}>
-            {pending ? "执行中" : restart ? "设置并重启" : "只设置引导设备"}
-          </Button>
-        </section>
+          </ToggleButtonGroup>
+          <Stack>
+            {checkboxes.map(([label, checked, set]) => (
+              <FormControlLabel
+                key={label}
+                control={<Checkbox checked={checked} onChange={(event) => set(event.target.checked)} />}
+                label={<Typography variant="body2">{label}</Typography>}
+              />
+            ))}
+          </Stack>
+          {boot === "usb" ? (
+            <Typography variant="caption" color="text.secondary">
+              U 盘走 IPMI 的「可移动介质」。个别机型不认时，进 BIOS 把 U 盘排到最前。
+            </Typography>
+          ) : null}
+          {boot === "pxe" ? (
+            <Typography variant="caption" color="text.secondary">
+              已安装的机器从网卡启动后，菜单超时默认回硬盘；要重装请用「重装」。
+            </Typography>
+          ) : null}
+          <Box>
+            <Button variant="contained" disabled={pending} onClick={applyBoot}>
+              {pending ? "执行中" : restart ? "设置并重启" : "只设置引导设备"}
+            </Button>
+          </Box>
+        </Stack>
 
         {results.length ? (
-          <ul className="grid max-h-48 gap-1 overflow-y-auto border-t pt-3 text-sm">
+          <Stack component="ul" spacing={0.5} sx={{ maxHeight: 192, overflowY: "auto", borderTop: 1, borderColor: "divider", pt: 1.5, mt: 2, mb: 0, pl: 0, listStyle: "none" }}>
             {results.map((item, index) => (
-              <li key={`${item.sn}-${index}`} className={item.ok ? "text-foreground" : "text-destructive"}>
+              <Typography key={`${item.sn}-${index}`} component="li" variant="body2" color={item.ok ? "text.primary" : "error"}>
                 {item.ok ? "✓" : "✗"} {item.text}
-              </li>
+              </Typography>
             ))}
-          </ul>
+          </Stack>
         ) : null}
       </DialogContent>
+      <DialogActions>
+        <Button disabled={pending} onClick={onClose}>
+          关闭
+        </Button>
+      </DialogActions>
     </Dialog>
   );
 }

@@ -1,102 +1,129 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Button } from "@/components/ui/button";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
+import Checkbox from "@mui/material/Checkbox";
+import FormControlLabel from "@mui/material/FormControlLabel";
+import Paper from "@mui/material/Paper";
+import Stack from "@mui/material/Stack";
+import Table from "@mui/material/Table";
+import TableBody from "@mui/material/TableBody";
+import TableCell from "@mui/material/TableCell";
+import TableContainer from "@mui/material/TableContainer";
+import TableHead from "@mui/material/TableHead";
+import TableRow from "@mui/material/TableRow";
+import Typography from "@mui/material/Typography";
+import { StatusChip } from "@/components/mui/status-chip";
 import { SOURCE_LABEL } from "@/lib/inventory";
 import { PORT_GROUP_LABEL, portSummary } from "@/lib/ports";
 import type { HwPort, InventorySnapshot, InventorySource, PortGroup } from "@/lib/types";
 import { formatTime } from "@/lib/time";
 
 const GROUPS: PortGroup[] = ["drive", "pcie", "net"];
+const MONO = "var(--font-geist-mono), monospace";
+/** 单元格里的第二行小字。 */
+const SUB = { display: "block", color: "text.secondary" } as const;
 
+// 占用用蓝、空闲用绿：找空位时绿色一眼能看到。
 function UsedBadge({ used }: { used: boolean | null }) {
-  if (used === null) return <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">不确定</span>;
-  return used ? (
-    <span className="rounded bg-sky-500/15 px-1.5 py-0.5 text-xs text-sky-800 dark:text-sky-300">占用</span>
-  ) : (
-    <span className="rounded bg-emerald-500/20 px-1.5 py-0.5 text-xs text-emerald-800 dark:text-emerald-300">空闲</span>
-  );
+  if (used === null) return <StatusChip tone="neutral" label="不确定" />;
+  return used ? <StatusChip tone="info" label="占用" /> : <StatusChip tone="success" label="空闲" />;
 }
 
 const LINK_TEXT: Record<string, string> = { up: "有链路", down: "没链路", disabled: "没启用", "": "不确定" };
 
 function LinkBadge({ link }: { link: HwPort["link"] }) {
   const value = link || "";
-  const tone = value === "up" ? "bg-sky-500/15 text-sky-800 dark:text-sky-300" : value === "down" ? "bg-emerald-500/20 text-emerald-800 dark:text-emerald-300" : "bg-muted text-muted-foreground";
-  return <span className={`rounded px-1.5 py-0.5 text-xs whitespace-nowrap ${tone}`}>{LINK_TEXT[value]}</span>;
+  return <StatusChip tone={value === "up" ? "info" : value === "down" ? "success" : "neutral"} label={LINK_TEXT[value]} />;
 }
 
 function SlotTable({ ports }: { ports: HwPort[] }) {
   return (
-    <div className="overflow-x-auto">
-      <Table>
-        <TableHeader>
+    <TableContainer component={Paper} variant="outlined">
+      <Table size="small" sx={{ "& td": { fontSize: 12 } }}>
+        <TableHead>
           <TableRow>
-            <TableHead>位置</TableHead>
-            <TableHead>规格</TableHead>
-            <TableHead>状态</TableHead>
-            <TableHead>插着的</TableHead>
+            <TableCell>位置</TableCell>
+            <TableCell>规格</TableCell>
+            <TableCell>状态</TableCell>
+            <TableCell>插着的</TableCell>
           </TableRow>
-        </TableHeader>
+        </TableHead>
         <TableBody>
           {ports.map((port, index) => (
             <TableRow key={`${port.name}-${index}`}>
-              <TableCell className="font-mono text-xs">{port.name}</TableCell>
-              <TableCell className="text-xs">{port.type || "—"}</TableCell>
+              <TableCell sx={{ fontFamily: MONO, whiteSpace: "nowrap" }}>{port.name}</TableCell>
+              <TableCell>{port.type || "—"}</TableCell>
               <TableCell>
                 <UsedBadge used={port.used} />
               </TableCell>
-              <TableCell className="max-w-96 text-xs whitespace-normal">
+              <TableCell sx={{ maxWidth: 384 }}>
                 {port.device || (port.used === false ? "" : "—")}
-                {port.note ? <span className="block text-muted-foreground">{port.note}</span> : null}
+                {port.note ? (
+                  <Box component="span" sx={SUB}>
+                    {port.note}
+                  </Box>
+                ) : null}
               </TableCell>
             </TableRow>
           ))}
         </TableBody>
       </Table>
-    </div>
+    </TableContainer>
   );
 }
 
 function NetTable({ ports }: { ports: HwPort[] }) {
   return (
-    <div className="overflow-x-auto">
-      <Table>
-        <TableHeader>
+    <TableContainer component={Paper} variant="outlined">
+      <Table size="small" sx={{ "& td": { fontSize: 12 } }}>
+        <TableHead>
           <TableRow>
-            <TableHead>网口</TableHead>
-            <TableHead>网卡</TableHead>
-            <TableHead>链路</TableHead>
-            <TableHead>速率</TableHead>
-            <TableHead>地址</TableHead>
+            <TableCell>网口</TableCell>
+            <TableCell>网卡</TableCell>
+            <TableCell>链路</TableCell>
+            <TableCell>速率</TableCell>
+            <TableCell>地址</TableCell>
           </TableRow>
-        </TableHeader>
+        </TableHead>
         <TableBody>
           {ports.map((port, index) => (
             <TableRow key={`${port.name}-${index}`}>
-              <TableCell className="font-mono text-xs">
+              <TableCell sx={{ fontFamily: MONO, whiteSpace: "nowrap" }}>
                 {port.name}
-                {port.mac ? <span className="block text-muted-foreground">{port.mac}</span> : null}
+                {port.mac ? (
+                  <Box component="span" sx={SUB}>
+                    {port.mac}
+                  </Box>
+                ) : null}
               </TableCell>
-              <TableCell className="max-w-72 text-xs whitespace-normal">
+              <TableCell sx={{ maxWidth: 288 }}>
                 {port.type || "—"}
-                {port.note ? <span className="block text-muted-foreground">{port.note}</span> : null}
+                {port.note ? (
+                  <Box component="span" sx={SUB}>
+                    {port.note}
+                  </Box>
+                ) : null}
               </TableCell>
               <TableCell>
                 <LinkBadge link={port.link} />
               </TableCell>
-              <TableCell className="text-xs">{port.speed || "—"}</TableCell>
-              <TableCell className="font-mono text-xs whitespace-normal">
+              <TableCell sx={{ whiteSpace: "nowrap" }}>{port.speed || "—"}</TableCell>
+              <TableCell sx={{ fontFamily: MONO }}>
                 {port.ips?.length ? port.ips.join("，") : null}
-                {port.master ? <span className="block">在 {port.master}</span> : null}
-                {!port.ips?.length && !port.master ? <span className="text-muted-foreground">没配</span> : null}
+                {port.master ? <Box component="span" sx={{ display: "block" }}>在 {port.master}</Box> : null}
+                {!port.ips?.length && !port.master ? (
+                  <Box component="span" sx={{ color: "text.secondary" }}>
+                    没配
+                  </Box>
+                ) : null}
               </TableCell>
             </TableRow>
           ))}
         </TableBody>
       </Table>
-    </div>
+    </TableContainer>
   );
 }
 
@@ -125,61 +152,63 @@ export function ServerPorts({ row }: { row: { id: string } }) {
   }, [row.id, source]);
 
   const ports = snapshot?.ports;
+  const muted = (text: React.ReactNode) => (
+    <Typography variant="body2" color="text.secondary">
+      {text}
+    </Typography>
+  );
   return (
-    <section className="grid gap-4">
-      <div className="grid gap-1">
-        <h3 className="font-medium">接口</h3>
-        <p className="text-xs text-muted-foreground">
+    <Stack component="section" spacing={2}>
+      <Stack spacing={0.5}>
+        <Typography variant="h3">接口</Typography>
+        <Typography variant="caption" color="text.secondary">
           硬盘位、PCIe 插槽和网口有没有在用，跟着「硬件配置」里的采集一起读。系统内的 PCIe 插槽按 BIOS 的插槽表列，再按总线地址找插着的设备；盘位来自背板、板载 SATA 口和热插拔槽，背板不报的空盘位看不到。网口不判断占用，链路和地址都列出来。
-        </p>
-      </div>
+        </Typography>
+      </Stack>
 
-      <div className="flex flex-wrap items-center gap-2">
+      <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center" }}>
         {(["os", "bmc"] as const).map((value) => (
-          <Button key={value} type="button" size="sm" variant={source === value ? "default" : "outline"} onClick={() => setSource(value)}>
+          <Button key={value} type="button" variant={source === value ? "contained" : "outlined"} onClick={() => setSource(value)}>
             {SOURCE_LABEL[value]}
           </Button>
         ))}
-        <label className="ml-auto flex items-center gap-1.5 text-sm">
-          <input type="checkbox" checked={freeOnly} onChange={() => setFreeOnly((value) => !value)} />
-          只看空闲的
-        </label>
-      </div>
+        <FormControlLabel
+          sx={{ ml: "auto", mr: 0 }}
+          control={<Checkbox checked={freeOnly} onChange={() => setFreeOnly((value) => !value)} />}
+          label={<Typography variant="body2">只看空闲的</Typography>}
+        />
+      </Stack>
 
-      {state === "loading" ? <p className="text-sm text-muted-foreground">正在读取</p> : null}
-      {state === "error" ? <p className="text-sm text-destructive">读取失败</p> : null}
-      {state === "ready" && !snapshot ? <p className="text-sm text-muted-foreground">这台机器还没有{SOURCE_LABEL[source]}采集。在「硬件配置」标签里采集一次。</p> : null}
-      {state === "ready" && snapshot && !ports ? (
-        <p className="text-sm text-muted-foreground">最近一次{SOURCE_LABEL[source]}采集是这个功能上线前做的，没有接口数据。在「硬件配置」标签里重新采集一次。</p>
+      {state === "loading" ? muted("正在读取") : null}
+      {state === "error" ? (
+        <Typography variant="body2" color="error">
+          读取失败
+        </Typography>
       ) : null}
+      {state === "ready" && !snapshot ? muted(`这台机器还没有${SOURCE_LABEL[source]}采集。在「硬件配置」标签里采集一次。`) : null}
+      {state === "ready" && snapshot && !ports ? muted(`最近一次${SOURCE_LABEL[source]}采集是这个功能上线前做的，没有接口数据。在「硬件配置」标签里重新采集一次。`) : null}
 
       {state === "ready" && snapshot && ports ? (
-        <div className="grid gap-5">
-          <p className="text-sm text-muted-foreground">
-            {SOURCE_LABEL[snapshot.source]}采集于 {formatTime(snapshot.at)}
-          </p>
+        <Stack spacing={2.5}>
+          {muted(`${SOURCE_LABEL[snapshot.source]}采集于 ${formatTime(snapshot.at)}`)}
           {GROUPS.map((group) => {
             const all = ports.filter((port) => port.group === group);
             const list = freeOnly ? all.filter((port) => (group === "net" ? port.link !== "up" : port.used === false)) : all;
             return (
-              <section key={group} className="grid gap-1">
-                <h4 className="text-sm font-medium">{portSummary(ports, group)}</h4>
-                {!all.length ? (
-                  <p className="text-sm text-muted-foreground">
-                    {group === "net" ? "没读到网口。" : source === "bmc" ? `这台机器的 BMC 没报${PORT_GROUP_LABEL[group]}。` : `系统里没读到${PORT_GROUP_LABEL[group]}。`}
-                  </p>
-                ) : !list.length ? (
-                  <p className="text-sm text-muted-foreground">没有空闲的。</p>
-                ) : group === "net" ? (
-                  <NetTable ports={list} />
-                ) : (
-                  <SlotTable ports={list} />
-                )}
-              </section>
+              <Stack key={group} component="section" spacing={0.5}>
+                <Typography variant="subtitle2">{portSummary(ports, group)}</Typography>
+                {!all.length
+                  ? muted(group === "net" ? "没读到网口。" : source === "bmc" ? `这台机器的 BMC 没报${PORT_GROUP_LABEL[group]}。` : `系统里没读到${PORT_GROUP_LABEL[group]}。`)
+                  : !list.length
+                    ? muted("没有空闲的。")
+                    : group === "net"
+                      ? <NetTable ports={list} />
+                      : <SlotTable ports={list} />}
+              </Stack>
             );
           })}
-        </div>
+        </Stack>
       ) : null}
-    </section>
+    </Stack>
   );
 }

@@ -2,11 +2,24 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import Button from "@mui/material/Button";
+import Card from "@mui/material/Card";
+import CardContent from "@mui/material/CardContent";
+import CardHeader from "@mui/material/CardHeader";
+import Divider from "@mui/material/Divider";
+import LinearProgress from "@mui/material/LinearProgress";
+import Paper from "@mui/material/Paper";
+import Stack from "@mui/material/Stack";
+import Table from "@mui/material/Table";
+import TableBody from "@mui/material/TableBody";
+import TableCell from "@mui/material/TableCell";
+import TableContainer from "@mui/material/TableContainer";
+import TableHead from "@mui/material/TableHead";
+import TableRow from "@mui/material/TableRow";
+import TextField from "@mui/material/TextField";
+import Typography from "@mui/material/Typography";
+import UploadFileOutlined from "@mui/icons-material/UploadFileOutlined";
+import { StatusChip } from "@/components/mui/status-chip";
 import { formatBytes, fingerprintOf, percent, useUploads, type LiveUpload, type PendingUpload } from "@/components/upload-provider";
 import { ISO_ACCEPT, ISO_FORMATS_LABEL } from "@/lib/iso-name";
 import { FAMILY_LABEL, type ImageRecord } from "@/lib/types";
@@ -99,44 +112,62 @@ export function ImageManager({ images, uploads }: { images: ImageRecord[]; uploa
   }
 
   return (
-    <div className="grid gap-6">
-      <section className="grid gap-3 rounded-xl bg-card p-4 ring-1 ring-foreground/10">
-        <h2 className="font-medium">上传 ISO</h2>
-        <p className="text-sm text-muted-foreground">
-          支持 Ubuntu、Debian、Rocky Linux、AlmaLinux 的 x86_64 安装 ISO，以及用 dd 导出的 Ubuntu / Debian 整盘镜像（GPT，根分区 ext4 且在最后）。格式：{ISO_FORMATS_LABEL}，压缩的导入后自动解压。按 4MB 一段上传，网络抖动会自动重试；断开的上传会留在下面的任务里，可以继续或取消，传完自动识别抽取。
-        </p>
-        <div className="grid gap-3 sm:max-w-md">
-          <div className="grid gap-1.5">
-            <Label htmlFor="upload-name">显示名称</Label>
-            <Input id="upload-name" value={uploadName} placeholder="可留空，默认用文件名" onChange={(event) => setUploadName(event.target.value)} />
-          </div>
-          <Input
-            key={pickerKey}
-            type="file"
-            accept={ISO_ACCEPT}
-            onChange={(event) => {
-              setFile(event.target.files?.[0] || null);
-              setError("");
-            }}
-          />
-          {resumable ? (
-            <p className="text-sm text-muted-foreground">
-              这个文件上次传到 {formatBytes(resumable.offset)}（{percent(resumable.offset, resumable.size)}%），会从这里继续。
-            </p>
-          ) : null}
-          <Button type="button" className="w-fit" disabled={live.running || !file} onClick={startSelected}>
-            {resumable ? `从 ${percent(resumable.offset, resumable.size)}% 继续上传` : "上传并抽取"}
-          </Button>
-          {live.running ? <p className="text-sm text-muted-foreground">一次传一个。切到别的页面会继续传，进度在右下角的小窗里；只是不要刷新或关闭页面。</p> : null}
-        </div>
-        {error ? <p className="text-sm text-destructive">{error}</p> : null}
-      </section>
+    <Stack spacing={3}>
+      <Card component="section">
+        <CardHeader title="上传 ISO" />
+        <CardContent>
+          <Stack spacing={2}>
+            <Typography variant="body2" sx={{ color: "text.secondary" }}>
+              支持 Ubuntu、Debian、Rocky Linux、AlmaLinux 的 x86_64 安装 ISO，以及用 dd 导出的 Ubuntu / Debian 整盘镜像（GPT，根分区 ext4 且在最后）。格式：{ISO_FORMATS_LABEL}，压缩的导入后自动解压。按 4MB 一段上传，网络抖动会自动重试；断开的上传会留在下面的任务里，可以继续或取消，传完自动识别抽取。
+            </Typography>
+            <Stack spacing={2} sx={{ maxWidth: { sm: 448 }, alignItems: "flex-start" }}>
+              <TextField id="upload-name" label="显示名称" value={uploadName} placeholder="可留空，默认用文件名" onChange={(event) => setUploadName(event.target.value)} fullWidth />
+              <Stack direction="row" spacing={1} sx={{ alignItems: "center", minWidth: 0, maxWidth: "100%" }}>
+                <Button component="label" variant="outlined" startIcon={<UploadFileOutlined />} sx={{ flexShrink: 0 }}>
+                  选择文件
+                  <input
+                    key={pickerKey}
+                    type="file"
+                    hidden
+                    accept={ISO_ACCEPT}
+                    onChange={(event) => {
+                      setFile(event.target.files?.[0] || null);
+                      setError("");
+                    }}
+                  />
+                </Button>
+                <Typography variant="body2" noWrap title={file?.name} sx={{ minWidth: 0, color: file ? "text.primary" : "text.secondary" }}>
+                  {file ? `${file.name}（${formatBytes(file.size)}）` : "未选择文件"}
+                </Typography>
+              </Stack>
+              {resumable ? (
+                <Typography variant="body2" sx={{ color: "text.secondary" }}>
+                  这个文件上次传到 {formatBytes(resumable.offset)}（{percent(resumable.offset, resumable.size)}%），会从这里继续。
+                </Typography>
+              ) : null}
+              <Button variant="contained" disabled={live.running || !file} onClick={startSelected}>
+                {resumable ? `从 ${percent(resumable.offset, resumable.size)}% 继续上传` : "上传并抽取"}
+              </Button>
+              {live.running ? (
+                <Typography variant="body2" sx={{ color: "text.secondary" }}>
+                  一次传一个。切到别的页面会继续传，进度在右下角的小窗里；只是不要刷新或关闭页面。
+                </Typography>
+              ) : null}
+            </Stack>
+            {error ? (
+              <Typography variant="body2" sx={{ color: "error.main" }}>
+                {error}
+              </Typography>
+            ) : null}
+          </Stack>
+        </CardContent>
+      </Card>
 
       <input
         ref={resumePicker}
         type="file"
         accept={ISO_ACCEPT}
-        className="hidden"
+        hidden
         onChange={(event) => {
           resumeWith(event.target.files?.[0]);
           event.target.value = "";
@@ -144,76 +175,104 @@ export function ImageManager({ images, uploads }: { images: ImageRecord[]; uploa
       />
 
       {tasks.length ? (
-        <section className="grid gap-3 rounded-xl bg-card p-4 ring-1 ring-foreground/10">
-          <h2 className="font-medium">上传任务</h2>
-          {tasks.map((item) => {
-            const running = item.state === "running";
-            const taskError = pickErrors[item.id] || item.error;
-            return (
-              <div key={item.id} className="grid gap-1.5 border-t pt-3 text-sm first-of-type:border-t-0 first-of-type:pt-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-medium">{item.name || item.filename}</span>
-                  {item.name ? <span className="text-xs text-muted-foreground">{item.filename}</span> : null}
-                  <Badge variant={running ? "secondary" : item.state === "error" ? "destructive" : "outline"}>{running ? "上传中" : item.state === "error" ? "已中断" : "已暂停"}</Badge>
-                  <div className="ml-auto flex gap-1">
-                    {running ? (
-                      <Button type="button" variant="secondary" size="sm" onClick={live.pause}>
-                        暂停
-                      </Button>
-                    ) : item.id.startsWith("failed-") ? null : (
-                      <Button type="button" variant="secondary" size="sm" disabled={live.running} onClick={() => resume(item)}>
-                        继续
-                      </Button>
-                    )}
-                    <Button type="button" variant="ghost" size="sm" onClick={() => cancel(item)}>
-                      {item.id.startsWith("failed-") ? "关闭" : "取消"}
-                    </Button>
-                  </div>
-                </div>
-                <div className="h-2 overflow-hidden rounded-full bg-muted">
-                  <div className={`h-full transition-all ${running ? "bg-primary" : "bg-muted-foreground/40"}`} style={{ width: `${percent(item.offset, item.size)}%` }} />
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  {formatBytes(item.offset)} / {formatBytes(item.size)}（{percent(item.offset, item.size)}%）
-                  {running ? "" : ` · 最后更新 ${formatTime(item.updatedAt)}`}
-                  {!running && !live.hasFile(item.id) && !item.id.startsWith("failed-") ? " · 继续时需要重新选择这个文件" : ""}
-                </p>
-                {taskError ? <p className="text-xs text-destructive">{taskError}</p> : null}
-              </div>
-            );
-          })}
-        </section>
+        <Card component="section">
+          <CardHeader title="上传任务" />
+          <CardContent>
+            <Stack spacing={1.5} divider={<Divider flexItem />}>
+              {tasks.map((item) => {
+                const running = item.state === "running";
+                const taskError = pickErrors[item.id] || item.error;
+                return (
+                  <Stack key={item.id} spacing={0.75}>
+                    <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: "wrap", alignItems: "center" }}>
+                      <Typography variant="body2" sx={{ fontWeight: 500, minWidth: 0, wordBreak: "break-all" }}>
+                        {item.name || item.filename}
+                      </Typography>
+                      {item.name ? (
+                        <Typography variant="caption" sx={{ color: "text.secondary", minWidth: 0, wordBreak: "break-all" }}>
+                          {item.filename}
+                        </Typography>
+                      ) : null}
+                      <StatusChip tone={running ? "info" : item.state === "error" ? "error" : "neutral"} label={running ? "上传中" : item.state === "error" ? "已中断" : "已暂停"} />
+                      <Stack direction="row" spacing={0.5} sx={{ ml: "auto" }}>
+                        {running ? (
+                          <Button variant="outlined" onClick={live.pause}>
+                            暂停
+                          </Button>
+                        ) : item.id.startsWith("failed-") ? null : (
+                          <Button variant="outlined" disabled={live.running} onClick={() => resume(item)}>
+                            继续
+                          </Button>
+                        )}
+                        <Button onClick={() => cancel(item)}>{item.id.startsWith("failed-") ? "关闭" : "取消"}</Button>
+                      </Stack>
+                    </Stack>
+                    <LinearProgress
+                      variant="determinate"
+                      value={percent(item.offset, item.size)}
+                      color={running ? "primary" : "inherit"}
+                      sx={{ height: 8, borderRadius: 4, color: running ? undefined : "text.disabled" }}
+                    />
+                    <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                      {formatBytes(item.offset)} / {formatBytes(item.size)}（{percent(item.offset, item.size)}%）
+                      {running ? "" : ` · 最后更新 ${formatTime(item.updatedAt)}`}
+                      {!running && !live.hasFile(item.id) && !item.id.startsWith("failed-") ? " · 继续时需要重新选择这个文件" : ""}
+                    </Typography>
+                    {taskError ? (
+                      <Typography variant="caption" sx={{ color: "error.main" }}>
+                        {taskError}
+                      </Typography>
+                    ) : null}
+                  </Stack>
+                );
+              })}
+            </Stack>
+          </CardContent>
+        </Card>
       ) : null}
 
       {images.length === 0 ? (
-        <p className="text-sm text-muted-foreground">还没有镜像。上传安装 ISO 后会出现在这里。</p>
+        <Typography variant="body2" sx={{ color: "text.secondary" }}>
+          还没有镜像。上传安装 ISO 后会出现在这里。
+        </Typography>
       ) : (
-        <div className="overflow-x-auto rounded-xl bg-card ring-1 ring-foreground/10">
-          <Table>
-            <TableHeader>
+        <TableContainer component={Paper} variant="outlined">
+          <Table size="small">
+            <TableHead>
               <TableRow>
-                <TableHead>镜像名称</TableHead>
-                <TableHead>系统版本</TableHead>
-                <TableHead>大小</TableHead>
-                <TableHead>状态</TableHead>
-                <TableHead />
+                <TableCell>镜像名称</TableCell>
+                <TableCell>系统版本</TableCell>
+                <TableCell>大小</TableCell>
+                <TableCell>状态</TableCell>
+                <TableCell />
               </TableRow>
-            </TableHeader>
+            </TableHead>
             <TableBody>
               {images.map((image) => (
                 <TableRow key={image.id}>
                   <TableCell>
-                    <div className="font-medium">{image.name}</div>
-                    <div className="text-xs text-muted-foreground">{image.filename}</div>
+                    <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                      {image.name}
+                    </Typography>
+                    <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                      {image.filename}
+                    </Typography>
                   </TableCell>
                   <TableCell>
                     {image.status === "ready" ? (
                       <>
-                        <div>
+                        <Typography variant="body2">
                           {FAMILY_LABEL[image.family]}
-                          {image.kind === "disk" ? <span className="text-xs text-muted-foreground"> · 整盘镜像，可写盘或内存运行</span> : null}
-                        </div>
-                        <div className="max-w-sm text-xs whitespace-normal text-muted-foreground">{image.version}</div>
+                          {image.kind === "disk" ? (
+                            <Typography component="span" variant="caption" sx={{ color: "text.secondary" }}>
+                              {" "}
+                              · 整盘镜像，可写盘或内存运行
+                            </Typography>
+                          ) : null}
+                        </Typography>
+                        <Typography variant="caption" component="div" sx={{ maxWidth: 384, color: "text.secondary" }}>
+                          {image.version}
+                        </Typography>
                       </>
                     ) : image.status === "error" ? (
                       "未识别"
@@ -221,15 +280,20 @@ export function ImageManager({ images, uploads }: { images: ImageRecord[]; uploa
                       "识别中"
                     )}
                   </TableCell>
-                  <TableCell className="whitespace-nowrap">{image.size ? formatBytes(image.size) : "—"}</TableCell>
+                  <TableCell sx={{ whiteSpace: "nowrap" }}>{image.size ? formatBytes(image.size) : "—"}</TableCell>
                   <TableCell>
-                    <Badge variant={image.status === "ready" ? "secondary" : image.status === "error" ? "destructive" : "outline"}>
-                      {image.status === "ready" ? "可安装" : image.status === "error" ? "失败" : "抽取中"}
-                    </Badge>
-                    {image.error ? <p className="mt-1 max-w-sm text-xs text-destructive">{image.error}</p> : null}
+                    <StatusChip
+                      tone={image.status === "ready" ? "success" : image.status === "error" ? "error" : "info"}
+                      label={image.status === "ready" ? "可安装" : image.status === "error" ? "失败" : "抽取中"}
+                    />
+                    {image.error ? (
+                      <Typography variant="caption" component="div" sx={{ mt: 0.5, maxWidth: 384, color: "error.main" }}>
+                        {image.error}
+                      </Typography>
+                    ) : null}
                   </TableCell>
-                  <TableCell className="text-right">
-                    <Button variant="ghost" size="sm" onClick={() => remove(image.id)}>
+                  <TableCell align="right">
+                    <Button color="error" onClick={() => remove(image.id)}>
                       删除
                     </Button>
                   </TableCell>
@@ -237,8 +301,8 @@ export function ImageManager({ images, uploads }: { images: ImageRecord[]; uploa
               ))}
             </TableBody>
           </Table>
-        </div>
+        </TableContainer>
       )}
-    </div>
+    </Stack>
   );
 }

@@ -1,39 +1,48 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { ResizeHandle, useColumnWidths } from "@/components/resizable-columns";
-import { Button } from "@/components/ui/button";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useEffect, useMemo, useState } from "react";
+import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
+import Stack from "@mui/material/Stack";
+import Typography from "@mui/material/Typography";
+import type { Theme } from "@mui/material/styles";
+import { DataGrid, type GridColDef } from "@mui/x-data-grid";
+import { useGridColumnWidths } from "@/components/server-inventory";
 import { groupModules, powerLevel, type OpticsModule } from "@/lib/optics";
 import type { OpticsPort, OpticsReading } from "@/lib/types";
 import { formatTime } from "@/lib/time";
 
-const COLUMNS = [
-  { key: "port", label: "端口" },
-  { key: "group", label: "模块" },
-  { key: "sn", label: "序列号" },
-  { key: "temp", label: "温度" },
-  { key: "tx", label: "发光 dBm" },
-  { key: "rx", label: "收光 dBm" },
-];
-const COLUMN_KEYS = COLUMNS.map((column) => column.key);
+const MONO = "var(--font-geist-mono), monospace";
 
-const LEVEL_CLASS = {
-  ok: "bg-emerald-500/15 text-emerald-800 dark:text-emerald-300",
-  warn: "bg-amber-500/20 text-amber-800 dark:text-amber-300",
-  bad: "bg-rose-500/20 text-rose-800 dark:text-rose-300",
-};
+/** 表格的一行：一个光模块，或一个读不到的口（占满后面几列显示原因）。 */
+type Row = { id: string; module: OpticsModule; port?: undefined } | { id: string; module?: undefined; port: OpticsPort };
+
+const LEVEL_COLOR = { ok: "success", warn: "warning", bad: "error" } as const;
+
+/** 浅底深字的读数色块，深色模式下字用浅一档的颜色。 */
+function levelSx(level: keyof typeof LEVEL_COLOR) {
+  const color = LEVEL_COLOR[level];
+  return (theme: Theme) => {
+    const palette = (theme.vars || theme).palette[color];
+    return { bgcolor: theme.alpha(palette.main, 0.16), color: palette.dark, ...theme.applyStyles("dark", { color: palette.light }) };
+  };
+}
 
 function Lanes({ values, range, label }: { values: number[]; range?: [number, number]; label: string }) {
-  if (!values.length) return <span className="text-muted-foreground">—</span>;
+  if (!values.length)
+    return (
+      <Box component="span" sx={{ color: "text.secondary" }}>
+        —
+      </Box>
+    );
   return (
-    <span className="inline-flex flex-wrap gap-1" title={range ? `${label}告警门限 ${range[0]} ~ ${range[1]} dBm` : undefined}>
+    <Box component="span" sx={{ display: "inline-flex", flexWrap: "wrap", gap: 0.5 }} title={range ? `${label}告警门限 ${range[0]} ~ ${range[1]} dBm` : undefined}>
       {values.map((value, index) => (
-        <span key={index} className={`rounded px-1 font-mono ${LEVEL_CLASS[powerLevel(value, range)]}`}>
+        <Box key={index} component="span" sx={[{ borderRadius: 0.5, px: 0.5, fontFamily: MONO }, levelSx(powerLevel(value, range))]}>
           {value}
-        </span>
+        </Box>
       ))}
-    </span>
+    </Box>
   );
 }
 
@@ -41,16 +50,93 @@ function Lanes({ values, range, label }: { values: number[]; range?: [number, nu
 function ModuleLanes({ group, kind }: { group: OpticsModule; kind: "rx" | "tx" }) {
   const label = kind === "rx" ? "收光" : "发光";
   return (
-    <div className="grid gap-1">
+    <Stack spacing={0.5}>
       {group.ports.map((port) => (
-        <div key={port.pci} className="flex flex-wrap items-center gap-1">
-          {group.ports.length > 1 ? <span className="font-mono text-muted-foreground">{port.port}</span> : null}
+        <Stack key={port.pci} direction="row" useFlexGap spacing={0.5} sx={{ flexWrap: "wrap", alignItems: "center" }}>
+          {group.ports.length > 1 ? (
+            <Box component="span" sx={{ fontFamily: MONO, color: "text.secondary" }}>
+              {port.port}
+            </Box>
+          ) : null}
           <Lanes values={port[kind]} range={kind === "rx" ? port.rxRange : port.txRange} label={label} />
-        </div>
+        </Stack>
       ))}
-    </div>
+    </Stack>
   );
 }
+
+/** 端口名加上 RDMA 设备名和 PCI 地址。 */
+function PortName({ port }: { port: OpticsPort }) {
+  return (
+    <Box sx={{ fontFamily: MONO }}>
+      {port.port}
+      <Box component="span" sx={{ color: "text.secondary" }}>
+        {" "}
+        {[port.rdma, port.pci.replace(/^0000:/, "")].filter(Boolean).join(" · ")}
+      </Box>
+    </Box>
+  );
+}
+
+const COLUMNS: GridColDef<Row>[] = [
+  {
+    field: "port",
+    headerName: "端口",
+    width: 200,
+    renderCell: ({ row }) => (row.module ? <Box>{row.module.ports.map((port) => <PortName key={port.pci} port={port} />)}</Box> : <PortName port={row.port} />),
+  },
+  {
+    field: "group",
+    headerName: "模块",
+    flex: 1,
+    minWidth: 220,
+    colSpan: (_value, row) => (row.module ? 1 : 5),
+    renderCell: ({ row }) => {
+      if (!row.module)
+        return (
+          <Box component="span" sx={{ color: "error.main" }}>
+            读不到：{row.port.error}
+          </Box>
+        );
+      const info = row.module.info;
+      return (
+        <Box>
+          <div>{[info.vendor, info.model].filter(Boolean).join(" ") || "—"}</div>
+          <Box sx={{ color: "text.secondary" }}>
+            {[info.type, info.compliance, info.wavelengthNm ? `${info.wavelengthNm} nm` : "", info.length, info.firmware && `固件 ${info.firmware}`].filter(Boolean).join(" · ")}
+          </Box>
+        </Box>
+      );
+    },
+  },
+  {
+    field: "sn",
+    headerName: "序列号",
+    width: 160,
+    renderCell: ({ row }) => (
+      <Box component="span" sx={{ fontFamily: MONO }}>
+        {row.module?.info.sn || "—"}
+      </Box>
+    ),
+  },
+  {
+    field: "temp",
+    headerName: "温度",
+    width: 90,
+    renderCell: ({ row }) => {
+      const info = row.module?.info;
+      if (!info) return null;
+      return (
+        <Box>
+          {info.temperatureC !== undefined ? `${info.temperatureC} ℃` : "—"}
+          {info.voltageV !== undefined ? <Box sx={{ color: "text.secondary" }}>{info.voltageV} V</Box> : null}
+        </Box>
+      );
+    },
+  },
+  { field: "tx", headerName: "发光 dBm", width: 200, renderCell: ({ row }) => (row.module ? <ModuleLanes group={row.module} kind="tx" /> : null) },
+  { field: "rx", headerName: "收光 dBm", width: 200, renderCell: ({ row }) => (row.module ? <ModuleLanes group={row.module} kind="rx" /> : null) },
+];
 
 function summary(ports: OpticsPort[]): string {
   const present = ports.filter((port) => port.present);
@@ -76,7 +162,8 @@ export function ServerOptics({ row }: { row: { id: string; sn: string } }) {
   const [loaded, setLoaded] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
-  const columnWidths = useColumnWidths("pxe-optics-columns", COLUMN_KEYS);
+  const { apply, onColumnWidthChange } = useGridColumnWidths("pxe-optics-columns");
+  const columns = useMemo(() => apply(COLUMNS), [apply]);
   const url = `/api/assets/${row.id}/optics`;
 
   useEffect(() => {
@@ -109,93 +196,70 @@ export function ServerOptics({ row }: { row: { id: string; sn: string } }) {
     }
   }
 
+  const rows = useMemo<Row[]>(
+    () =>
+      reading
+        ? [
+            ...groupModules(reading.ports).map((group) => ({ id: `m-${group.info.pci}-${group.info.port}`, module: group })),
+            ...reading.ports.filter((port) => !port.present).map((port) => ({ id: `p-${port.pci}-${port.port}`, port })),
+          ]
+        : [],
+    [reading],
+  );
+
   return (
-    <section className="grid gap-4">
-      <div className="flex flex-wrap items-start gap-2">
-        <div className="grid flex-1 gap-1">
-          <h3 className="font-medium">光模块</h3>
-          <p className="text-xs text-muted-foreground">
+    <Stack component="section" spacing={2}>
+      <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "flex-start" }}>
+        <Stack spacing={0.5} sx={{ flex: 1, minWidth: 240 }}>
+          <Typography variant="h3">光模块</Typography>
+          <Typography variant="caption" color="text.secondary">
             SSH 进系统读：NVIDIA/Mellanox 网卡用 mlxlink，其他网卡用 ethtool -m。一个模块一行，按序列号合并：twin-port 模块接两个口，收发光按口分行。颜色按模块自己报的告警门限：红色超出门限，黄色离下限不到 2 dB。型号和序列号也会在「采集硬件配置」时记进硬件明细。
-          </p>
-        </div>
-        <Button type="button" size="sm" disabled={pending} onClick={query}>
+          </Typography>
+        </Stack>
+        <Button type="button" variant="contained" disabled={pending} onClick={query}>
           {pending ? "正在查询" : "查询收发光"}
         </Button>
-      </div>
-      {pending ? <p className="text-sm text-muted-foreground">正在 SSH 进 {row.sn} 读每个口的模块，二十来个口要十几秒。</p> : null}
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
-      {loaded && !reading && !pending ? <p className="text-sm text-muted-foreground">还没查询过。点「查询收发光」。</p> : null}
+      </Stack>
+      {pending ? (
+        <Typography variant="body2" color="text.secondary">
+          正在 SSH 进 {row.sn} 读每个口的模块，二十来个口要十几秒。
+        </Typography>
+      ) : null}
+      {error ? (
+        <Typography variant="body2" color="error">
+          {error}
+        </Typography>
+      ) : null}
+      {loaded && !reading && !pending ? (
+        <Typography variant="body2" color="text.secondary">
+          还没查询过。点「查询收发光」。
+        </Typography>
+      ) : null}
 
       {reading ? (
         <>
-          <p className="text-sm">
-            {formatTime(reading.at)} 从 <span className="font-mono">{reading.host}</span> 读到：{reading.ports.length ? summary(reading.ports) : "没有发现光模块"}。
-          </p>
+          <Typography variant="body2">
+            {formatTime(reading.at)} 从{" "}
+            <Box component="span" sx={{ fontFamily: MONO }}>
+              {reading.host}
+            </Box>{" "}
+            读到：{reading.ports.length ? summary(reading.ports) : "没有发现光模块"}。
+          </Typography>
           {reading.ports.length ? (
-            <div className="overflow-x-auto">
-              <Table className={columnWidths.tableClassName} style={columnWidths.tableStyle}>
-                <TableHeader>
-                  <TableRow>
-                    {COLUMNS.map((column) => (
-                      <TableHead key={column.key} data-col={column.key} className="relative" style={columnWidths.headStyle(column.key)}>
-                        {column.label}
-                        <ResizeHandle onStart={(event) => columnWidths.startResize(column.key, event)} onReset={columnWidths.reset} />
-                      </TableHead>
-                    ))}
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {groupModules(reading.ports).map((group) => {
-                    const info = group.info;
-                    return (
-                      <TableRow key={`${info.pci}-${info.port}`}>
-                        <TableCell className="text-xs">
-                          {group.ports.map((port) => (
-                            <div key={port.pci}>
-                              <span className="font-mono">{port.port}</span>
-                              <span className="font-mono text-muted-foreground"> {[port.rdma, port.pci.replace(/^0000:/, "")].filter(Boolean).join(" · ")}</span>
-                            </div>
-                          ))}
-                        </TableCell>
-                        <TableCell className="text-xs whitespace-normal">
-                          <div>{[info.vendor, info.model].filter(Boolean).join(" ") || "—"}</div>
-                          <div className="text-muted-foreground">
-                            {[info.type, info.compliance, info.wavelengthNm ? `${info.wavelengthNm} nm` : "", info.length, info.firmware && `固件 ${info.firmware}`].filter(Boolean).join(" · ")}
-                          </div>
-                        </TableCell>
-                        <TableCell className="font-mono text-xs">{info.sn || "—"}</TableCell>
-                        <TableCell className="text-xs">
-                          {info.temperatureC !== undefined ? `${info.temperatureC} ℃` : "—"}
-                          {info.voltageV !== undefined ? <div className="text-muted-foreground">{info.voltageV} V</div> : null}
-                        </TableCell>
-                        <TableCell className="text-xs">
-                          <ModuleLanes group={group} kind="tx" />
-                        </TableCell>
-                        <TableCell className="text-xs">
-                          <ModuleLanes group={group} kind="rx" />
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                  {reading.ports
-                    .filter((port) => !port.present)
-                    .map((port) => (
-                      <TableRow key={`${port.pci}-${port.port}`}>
-                        <TableCell className="text-xs">
-                          <span className="font-mono">{port.port}</span>
-                          <span className="font-mono text-muted-foreground"> {[port.rdma, port.pci.replace(/^0000:/, "")].filter(Boolean).join(" · ")}</span>
-                        </TableCell>
-                        <TableCell colSpan={5} className="text-xs whitespace-normal text-destructive">
-                          读不到：{port.error}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                </TableBody>
-              </Table>
-            </div>
+            <DataGrid
+              rows={rows}
+              columns={columns}
+              onColumnWidthChange={onColumnWidthChange}
+              autoHeight
+              hideFooter
+              disableColumnMenu
+              disableColumnSorting
+              getRowHeight={() => "auto"}
+              sx={{ fontSize: 12, "& .MuiDataGrid-cell": { py: 0.75, whiteSpace: "normal", wordBreak: "break-word", lineHeight: 1.5 } }}
+            />
           ) : null}
         </>
       ) : null}
-    </section>
+    </Stack>
   );
 }

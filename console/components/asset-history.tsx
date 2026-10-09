@@ -1,6 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Box from "@mui/material/Box";
+import Stack from "@mui/material/Stack";
+import Typography from "@mui/material/Typography";
 import type { AssetEvent, AuditEntry } from "@/lib/types";
 import { formatTime } from "@/lib/time";
 
@@ -47,24 +50,43 @@ export function AssetHistory({ assetId }: { assetId: string }) {
       .catch((reason: Error) => setError(reason.message || "没有连上控制台"));
   }, [assetId]);
 
-  if (error) return <p className="text-sm text-destructive">{error}</p>;
-  if (!items) return <p className="text-sm text-muted-foreground">正在读取</p>;
-  if (!items.length) return <p className="text-sm text-muted-foreground">还没有记录。</p>;
+  if (error)
+    return (
+      <Typography variant="body2" color="error">
+        {error}
+      </Typography>
+    );
+  if (!items || !items.length)
+    return (
+      <Typography variant="body2" sx={{ color: "text.secondary" }}>
+        {items ? "还没有记录。" : "正在读取"}
+      </Typography>
+    );
   return (
-    <ol className="grid gap-3">
+    <Stack component="ol" spacing={1.5} sx={{ m: 0, p: 0, listStyle: "none" }}>
       {items.map((item) => (
-        <li key={item.key} className="grid gap-0.5 border-l-2 pl-3 text-sm" style={{ borderColor: item.ok ? undefined : "var(--destructive)" }}>
-          <div className="flex flex-wrap items-baseline gap-x-2 text-xs text-muted-foreground">
-            <span>{formatTime(item.at)}</span>
-            {item.who ? <span>{item.who}</span> : null}
-          </div>
-          <div className={item.ok ? "font-medium" : "font-medium text-destructive"}>
+        <Box component="li" key={item.key} sx={{ borderLeft: 2, borderColor: item.ok ? "divider" : "error.main", pl: 1.5 }}>
+          <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "baseline" }}>
+            <Typography variant="caption" sx={{ color: "text.secondary" }}>
+              {formatTime(item.at)}
+            </Typography>
+            {item.who ? (
+              <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                {item.who}
+              </Typography>
+            ) : null}
+          </Stack>
+          <Typography variant="body2" sx={{ fontWeight: 500, color: item.ok ? undefined : "error.main" }}>
             {item.title}
             {item.ok ? "" : "（失败）"}
-          </div>
-          {item.text ? <p className="text-xs whitespace-pre-wrap text-muted-foreground">{item.text}</p> : null}
-        </li>
+          </Typography>
+          {item.text ? (
+            <Typography variant="caption" component="p" sx={{ whiteSpace: "pre-wrap", color: "text.secondary" }}>
+              {item.text}
+            </Typography>
+          ) : null}
+        </Box>
       ))}
-    </ol>
+    </Stack>
   );
 }

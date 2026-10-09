@@ -2,8 +2,11 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
+import Stack from "@mui/material/Stack";
+import TextField from "@mui/material/TextField";
+import Typography from "@mui/material/Typography";
 
 /** 改自己的密码；管理员给别人重设时不需要当前密码。 */
 export function PasswordForm({ userId, askCurrent }: { userId: string; askCurrent: boolean }) {
@@ -43,26 +46,45 @@ export function PasswordForm({ userId, askCurrent }: { userId: string; askCurren
   }
 
   return (
-    <form onSubmit={submit} className="grid max-w-sm gap-3">
+    <Stack component="form" onSubmit={submit} spacing={2} sx={{ maxWidth: 384 }}>
       {askCurrent ? (
-        <label className="grid gap-1.5 text-sm">
-          <span className="font-medium">当前密码</span>
-          <Input type="password" value={current} onChange={(event) => setCurrent(event.target.value)} autoComplete="current-password" required />
-        </label>
+        <TextField label="当前密码" type="password" value={current} onChange={(event) => setCurrent(event.target.value)} autoComplete="current-password" required fullWidth />
       ) : null}
-      <label className="grid gap-1.5 text-sm">
-        <span className="font-medium">新密码</span>
-        <Input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="new-password" minLength={8} required />
-      </label>
-      <label className="grid gap-1.5 text-sm">
-        <span className="font-medium">再输一次</span>
-        <Input type="password" value={confirm} onChange={(event) => setConfirm(event.target.value)} autoComplete="new-password" minLength={8} required />
-      </label>
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
-      {message ? <p className="text-sm text-muted-foreground">{message}</p> : null}
-      <Button type="submit" className="w-fit" disabled={pending}>
-        {pending ? "保存中" : "修改密码"}
-      </Button>
-    </form>
+      <TextField
+        label="新密码"
+        type="password"
+        value={password}
+        onChange={(event) => setPassword(event.target.value)}
+        autoComplete="new-password"
+        slotProps={{ htmlInput: { minLength: 8 } }}
+        required
+        fullWidth
+      />
+      <TextField
+        label="再输一次"
+        type="password"
+        value={confirm}
+        onChange={(event) => setConfirm(event.target.value)}
+        autoComplete="new-password"
+        slotProps={{ htmlInput: { minLength: 8 } }}
+        required
+        fullWidth
+      />
+      {error ? (
+        <Typography variant="body2" color="error">
+          {error}
+        </Typography>
+      ) : null}
+      {message ? (
+        <Typography variant="body2" sx={{ color: "text.secondary" }}>
+          {message}
+        </Typography>
+      ) : null}
+      <Box>
+        <Button type="submit" variant="contained" disabled={pending}>
+          {pending ? "保存中" : "修改密码"}
+        </Button>
+      </Box>
+    </Stack>
   );
 }

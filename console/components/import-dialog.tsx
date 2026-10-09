@@ -1,9 +1,19 @@
 "use client";
 
 import { useState } from "react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
+import Checkbox from "@mui/material/Checkbox";
+import Dialog from "@mui/material/Dialog";
+import DialogActions from "@mui/material/DialogActions";
+import DialogContent from "@mui/material/DialogContent";
+import DialogTitle from "@mui/material/DialogTitle";
+import FormControlLabel from "@mui/material/FormControlLabel";
+import Stack from "@mui/material/Stack";
+import Typography from "@mui/material/Typography";
+import UploadFileOutlined from "@mui/icons-material/UploadFileOutlined";
+import { StatusChip } from "@/components/mui/status-chip";
+import type { Tone } from "@/lib/asset-labels";
 import { api } from "@/lib/client-api";
 
 export interface ImportRow {
@@ -23,6 +33,7 @@ export interface ImportSummary<R extends ImportRow> {
 }
 
 const ACTION: Record<ImportRow["action"], string> = { create: "新建", update: "更新", same: "没变", error: "出错" };
+const ACTION_TONE: Record<ImportRow["action"], Tone> = { create: "primary", update: "neutral", same: "neutral", error: "error" };
 
 /**
  * Excel 批量导入的通用弹窗：选文件后先预览（dryRun=1），列出新建、更新和有问题的行，确认后再真正写入。
@@ -100,82 +111,118 @@ export function ImportDialog<R extends ImportRow>({
   const unchanged = result ? (result.unchanged ?? result.rows.filter((row) => row.action === "same").length) : 0;
 
   return (
-    <Dialog open={open} onOpenChange={(next) => !next && !pending && close()}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-3xl">
-        <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
-          <DialogDescription>{description}</DialogDescription>
-        </DialogHeader>
-        <div className="flex flex-wrap items-center gap-2">
+    <Dialog open={open} onClose={() => !pending && close()} maxWidth="md" scroll="paper">
+      <DialogTitle>{title}</DialogTitle>
+      <DialogContent dividers sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
+        <Typography variant="body2" component="div" sx={{ color: "text.secondary" }}>
+          {description}
+        </Typography>
+        <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center" }}>
           {links.map((link) => (
-            <Button key={link.href} type="button" size="sm" variant="outline" onClick={() => window.location.assign(link.href)}>
+            <Button key={link.href} variant="outlined" onClick={() => window.location.assign(link.href)}>
               {link.label}
             </Button>
           ))}
           {!done ? (
-            <input
-              type="file"
-              accept=".xlsx,.xls,.csv"
-              className="text-sm"
-              onChange={(event) => {
-                const picked = event.target.files?.[0] || null;
-                setFile(picked);
-                setPreview(null);
-                if (picked) void send(picked, true);
-              }}
-            />
+            <Button component="label" variant="outlined" startIcon={<UploadFileOutlined />} disabled={pending}>
+              选择文件
+              <input
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                hidden
+                onChange={(event) => {
+                  const picked = event.target.files?.[0] || null;
+                  setFile(picked);
+                  setPreview(null);
+                  if (picked) void send(picked, true);
+                }}
+              />
+            </Button>
           ) : null}
-          {pending ? <span className="text-sm text-muted-foreground">正在读表</span> : null}
-        </div>
-        {error ? <p className="text-sm text-destructive">{error}</p> : null}
-
-        {result ? (
-          <div className="grid gap-3">
-            <p className="text-sm">
-              {done ? "已导入：" : "预览，还没有写入："}新建 {result.created} {unit}，更新 {result.updated} {unit}，没变 {unchanged} {unit}
-              {result.errors ? <span className="text-destructive">，{result.errors} 行有问题{done ? "没有导入" : "，确认后这些行会跳过"}</span> : null}。
-            </p>
-            {result.ignored?.length ? <p className="text-xs text-muted-foreground">这些列认不出，没有读：{result.ignored.join("、")}</p> : null}
-            {unchanged ? (
-              <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <input type="checkbox" checked={showAll} onChange={(event) => setShowAll(event.target.checked)} />
-                也显示没变的行
-              </label>
-            ) : null}
-            {rows.length ? (
-              <ul className="grid max-h-80 gap-1.5 overflow-y-auto text-sm">
-                {rows.map((row) => (
-                  <li key={row.row} className="grid grid-cols-[3.5rem_4rem_1fr] items-start gap-2">
-                    <span className="text-xs text-muted-foreground">第 {row.row} 行</span>
-                    <Badge variant={row.action === "error" ? "destructive" : row.action === "create" ? "default" : "outline"}>{ACTION[row.action]}</Badge>
-                    <span className="min-w-0">
-                      <span className="font-mono text-xs">{label(row) || "（空）"}</span>
-                      {row.message ? <span className={`block text-xs whitespace-pre-wrap ${row.action === "error" ? "text-destructive" : "text-muted-foreground"}`}>{row.message}</span> : null}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-          </div>
+          {file && !done ? (
+            <Typography variant="body2" noWrap sx={{ minWidth: 0, maxWidth: "100%" }}>
+              {file.name}
+            </Typography>
+          ) : null}
+          {pending ? (
+            <Typography variant="body2" sx={{ color: "text.secondary" }}>
+              正在读表
+            </Typography>
+          ) : null}
+        </Stack>
+        {error ? (
+          <Typography variant="body2" color="error">
+            {error}
+          </Typography>
         ) : null}
 
-        <div className="flex justify-end gap-2">
-          {done ? (
-            <Button type="button" onClick={close}>
-              完成
-            </Button>
-          ) : (
-            <>
-              <Button type="button" variant="ghost" disabled={pending} onClick={close}>
-                取消
-              </Button>
-              <Button type="button" disabled={pending || !file || !preview || preview.created + preview.updated === 0} onClick={() => file && void send(file, false)}>
-                {preview ? `确认导入 ${preview.created + preview.updated} ${unit}` : "确认导入"}
-              </Button>
-            </>
-          )}
-        </div>
+        {result ? (
+          <Stack spacing={1.5}>
+            <Typography variant="body2">
+              {done ? "已导入：" : "预览，还没有写入："}新建 {result.created} {unit}，更新 {result.updated} {unit}，没变 {unchanged} {unit}
+              {result.errors ? (
+                <Box component="span" sx={{ color: "error.main" }}>
+                  ，{result.errors} 行有问题{done ? "没有导入" : "，确认后这些行会跳过"}
+                </Box>
+              ) : null}
+              。
+            </Typography>
+            {result.ignored?.length ? (
+              <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                这些列认不出，没有读：{result.ignored.join("、")}
+              </Typography>
+            ) : null}
+            {unchanged ? (
+              <FormControlLabel
+                control={<Checkbox checked={showAll} onChange={(event) => setShowAll(event.target.checked)} />}
+                label={
+                  <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                    也显示没变的行
+                  </Typography>
+                }
+              />
+            ) : null}
+            {rows.length ? (
+              <Stack component="ul" spacing={0.75} sx={{ m: 0, p: 0, listStyle: "none", maxHeight: 320, overflowY: "auto" }}>
+                {rows.map((row) => (
+                  <Box component="li" key={row.row} sx={{ display: "grid", gridTemplateColumns: "3.5rem 4rem minmax(0, 1fr)", alignItems: "start", gap: 1 }}>
+                    <Typography variant="caption" sx={{ color: "text.secondary", lineHeight: "22px" }}>
+                      第 {row.row} 行
+                    </Typography>
+                    <StatusChip tone={ACTION_TONE[row.action]} outlined={row.action === "update" || row.action === "same"} label={ACTION[row.action]} />
+                    <Box sx={{ minWidth: 0 }}>
+                      <Box component="span" sx={{ fontFamily: "var(--font-geist-mono), monospace", fontSize: 12 }}>
+                        {label(row) || "（空）"}
+                      </Box>
+                      {row.message ? (
+                        <Typography variant="caption" sx={{ display: "block", whiteSpace: "pre-wrap", color: row.action === "error" ? "error.main" : "text.secondary" }}>
+                          {row.message}
+                        </Typography>
+                      ) : null}
+                    </Box>
+                  </Box>
+                ))}
+              </Stack>
+            ) : null}
+          </Stack>
+        ) : null}
       </DialogContent>
+      <DialogActions>
+        {done ? (
+          <Button variant="contained" onClick={close}>
+            完成
+          </Button>
+        ) : (
+          <>
+            <Button disabled={pending} onClick={close}>
+              取消
+            </Button>
+            <Button variant="contained" disabled={pending || !file || !preview || preview.created + preview.updated === 0} onClick={() => file && void send(file, false)}>
+              {preview ? `确认导入 ${preview.created + preview.updated} ${unit}` : "确认导入"}
+            </Button>
+          </>
+        )}
+      </DialogActions>
     </Dialog>
   );
 }
