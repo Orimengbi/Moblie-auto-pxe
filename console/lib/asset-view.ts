@@ -10,6 +10,7 @@ export type AssetRow = PublicAsset & {
   /** 「机房代码 / 机柜号 / U10-U17」，没放进机柜是空的。 */
   place: string;
   siteId: string;
+  datacenterId: string;
   warranty: ReturnType<typeof warrantyState>;
   host: string;
   hostSource: TaskHostSource;
@@ -43,6 +44,7 @@ export function assetRows(assets: Asset[] = listAssets(), context?: HostContext,
       customerName: asset.customerId ? customers.get(asset.customerId) || "" : "",
       place: placeLabel(asset, racks, sites),
       siteId: (asset.rackId && racks.get(asset.rackId)?.siteId) || "",
+      datacenterId: (asset.rackId && sites.get(racks.get(asset.rackId)?.siteId || "")?.datacenterId) || "",
       warranty: warrantyState(asset),
       host: found.host,
       hostSource: found.source,

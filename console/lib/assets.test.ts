@@ -11,6 +11,11 @@ const assets = await import("./assets.ts");
 const store = await import("./store.ts");
 const { parseServerTable } = await import("./server-sheet.ts");
 
+/** 测试里的机房都放在同一个数据中心。 */
+function testDatacenter(racks: typeof import("./racks.ts")): string {
+  return racks.listDatacenters()[0]?.id || racks.createDatacenter({ code: "T1", name: "测试数据中心" }).id;
+}
+
 test("asset tags follow the template and change as soon as it is saved", () => {
   const acme = assets.createCustomer({ code: "acme", name: "Acme 云" });
   assert.equal(acme.code, "ACME");
@@ -202,7 +207,7 @@ test("excel import previews, then creates and updates by serial number", async (
 
 test("racks hold assets in U slots without overlap and moving in marks them racked", async () => {
   const racks = await import("./racks.ts");
-  const site = racks.createSite({ code: "sz1", name: "深圳一号" });
+  const site = racks.createSite({ datacenterId: testDatacenter(racks), code: "sz1", name: "深圳一号" });
   assert.equal(site.code, "SZ1");
   const made = racks.createRacks({ siteId: site.id, prefix: "A", from: 1, to: 3, pad: 2, heightU: 42 });
   assert.deepEqual(made.created.map((rack) => rack.name), ["A01", "A02", "A03"]);
@@ -263,7 +268,7 @@ test("racks can be created several rows at a time and imported from a sheet", as
   assert.deepEqual(racks.expandPrefixes("A, E，H"), ["A", "E", "H"]);
   assert.deepEqual(racks.expandPrefixes("R01-R03"), ["R01", "R02", "R03"]);
   assert.throws(() => racks.expandPrefixes("C-A"), /反了/);
-  const site = racks.createSite({ code: "BJ2", name: "北京二号" });
+  const site = racks.createSite({ datacenterId: testDatacenter(racks), code: "BJ2", name: "北京二号" });
   const made = racks.createRacks({ siteId: site.id, prefix: "A-C", from: 1, to: 4, pad: 2 });
   assert.equal(made.created.length, 12);
   assert.deepEqual(made.created.filter((rack) => rack.rowLabel === "B").map((rack) => rack.name), ["B01", "B02", "B03", "B04"]);
@@ -337,7 +342,7 @@ test("xlsx downloads can have Chinese file names", async () => {
 test("rack floor layout auto-places by row and saves positions without overlap", async () => {
   const racks = await import("./racks.ts");
   const { floorPositions } = await import("./floor.ts");
-  const site = racks.createSite({ code: "FL1", name: "俯视图机房" });
+  const site = racks.createSite({ datacenterId: testDatacenter(racks), code: "FL1", name: "俯视图机房" });
   racks.createRacks({ siteId: site.id, prefix: "A,B", from: 1, to: 3, pad: 2 });
   const list = racks.listRacks(site.id);
   const auto = floorPositions(list);
@@ -358,7 +363,7 @@ test("rack floor layout auto-places by row and saves positions without overlap",
 test("pillars push auto-placed racks along, overlap is refused and disabled racks take no devices", async () => {
   const racks = await import("./racks.ts");
   const { floorPositions } = await import("./floor.ts");
-  const site = racks.createSite({ code: "OB1", name: "有柱子的机房" });
+  const site = racks.createSite({ datacenterId: testDatacenter(racks), code: "OB1", name: "有柱子的机房" });
   racks.createRacks({ siteId: site.id, prefix: "A", from: 1, to: 4, pad: 2 });
   // A 排第三格是一根柱子：A03、A04 往后挪一格。
   const saved = racks.saveLayout(site.id, [], [{ kind: "pillar", label: "柱 1", x: 2, y: 0, w: 1, h: 1 }]);
@@ -385,4 +390,54 @@ test("pillars push auto-placed racks along, overlap is refused and disabled rack
   assert.throws(() => racks.updateRack(a3.id, { siteId: site.id, name: "A03", heightU: 42, disabled: true }), /先挪走/);
   // 改别的字段不带 disabled 时保持原样。
   assert.equal(racks.updateRack(a2.id, { siteId: site.id, name: "A02", heightU: 48 }).disabled, true);
+});
+
+test("data centers hold rooms, rooms move between them and sheets carry the data center", async () => {
+  const racks = await import("./racks.ts");
+  const { parseAssetTable, assetsToRows } = await import("./asset-sheet.ts");
+  const kix = racks.createDatacenter({ code: "kix13", name: "大阪 KIX13", address: "大阪" });
+  assert.equal(kix.code, "KIX13");
+  assert.throws(() => racks.createDatacenter({ code: "KIX13", name: "重复" }), /已经给了/);
+  const nrt = racks.createDatacenter({ code: "NRT1", name: "东京" });
+  assert.throws(() => racks.createSite({ code: "S1", name: "没有数据中心" }), /数据中心不存在/);
+  const s110 = racks.createSite({ datacenterId: kix.id, code: "S110", name: "S110 机房" });
+  const s120 = racks.createSite({ datacenterId: kix.id, code: "S120", name: "S120 机房" });
+  const t1 = racks.createSite({ datacenterId: nrt.id, code: "T101", name: "东京一号" });
+  assert.throws(() => racks.createSite({ datacenterId: nrt.id, code: "S110", name: "同名" }), /机房代码 S110 已经给了/, "机房代码全局唯一");
+  for (const site of [s110, s120, t1]) racks.createRacks({ siteId: site.id, prefix: "A", from: 1, to: 2, pad: 2 });
+
+  assert.throws(() => racks.deleteDatacenter(kix.id), /还有 2 个机房/);
+  // 不给 datacenterId 时机房留在原来的数据中心。
+  assert.equal(racks.updateSite(s120.id, { code: "S120", name: "改名" }).datacenterId, kix.id);
+
+  // Excel：只写机柜号有歧义，写数据中心还不够时还是歧义，写到机房就唯一。
+  const imported = assets.importAssets(
+    [
+      { row: 2, cells: { sn: "dc-a", rack: "A01" } },
+      { row: 3, cells: { sn: "dc-b", datacenter: "KIX13", rack: "A01" } },
+      { row: 4, cells: { sn: "dc-c", datacenter: "NRT1", rack: "A01", uStart: "1" } },
+      { row: 5, cells: { sn: "dc-d", datacenter: "KIX13", site: "S120", rack: "A02", uStart: "1" } },
+      { row: 6, cells: { sn: "dc-e", datacenter: "NRT1", site: "S110", rack: "A01" } },
+      { row: 7, cells: { sn: "dc-f", datacenter: "KIX13" } },
+    ],
+    "alice",
+  );
+  assert.deepEqual(imported.rows.map((row) => row.action), ["error", "error", "create", "create", "error", "error"], JSON.stringify(imported.rows));
+  assert.match(imported.rows[0].message, /好几个机房/);
+  assert.match(imported.rows[4].message, /数据中心「NRT1」的机房「S110」里没有机柜 A01/);
+  assert.match(imported.rows[5].message, /填了数据中心就要填机柜/);
+
+  const rows = assetsToRows(assets.listAssets(), assets.listCustomers(), racks.listRacks(), racks.listSites(), [], racks.listDatacenters());
+  const header = rows[0];
+  const c = rows.find((row) => row.includes("DC-C"))!;
+  assert.deepEqual([c[header.indexOf("数据中心")], c[header.indexOf("机房")], c[header.indexOf("机柜")]], ["NRT1", "T101", "A01"]);
+  const round = assets.importAssets(parseAssetTable(rows).records, "alice", { dryRun: true });
+  assert.equal(round.errors, 0, JSON.stringify(round.rows.filter((row) => row.action === "error")));
+
+  // 整个机房挪到另一个数据中心，机柜和设备跟着走。
+  racks.updateSite(s120.id, { datacenterId: nrt.id, code: "S120", name: "S120 机房" });
+  const { assetRows } = await import("./asset-view.ts");
+  const d = assetRows(undefined, undefined, { light: true }).find((row) => row.sn === "DC-D")!;
+  assert.deepEqual([d.datacenterId, d.place], [nrt.id, "S120 / A02 / U1"]);
+  assert.throws(() => racks.updateSite(s120.id, { datacenterId: "nope", code: "S120", name: "x" }), /数据中心不存在/);
 });

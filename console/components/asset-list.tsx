@@ -16,7 +16,8 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { AssetRow } from "@/lib/asset-view";
 import { ASSET_STATUS, ASSET_TYPES, WARRANTY_LABEL } from "@/lib/asset-labels";
-import type { AssetStatus, Customer, RemoteFile, RemoteTask, Site } from "@/lib/types";
+import type { AssetStatus, Customer, Datacenter, RemoteFile, RemoteTask, Site } from "@/lib/types";
+import { SiteOptions } from "@/components/site-options";
 import { formatTime } from "@/lib/time";
 
 const COLUMNS = [
@@ -54,7 +55,7 @@ function hardwareText(row: AssetRow): string {
 function matches(row: AssetRow, filters: Filters): boolean {
   if (filters.status && row.status !== filters.status) return false;
   if (filters.type && row.type !== filters.type) return false;
-  if (filters.site === "none" ? row.rackId : filters.site && row.siteId !== filters.site) return false;
+  if (filters.site === "none" ? row.rackId : filters.site.startsWith("dc:") ? row.datacenterId !== filters.site.slice(3) : filters.site && row.siteId !== filters.site) return false;
   if (filters.customer === "none" ? row.customerId : filters.customer && row.customerId !== filters.customer) return false;
   if (filters.warranty && !(row.warranty === "expired" || row.warranty === "expiring")) return false;
   const needle = filters.q.trim().toLowerCase();
@@ -70,6 +71,7 @@ export function AssetList({
   rows,
   customers,
   sites,
+  datacenters,
   files,
   tasks,
   bmcPort,
@@ -77,6 +79,7 @@ export function AssetList({
   rows: AssetRow[];
   customers: Customer[];
   sites: Site[];
+  datacenters: Datacenter[];
   files: RemoteFile[];
   tasks: RemoteTask[];
   bmcPort: string;
@@ -177,13 +180,9 @@ export function AssetList({
           ))}
         </NativeSelect>
         <NativeSelect value={filters.site} onChange={(event) => setFilter("site", event.target.value)}>
-          <option value="">全部机房</option>
+          <option value="">全部位置</option>
           <option value="none">没放进机柜的</option>
-          {sites.map((site) => (
-            <option key={site.id} value={site.id}>
-              {site.code} · {site.name}
-            </option>
-          ))}
+          <SiteOptions sites={sites} datacenters={datacenters} wholeDatacenter="整个数据中心" />
         </NativeSelect>
         <NativeSelect value={filters.type} onChange={(event) => setFilter("type", event.target.value)}>
           <option value="">全部类型</option>

@@ -2,7 +2,7 @@ import { PageHeader } from "@/components/page-header";
 import { PartsBoard } from "@/components/parts-board";
 import { listAssets } from "@/lib/assets";
 import { listParts, stockSummary } from "@/lib/parts";
-import { listSites } from "@/lib/racks";
+import { listDatacenters, listSites } from "@/lib/racks";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +14,7 @@ export default function PartsPage() {
         parts={listParts()}
         summary={stockSummary()}
         sites={listSites()}
+        datacenters={listDatacenters()}
         assets={listAssets().map((asset) => ({ id: asset.id, tag: asset.tag }))}
       />
     </div>

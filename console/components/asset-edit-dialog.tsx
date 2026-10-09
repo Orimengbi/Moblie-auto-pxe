@@ -7,7 +7,8 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { ASSET_STATUS, ASSET_TYPES } from "@/lib/asset-labels";
-import type { AssetStatus, AssetType, Customer, PublicAsset, PublicSnmpProfile, Rack, Site } from "@/lib/types";
+import type { AssetStatus, AssetType, Customer, Datacenter, PublicAsset, PublicSnmpProfile, Rack, Site } from "@/lib/types";
+import { SiteOptions } from "@/components/site-options";
 import { Labeled } from "@/components/ui/labeled";
 
 /** 表单里的值都按文字存，密码留空表示不改。 */
@@ -106,6 +107,7 @@ export function AssetEditDialog({
   const [pending, setPending] = useState(false);
   const creating = !asset;
   const [sites, setSites] = useState<Site[]>([]);
+  const [datacenters, setDatacenters] = useState<Datacenter[]>([]);
   const [racks, setRacks] = useState<Rack[]>([]);
   const [profiles, setProfiles] = useState<PublicSnmpProfile[]>([]);
 
@@ -118,9 +120,10 @@ export function AssetEditDialog({
       .then((list: PublicSnmpProfile[]) => setProfiles(Array.isArray(list) ? list : []))
       .catch(() => undefined);
     // 机房和机柜打开时现取，免得每个用到这个对话框的页面都要传。
-    void Promise.all([fetch("/api/sites").then((r) => r.json()), fetch("/api/racks").then((r) => r.json())])
-      .then(([siteList, rackList]: [Site[], Rack[]]) => {
+    void Promise.all([fetch("/api/sites").then((r) => r.json()), fetch("/api/racks").then((r) => r.json()), fetch("/api/datacenters").then((r) => r.json())])
+      .then(([siteList, rackList, datacenterList]: [Site[], Rack[], Datacenter[]]) => {
         setSites(siteList);
+        setDatacenters(datacenterList);
         setRacks(rackList);
         const rack = rackList.find((item) => item.id === asset?.rackId);
         setForm((current) => ({ ...current, siteId: rack?.siteId || siteList[0]?.id || "" }));
@@ -221,11 +224,7 @@ export function AssetEditDialog({
             <Labeled label="机房">
               <NativeSelect value={form.siteId} onChange={(event) => setForm({ ...form, siteId: event.target.value, rackId: "", uStart: "" })}>
                 {sites.length ? null : <option value="">还没有机房</option>}
-                {sites.map((site) => (
-                  <option key={site.id} value={site.id}>
-                    {site.code} · {site.name}
-                  </option>
-                ))}
+                <SiteOptions sites={sites} datacenters={datacenters} />
               </NativeSelect>
             </Labeled>
             <Labeled label="机柜">

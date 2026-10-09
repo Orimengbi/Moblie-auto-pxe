@@ -3,7 +3,7 @@ import { AssetList } from "@/components/asset-list";
 import { PageHeader } from "@/components/page-header";
 import { assetRows } from "@/lib/asset-view";
 import { listCustomers } from "@/lib/assets";
-import { listSites } from "@/lib/racks";
+import { listDatacenters, listSites } from "@/lib/racks";
 import { listAllTasks, listFiles } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
@@ -20,6 +20,7 @@ export default function AssetsPage() {
           rows={assetRows()}
           customers={listCustomers()}
           sites={listSites()}
+          datacenters={listDatacenters()}
           files={listFiles()}
           tasks={listAllTasks()
             .filter((task) => !task.projectId)
