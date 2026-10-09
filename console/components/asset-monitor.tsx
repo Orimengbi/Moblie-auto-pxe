@@ -80,7 +80,7 @@ export function AssetMonitor({ assetId }: { assetId: string }) {
           {view.alerts.slice(0, 30).map((alert) => (
             <li key={alert.id} className={`grid gap-1 rounded-md border p-2 text-sm ${alert.status === "resolved" ? "opacity-60" : ""}`}>
               <div className="flex flex-wrap items-center gap-2">
-                <Badge variant={alert.severity === "critical" ? "destructive" : "outline"}>{ALERT_SEVERITY[alert.severity]}</Badge>
+                <Badge variant={alert.severity === "critical" ? "destructive" : "warning"}>{ALERT_SEVERITY[alert.severity]}</Badge>
                 <span className="font-medium">{alert.title}</span>
                 {alert.count > 1 ? <span className="text-xs text-muted-foreground">×{alert.count}</span> : null}
                 <span className="ml-auto text-xs text-muted-foreground">{ALERT_STATUS[alert.status]}</span>

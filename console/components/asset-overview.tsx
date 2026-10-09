@@ -6,7 +6,7 @@ import { AssetEditDialog } from "@/components/asset-edit-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { AssetRow } from "@/lib/asset-view";
-import { ASSET_STATUS, ASSET_TYPES, WARRANTY_LABEL } from "@/lib/asset-labels";
+import { ASSET_STATUS, ASSET_STATUS_VARIANT, ASSET_TYPES, WARRANTY_LABEL } from "@/lib/asset-labels";
 import type { Customer } from "@/lib/types";
 
 /** 侧边栏「概况」：资产的资料，按块显示，可以编辑。 */
@@ -42,7 +42,7 @@ export function AssetOverview({ assetId, onChanged }: { assetId: string; onChang
   return (
     <section className="grid gap-5">
       <div className="flex flex-wrap items-center gap-2">
-        <Badge>{ASSET_STATUS[asset.status]}</Badge>
+        <Badge variant={ASSET_STATUS_VARIANT[asset.status]}>{ASSET_STATUS[asset.status]}</Badge>
         <Badge variant="outline">{ASSET_TYPES[asset.type]}</Badge>
         {asset.warranty !== "none" ? <Badge variant={warrantyTone}>{WARRANTY_LABEL[asset.warranty]}</Badge> : null}
         <Button type="button" size="sm" variant="outline" className="ml-auto" onClick={() => setEditing(true)}>

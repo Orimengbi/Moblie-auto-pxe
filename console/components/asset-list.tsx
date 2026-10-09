@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { AssetRow } from "@/lib/asset-view";
-import { ASSET_STATUS, ASSET_TYPES, WARRANTY_LABEL } from "@/lib/asset-labels";
+import { ASSET_STATUS, ASSET_STATUS_VARIANT, ASSET_TYPES, WARRANTY_LABEL } from "@/lib/asset-labels";
 import type { AssetStatus, Customer, Datacenter, RemoteFile, RemoteTask, Site } from "@/lib/types";
 import { SiteOptions } from "@/components/site-options";
 import { formatTime } from "@/lib/time";
@@ -332,7 +332,7 @@ export function AssetList({
                     {row.owner ? <span className="block text-muted-foreground">{row.owner}</span> : null}
                   </TableCell>
                   <TableCell>
-                    <Badge variant={row.status === "repair" ? "destructive" : row.status === "active" ? "default" : "outline"}>{ASSET_STATUS[row.status]}</Badge>
+                    <Badge variant={ASSET_STATUS_VARIANT[row.status]}>{ASSET_STATUS[row.status]}</Badge>
                   </TableCell>
                   <TableCell className="font-mono text-xs">
                     {row.place || <span className="font-sans text-muted-foreground">—</span>}

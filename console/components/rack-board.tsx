@@ -20,11 +20,23 @@ import { api } from "@/lib/client-api";
 
 const U_PX = 20;
 /** 设备块的颜色按状态：在用实心，维修醒目，其余浅色。 */
+/** 机柜里的设备像面板一样画，左边一条状态色，参考 XClarity / NetBox 的机柜图。 */
+const EDGE: Record<AssetStatus, string> = {
+  stock: "border-l-chart-5",
+  racked: "border-l-info",
+  installing: "border-l-chart-4",
+  pending: "border-l-warning",
+  active: "border-l-success",
+  repair: "border-l-destructive",
+  offline: "border-l-muted-foreground/40",
+  scrapped: "border-l-muted-foreground/40",
+};
+
 function tone(status: AssetStatus): string {
-  if (status === "active") return "bg-primary text-primary-foreground border-primary";
-  if (status === "repair") return "bg-destructive/15 text-destructive border-destructive";
-  if (status === "offline" || status === "scrapped") return "bg-muted text-muted-foreground border-dashed border-border";
-  return "bg-secondary text-secondary-foreground border-border";
+  const base = `border border-l-[3px] ${EDGE[status]} shadow-xs`;
+  if (status === "repair") return `${base} bg-[color-mix(in_oklch,var(--destructive)_12%,var(--card))] text-destructive border-destructive/40`;
+  if (status === "offline" || status === "scrapped") return `${base} border-dashed bg-muted text-muted-foreground`;
+  return `${base} bg-secondary text-secondary-foreground hover:bg-accent`;
 }
 
 /** 机房页：先选数据中心，再选里面的机房，机房的机柜并排显示，U1 在最下面。点设备看资产，点空 U 位放一台进去。 */
@@ -380,7 +392,7 @@ function RackColumn({
           <button
             key={asset.id}
             type="button"
-            className={`absolute right-0.5 left-[2.15rem] overflow-hidden rounded-sm border px-1.5 text-left text-[11px] leading-4 ${tone(asset.status)} ${selected === asset.id ? "ring-2 ring-ring" : ""}`}
+            className={`absolute right-0.5 left-[2.15rem] overflow-hidden rounded-sm px-1.5 text-left text-[11px] leading-4 ${tone(asset.status)} ${selected === asset.id ? "ring-2 ring-ring" : ""}`}
             style={{ top: (rack.heightU - (asset.uStart! + asset.uHeight - 1)) * U_PX + 1, height: asset.uHeight * U_PX - 2 }}
             title={[asset.tag, asset.sn, asset.model, asset.customerName, ASSET_STATUS[asset.status], `U${asset.uStart}${asset.uHeight > 1 ? `-U${asset.uStart! + asset.uHeight - 1}` : ""}`].filter(Boolean).join("\n")}
             onClick={() => onOpen(asset.id)}
@@ -394,7 +406,7 @@ function RackColumn({
         <div className="grid gap-1">
           <span className="text-xs text-muted-foreground">侧挂和没定 U 位的</span>
           {loose.map((asset) => (
-            <button key={asset.id} type="button" className={`truncate rounded-sm border px-1.5 text-left font-mono text-[11px] leading-5 ${tone(asset.status)}`} onClick={() => onOpen(asset.id)}>
+            <button key={asset.id} type="button" className={`truncate rounded-sm px-1.5 text-left font-mono text-[11px] leading-5 ${tone(asset.status)}`} onClick={() => onOpen(asset.id)}>
               {asset.tag}
               {asset.uHeight === 0 ? "（侧挂）" : ""}
             </button>
