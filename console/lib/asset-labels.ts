@@ -94,19 +94,50 @@ export const ALERT_SEVERITY: Record<AlertSeverity, string> = { critical: "严重
 export const ALERT_STATUS: Record<AlertStatus, string> = { active: "告警中", acked: "已确认", resolved: "已恢复" };
 export const ALERT_SOURCE: Record<AlertSource, string> = { sensor: "传感器", sel: "BMC 事件", bmc: "BMC", gpu: "GPU", xid: "GPU Xid", disk: "硬盘", snmp: "SNMP", port: "端口" };
 
-type BadgeVariant = "default" | "outline" | "destructive";
+type BadgeVariant = "default" | "outline" | "destructive" | "success" | "warning" | "info";
 
-/** 状态标签的配色：正常实心，进行中描边，出问题红色。各列表共用。 */
+/** 状态标签的配色：正常绿色，进行中蓝/黄，出问题红色，不再用的灰色。各列表共用。 */
 export function partStatusVariant(status: PartStatus): BadgeVariant {
-  return status === "stock" ? "default" : status === "faulty" || status === "rma" ? "destructive" : "outline";
+  return status === "stock" ? "success" : status === "installed" ? "info" : status === "faulty" ? "destructive" : status === "rma" || status === "removed" ? "warning" : "outline";
 }
 
+export const ASSET_STATUS_VARIANT: Record<AssetStatus, BadgeVariant> = {
+  stock: "outline",
+  racked: "info",
+  installing: "info",
+  pending: "warning",
+  active: "success",
+  repair: "destructive",
+  offline: "outline",
+  scrapped: "outline",
+};
+
+/** 总览页状态分布条用的颜色（Tailwind 类名）。 */
+export const ASSET_STATUS_COLOR: Record<AssetStatus, string> = {
+  stock: "bg-chart-5",
+  racked: "bg-info",
+  installing: "bg-chart-4",
+  pending: "bg-warning",
+  active: "bg-success",
+  repair: "bg-destructive",
+  offline: "bg-muted-foreground/40",
+  scrapped: "bg-muted-foreground/20",
+};
+
+export const TICKET_STATUS_VARIANT: Record<TicketStatus, BadgeVariant> = {
+  open: "warning",
+  processing: "info",
+  waiting: "outline",
+  resolved: "success",
+  closed: "outline",
+};
+
 export function priorityVariant(priority: TicketPriority): BadgeVariant {
-  return priority === "urgent" ? "destructive" : priority === "high" ? "default" : "outline";
+  return priority === "urgent" ? "destructive" : priority === "high" ? "warning" : "outline";
 }
 
 export function taskTargetVariant(status: string): BadgeVariant {
-  return status === "ok" ? "default" : status === "running" || status === "pending" ? "outline" : "destructive";
+  return status === "ok" ? "success" : status === "running" ? "info" : status === "pending" ? "outline" : "destructive";
 }
 
 export const FLOOR_ITEM_KINDS: Record<FloorItemKind, string> = {

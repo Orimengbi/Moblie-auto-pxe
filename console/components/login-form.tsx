@@ -77,7 +77,7 @@ export function LoginForm({ next }: { next: string }) {
   }
 
   return (
-    <form onSubmit={submit} className="grid gap-4 rounded-xl bg-card p-5 ring-1 ring-foreground/10">
+    <form onSubmit={submit} className="grid gap-4 rounded-xl bg-card p-5 shadow-sm ring-1 ring-foreground/10">
       <div className="flex gap-1 rounded-lg bg-muted p-1" role="tablist">
         {TABS.map((tab) => (
           <button

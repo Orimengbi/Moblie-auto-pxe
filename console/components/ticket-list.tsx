@@ -9,7 +9,7 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { OPEN_TICKET_STATUS, priorityVariant, TICKET_KINDS, TICKET_PRIORITY, TICKET_STATUS } from "@/lib/asset-labels";
+import { OPEN_TICKET_STATUS, priorityVariant, TICKET_KINDS, TICKET_PRIORITY, TICKET_STATUS, TICKET_STATUS_VARIANT } from "@/lib/asset-labels";
 import type { Ticket } from "@/lib/types";
 import { formatTime } from "@/lib/time";
 
@@ -104,7 +104,9 @@ export function TicketList({ tickets, me }: { tickets: TicketRow[]; me: string }
                 <TableCell>
                   <Badge variant={priorityVariant(ticket.priority)}>{TICKET_PRIORITY[ticket.priority]}</Badge>
                 </TableCell>
-                <TableCell className="text-sm">{TICKET_STATUS[ticket.status]}</TableCell>
+                <TableCell>
+                  <Badge variant={TICKET_STATUS_VARIANT[ticket.status]}>{TICKET_STATUS[ticket.status]}</Badge>
+                </TableCell>
                 <TableCell className="text-sm">{ticket.assignee || <span className="text-muted-foreground">未指派</span>}</TableCell>
                 <TableCell className="text-xs whitespace-nowrap text-muted-foreground">{formatTime(ticket.updatedAt)}</TableCell>
               </TableRow>

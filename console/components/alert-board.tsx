@@ -114,7 +114,7 @@ export function AlertBoard({ alerts, summary }: { alerts: AlertRow[]; summary: s
             {shown.map((alert) => (
               <TableRow key={alert.id} className={alert.status === "resolved" ? "opacity-60" : ""}>
                 <TableCell>
-                  <Badge variant={alert.severity === "critical" ? "destructive" : "outline"}>{ALERT_SEVERITY[alert.severity]}</Badge>
+                  <Badge variant={alert.severity === "critical" ? "destructive" : "warning"}>{ALERT_SEVERITY[alert.severity]}</Badge>
                 </TableCell>
                 <TableCell className="max-w-md whitespace-normal">
                   <span className="font-medium">{alert.title}</span>

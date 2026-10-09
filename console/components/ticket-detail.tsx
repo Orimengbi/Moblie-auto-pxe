@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { ASSET_STATUS, PART_KINDS, PART_STATUS, priorityVariant, TICKET_KINDS, TICKET_PRIORITY, TICKET_STATUS } from "@/lib/asset-labels";
+import { ASSET_STATUS, PART_KINDS, PART_STATUS, priorityVariant, TICKET_KINDS, TICKET_PRIORITY, TICKET_STATUS, TICKET_STATUS_VARIANT } from "@/lib/asset-labels";
 import type { AssetStatus, HwComponent, HwKind, InventorySnapshot, Part, PartKind, Ticket, TicketLog, TicketStatus } from "@/lib/types";
 import { formatTime } from "@/lib/time";
 import { api } from "@/lib/client-api";
@@ -89,7 +89,7 @@ export function TicketDetail({ id }: { id: string }) {
       <div className="flex flex-wrap items-center gap-2">
         <Badge variant={priorityVariant(ticket.priority)}>{TICKET_PRIORITY[ticket.priority]}</Badge>
         <Badge variant="outline">{TICKET_KINDS[ticket.kind]}</Badge>
-        <Badge>{TICKET_STATUS[ticket.status]}</Badge>
+        <Badge variant={TICKET_STATUS_VARIANT[ticket.status]}>{TICKET_STATUS[ticket.status]}</Badge>
         {asset ? (
           <Link href={`/assets?open=${asset.id}`} className="font-mono text-sm underline underline-offset-4">
             {asset.tag} · {asset.sn}（{ASSET_STATUS[asset.status]}）
