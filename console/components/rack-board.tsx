@@ -2,41 +2,97 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
+import Checkbox from "@mui/material/Checkbox";
+import Chip from "@mui/material/Chip";
+import Dialog from "@mui/material/Dialog";
+import DialogActions from "@mui/material/DialogActions";
+import DialogContent from "@mui/material/DialogContent";
+import DialogContentText from "@mui/material/DialogContentText";
+import DialogTitle from "@mui/material/DialogTitle";
+import FormControlLabel from "@mui/material/FormControlLabel";
+import Grid from "@mui/material/Grid";
+import LinearProgress from "@mui/material/LinearProgress";
+import List from "@mui/material/List";
+import ListItemButton from "@mui/material/ListItemButton";
+import MuiLink from "@mui/material/Link";
+import Paper from "@mui/material/Paper";
+import Stack from "@mui/material/Stack";
+import TextField from "@mui/material/TextField";
+import ToggleButton from "@mui/material/ToggleButton";
+import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
+import Typography from "@mui/material/Typography";
+import type { SxProps, Theme } from "@mui/material/styles";
 import { ImportDialog } from "@/components/import-dialog";
+import { TONE_COLOR } from "@/components/mui/status-chip";
 import { RackFloor } from "@/components/rack-floor";
 import { ServerSidebar } from "@/components/server-sidebar";
-import { NativeSelect } from "@/components/ui/native-select";
-import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import type { AssetRow } from "@/lib/asset-view";
-import { ASSET_STATUS } from "@/lib/asset-labels";
+import { ASSET_STATUS, ASSET_STATUS_TONE } from "@/lib/asset-labels";
 import type { RackImportRow } from "@/lib/racks";
 import type { AlertSeverity, AssetStatus, Datacenter, FloorItem, Rack, Site } from "@/lib/types";
 import { SiteOptions } from "@/components/site-options";
-import { Labeled } from "@/components/ui/labeled";
 import { api } from "@/lib/client-api";
 
 const U_PX = 20;
-/** 设备块的颜色按状态：在用实心，维修醒目，其余浅色。 */
-/** 机柜里的设备像面板一样画，左边一条状态色，参考 XClarity / NetBox 的机柜图。 */
-const EDGE: Record<AssetStatus, string> = {
-  stock: "border-l-chart-5",
-  racked: "border-l-info",
-  installing: "border-l-chart-4",
-  pending: "border-l-warning",
-  active: "border-l-success",
-  repair: "border-l-destructive",
-  offline: "border-l-muted-foreground/40",
-  scrapped: "border-l-muted-foreground/40",
-};
+const MONO = "var(--font-geist-mono), monospace";
+/** 代码类输入框：等宽、自动大写。 */
+const CODE_INPUT = { "& input": { fontFamily: MONO, textTransform: "uppercase" } } as const;
+const NATIVE = { select: { native: true } } as const;
 
-function tone(status: AssetStatus): string {
-  const base = `border border-l-[3px] ${EDGE[status]} shadow-xs`;
-  if (status === "repair") return `${base} bg-[color-mix(in_oklch,var(--destructive)_12%,var(--card))] text-destructive border-destructive/40`;
-  if (status === "offline" || status === "scrapped") return `${base} border-dashed bg-muted text-muted-foreground`;
-  return `${base} bg-secondary text-secondary-foreground hover:bg-accent`;
+/**
+ * 机柜里的设备像面板一样画，左边一条状态色，参考 XClarity / NetBox 的机柜图。
+ * 底色都不透明，免得 U 位格线透上来；维修整块淡红，下架/报废虚线框灰色。
+ */
+function tone(status: AssetStatus, selected = false): Extract<SxProps<Theme>, ReadonlyArray<unknown>> {
+  return [
+    (theme: Theme) => {
+      const palette = (theme.vars || theme).palette;
+      const layer = (color: string) => `linear-gradient(${color}, ${color})`;
+      const ring = selected ? { outline: `2px solid ${palette.primary.main}`, outlineOffset: 1, zIndex: 1 } : {};
+      const base = {
+        border: `1px solid ${palette.divider}`,
+        borderLeftWidth: 3,
+        borderRadius: 0.5,
+        boxShadow: `0 1px 1px ${theme.alpha(palette.text.primary, 0.06)}`,
+        cursor: "pointer",
+        textAlign: "left" as const,
+        ...ring,
+      };
+      if (status === "repair") {
+        return {
+          ...base,
+          borderColor: theme.alpha(palette.error.main, 0.4),
+          bgcolor: "background.paper",
+          backgroundImage: layer(theme.alpha(palette.error.main, 0.12)),
+          color: palette.error.dark,
+          ...theme.applyStyles("dark", { color: palette.error.light }),
+          "&:hover": { backgroundImage: layer(theme.alpha(palette.error.main, 0.18)) },
+        };
+      }
+      if (status === "offline" || status === "scrapped") {
+        return { ...base, borderStyle: "dashed", bgcolor: "background.default", color: "text.secondary" };
+      }
+      return {
+        ...base,
+        bgcolor: "background.default",
+        color: "text.primary",
+        "&:hover": { bgcolor: "background.paper", backgroundImage: layer(palette.action.hover) },
+      };
+    },
+    // 状态色放最后，免得被上面的 border 简写盖掉。
+    { borderLeftColor: TONE_COLOR[ASSET_STATUS_TONE[status]] },
+  ];
+}
+
+/** 数据中心 / 机房选择那一行前面的小标签。 */
+function RowLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <Typography variant="body2" sx={{ width: 56, color: "text.secondary", flexShrink: 0 }}>
+      {children}
+    </Typography>
+  );
 }
 
 /** 机房页：先选数据中心，再选里面的机房，机房的机柜并排显示，U1 在最下面。点设备看资产，点空 U 位放一台进去。 */
@@ -178,79 +234,91 @@ export function RackBoard({
   }
 
   return (
-    <div className="grid gap-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="w-14 text-sm text-muted-foreground">数据中心</span>
+    <Stack spacing={2}>
+      <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center" }}>
+        <RowLabel>数据中心</RowLabel>
         {datacenters.map((item) => (
-          <Button key={item.id} type="button" size="sm" variant={item.id === dcId ? "default" : "outline"} onClick={() => chooseDatacenter(item.id)}>
+          <Button key={item.id} type="button" variant={item.id === dcId ? "contained" : "outlined"} onClick={() => chooseDatacenter(item.id)}>
             {item.code} · {item.name}
           </Button>
         ))}
-        <Button type="button" size="sm" variant="ghost" onClick={() => setDcForm("new")}>
+        <Button type="button" onClick={() => setDcForm("new")}>
           新建数据中心
         </Button>
-      </div>
+      </Stack>
       {datacenter ? (
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="w-14 text-sm text-muted-foreground">机房</span>
+        <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center" }}>
+          <RowLabel>机房</RowLabel>
           {dcSites.map((item) => (
-            <Button key={item.id} type="button" size="sm" variant={item.id === site?.id ? "default" : "outline"} onClick={() => chooseSite(item.id)}>
+            <Button key={item.id} type="button" variant={item.id === site?.id ? "contained" : "outlined"} onClick={() => chooseSite(item.id)}>
               {item.code} · {item.name}
             </Button>
           ))}
-          <Button type="button" size="sm" variant="ghost" onClick={() => setSiteForm("new")}>
+          <Button type="button" onClick={() => setSiteForm("new")}>
             新建机房
           </Button>
-          <span className="ml-auto flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-            {datacenter.address ? `${datacenter.address} · ` : ""}
-            {dcSites.length} 个机房，{dcRacks.length} 个机柜，U 位用了 {dcUsed} / {dcTotal}
-            {percent(dcUsed, dcTotal)}
-            <Button type="button" size="xs" variant="outline" onClick={() => setDcForm(datacenter)}>
+          <Stack direction="row" useFlexGap spacing={1} sx={{ ml: "auto", flexWrap: "wrap", alignItems: "center" }}>
+            <Typography variant="body2" sx={{ color: "text.secondary" }}>
+              {datacenter.address ? `${datacenter.address} · ` : ""}
+              {dcSites.length} 个机房，{dcRacks.length} 个机柜，U 位用了 {dcUsed} / {dcTotal}
+              {percent(dcUsed, dcTotal)}
+            </Typography>
+            <Button type="button" variant="outlined" onClick={() => setDcForm(datacenter)}>
               编辑数据中心
             </Button>
-            <Button type="button" size="xs" variant="ghost" onClick={() => void removeDatacenter(datacenter)}>
+            <Button type="button" color="error" onClick={() => void removeDatacenter(datacenter)}>
               删除数据中心
             </Button>
-          </span>
-        </div>
+          </Stack>
+        </Stack>
       ) : null}
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      {error ? (
+        <Typography variant="body2" color="error">
+          {error}
+        </Typography>
+      ) : null}
 
       {!datacenter ? (
-        <p className="text-sm text-muted-foreground">还没有数据中心。从大到小依次建：数据中心 → 机房 → 机柜，然后把资产放进机柜的 U 位。</p>
+        <Typography variant="body2" sx={{ color: "text.secondary" }}>
+          还没有数据中心。从大到小依次建：数据中心 → 机房 → 机柜，然后把资产放进机柜的 U 位。
+        </Typography>
       ) : !site ? (
-        <p className="text-sm text-muted-foreground">「{datacenter.name}」里还没有机房。点「新建机房」建一个，再在里面建机柜。</p>
+        <Typography variant="body2" sx={{ color: "text.secondary" }}>
+          「{datacenter.name}」里还没有机房。点「新建机房」建一个，再在里面建机柜。
+        </Typography>
       ) : (
         <>
-          <div className="flex flex-wrap items-center gap-3 text-sm">
-            <span className="text-muted-foreground">
+          <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center" }}>
+            <Typography variant="body2" sx={{ color: "text.secondary" }}>
               {site.address ? `${site.address} · ` : ""}
               {siteRacks.length} 个机柜，U 位用了 {siteUsed} / {siteTotal}
               {percent(siteUsed, siteTotal)}
-            </span>
-            <Button type="button" size="xs" variant="outline" onClick={() => setSiteForm(site)}>
+            </Typography>
+            <Button type="button" variant="outlined" onClick={() => setSiteForm(site)}>
               编辑机房
             </Button>
-            <Button type="button" size="xs" variant="ghost" onClick={() => void removeSite(site)}>
+            <Button type="button" color="error" onClick={() => void removeSite(site)}>
               删除机房
             </Button>
-            <span className="ml-auto flex gap-1">
-              <Button type="button" size="sm" variant={view === "front" ? "default" : "outline"} onClick={() => chooseView("front")}>
+            <ToggleButtonGroup exclusive value={view} onChange={(_, next: "front" | "floor" | null) => next && chooseView(next)} aria-label="视图" sx={{ ml: "auto" }}>
+              <ToggleButton value="front" sx={{ px: 1.5 }}>
                 正视图
-              </Button>
-              <Button type="button" size="sm" variant={view === "floor" ? "default" : "outline"} onClick={() => chooseView("floor")}>
+              </ToggleButton>
+              <ToggleButton value="floor" sx={{ px: 1.5 }}>
                 俯视图
-              </Button>
-            </span>
-            <Button type="button" size="sm" variant="outline" onClick={() => setImporting(true)}>
+              </ToggleButton>
+            </ToggleButtonGroup>
+            <Button type="button" variant="outlined" onClick={() => setImporting(true)}>
               Excel 导入机柜
             </Button>
-            <Button type="button" size="sm" onClick={() => setRackForm("new")}>
+            <Button type="button" variant="contained" onClick={() => setRackForm("new")}>
               新建机柜
             </Button>
-          </div>
+          </Stack>
           {siteRacks.length === 0 ? (
-            <p className="text-sm text-muted-foreground">这个机房还没有机柜。点「新建机柜」，可以一次建一排，例如 A01 到 A20。</p>
+            <Typography variant="body2" sx={{ color: "text.secondary" }}>
+              这个机房还没有机柜。点「新建机柜」，可以一次建一排，例如 A01 到 A20。
+            </Typography>
           ) : view === "floor" ? (
             <RackFloor
               key={site.id}
@@ -266,7 +334,8 @@ export function RackBoard({
               onSaved={() => router.refresh()}
             />
           ) : (
-            <div className="flex gap-4 overflow-x-auto pb-4">
+            // 机柜多时整排横向滚动，页面本身不出横向滚动条。
+            <Stack direction="row" spacing={2} sx={{ overflowX: "auto", pb: 2, pt: 0.75, px: 0.75, mx: -0.75 }}>
               {siteRacks.map((rack) => (
                 <RackColumn
                   key={rack.id}
@@ -281,7 +350,7 @@ export function RackBoard({
                   onDelete={() => void removeRack(rack)}
                 />
               ))}
-            </div>
+            </Stack>
           )}
         </>
       )}
@@ -312,7 +381,7 @@ export function RackBoard({
         onClose={() => setSideId(null)}
         onChanged={() => router.refresh()}
       />
-    </div>
+    </Stack>
   );
 }
 
@@ -342,81 +411,170 @@ function RackColumn({
   const taken = new Set<number>();
   for (const asset of placed) for (let u = asset.uStart!; u < asset.uStart! + asset.uHeight; u++) taken.add(u);
   const units = Array.from({ length: rack.heightU }, (_, index) => rack.heightU - index);
+  const cell = { height: U_PX, borderBottom: 1, borderColor: "divider", boxSizing: "border-box" } as const;
 
   return (
-    <section id={`rack-${rack.id}`} className={`grid w-60 shrink-0 content-start gap-2 rounded-md transition-shadow ${focused ? "ring-2 ring-primary ring-offset-4" : ""}`} data-server-row>
-      <header className="grid gap-0.5">
-        <div className="flex items-baseline gap-2">
-          <h3 className="font-mono font-semibold">{rack.name}</h3>
-          {rack.disabled ? <span className="rounded bg-muted px-1 text-xs text-muted-foreground">不可用</span> : null}
-          <span className="text-xs text-muted-foreground">
+    <Stack
+      component="section"
+      id={`rack-${rack.id}`}
+      data-server-row
+      spacing={1}
+      sx={(theme) => ({
+        width: 240,
+        flexShrink: 0,
+        borderRadius: 1,
+        transition: "outline-color 0.3s",
+        outline: "2px solid transparent",
+        outlineOffset: 4,
+        ...(focused ? { outlineColor: (theme.vars || theme).palette.primary.main } : {}),
+      })}
+    >
+      <Stack component="header" spacing={0.5}>
+        <Stack direction="row" useFlexGap spacing={1} sx={{ alignItems: "baseline" }}>
+          <Typography variant="subtitle2" component="h3" sx={{ fontFamily: MONO, fontSize: 14 }}>
+            {rack.name}
+          </Typography>
+          {rack.disabled ? <Chip label="不可用" sx={{ height: 18, fontSize: 11 }} /> : null}
+          <Typography variant="caption" noWrap sx={{ color: "text.secondary" }}>
             {rack.rowLabel ? `${rack.rowLabel} · ` : ""}
             {rack.heightU}U{rack.powerKw ? ` · ${rack.powerKw}` : ""}
-          </span>
-          <span className="ml-auto flex gap-1">
-            <button type="button" className="text-xs text-muted-foreground underline-offset-4 hover:underline" onClick={onEdit}>
+          </Typography>
+          <Stack direction="row" spacing={1} sx={{ ml: "auto" }}>
+            <MuiLink component="button" type="button" variant="caption" underline="hover" color="text.secondary" onClick={onEdit}>
               编辑
-            </button>
-            <button type="button" className="text-xs text-muted-foreground underline-offset-4 hover:underline" onClick={onDelete}>
+            </MuiLink>
+            <MuiLink component="button" type="button" variant="caption" underline="hover" color="text.secondary" onClick={onDelete}>
               删除
-            </button>
-          </span>
-        </div>
-        <div className="h-1.5 rounded-full bg-muted" title={`用了 ${used}U / ${rack.heightU}U`}>
-          <div className="h-1.5 rounded-full bg-primary" style={{ width: `${Math.min(100, (used / rack.heightU) * 100)}%` }} />
-        </div>
-        <span className="text-xs text-muted-foreground">
+            </MuiLink>
+          </Stack>
+        </Stack>
+        <Box title={`用了 ${used}U / ${rack.heightU}U`}>
+          <LinearProgress variant="determinate" value={Math.min(100, (used / rack.heightU) * 100)} sx={{ height: 6, borderRadius: 3, bgcolor: "action.hover" }} />
+        </Box>
+        <Typography variant="caption" sx={{ color: "text.secondary" }}>
           用了 {used}U，空 {rack.heightU - used}U
-        </span>
-      </header>
-      <div
-        className="relative grid grid-cols-[2rem_1fr] rounded-md border bg-card"
+        </Typography>
+      </Stack>
+      <Paper
+        variant="outlined"
         title={rack.disabled ? `机柜 ${rack.name} 不可用${rack.note ? `：${rack.note}` : ""}` : undefined}
-        style={rack.disabled ? { backgroundImage: "repeating-linear-gradient(45deg, color-mix(in oklab, var(--foreground) 10%, transparent) 0 5px, transparent 5px 10px)" } : undefined}
+        sx={(theme) => ({
+          position: "relative",
+          display: "grid",
+          gridTemplateColumns: "2rem 1fr",
+          borderRadius: 1,
+          overflow: "hidden",
+          ...(rack.disabled
+            ? { backgroundImage: `repeating-linear-gradient(45deg, ${theme.alpha((theme.vars || theme).palette.text.primary, 0.1)} 0 5px, transparent 5px 10px)` }
+            : {}),
+        })}
       >
         {units.map((u) => (
-          <div key={u} className="contents">
-            <span className="border-r border-b px-1 text-right font-mono text-[10px] leading-5 text-muted-foreground" style={{ height: U_PX }}>
+          <Box key={u} sx={{ display: "contents" }}>
+            <Box
+              component="span"
+              sx={{ ...cell, borderRight: 1, borderColor: "divider", px: 0.5, textAlign: "right", fontFamily: MONO, fontSize: 10, lineHeight: `${U_PX}px`, color: "text.secondary", bgcolor: "action.hover" }}
+            >
               {u}
-            </span>
+            </Box>
             {taken.has(u) || rack.disabled ? (
-              <span className="border-b" style={{ height: U_PX }} />
+              <Box component="span" sx={cell} />
             ) : (
-              <button type="button" className="border-b text-left text-[10px] text-transparent hover:bg-muted hover:text-muted-foreground" style={{ height: U_PX }} title={`把一台资产放到 U${u}`} onClick={() => onPlace(u)}>
+              <Box
+                component="button"
+                type="button"
+                title={`把一台资产放到 U${u}`}
+                onClick={() => onPlace(u)}
+                sx={{
+                  ...cell,
+                  border: 0,
+                  borderBottom: 1,
+                  borderColor: "divider",
+                  p: 0,
+                  px: 0.75,
+                  bgcolor: "transparent",
+                  font: "inherit",
+                  fontSize: 10,
+                  textAlign: "left",
+                  color: "transparent",
+                  cursor: "pointer",
+                  "&:hover, &:focus-visible": { bgcolor: "action.hover", color: "text.secondary", outline: "none" },
+                }}
+              >
                 ＋ 放到 U{u}
-              </button>
+              </Box>
             )}
-          </div>
+          </Box>
         ))}
         {placed.map((asset) => (
-          <button
+          <Box
             key={asset.id}
+            component="button"
             type="button"
-            className={`absolute right-0.5 left-[2.15rem] overflow-hidden rounded-sm px-1.5 text-left text-[11px] leading-4 ${tone(asset.status)} ${selected === asset.id ? "ring-2 ring-ring" : ""}`}
-            style={{ top: (rack.heightU - (asset.uStart! + asset.uHeight - 1)) * U_PX + 1, height: asset.uHeight * U_PX - 2 }}
             title={[asset.tag, asset.sn, asset.model, asset.customerName, ASSET_STATUS[asset.status], `U${asset.uStart}${asset.uHeight > 1 ? `-U${asset.uStart! + asset.uHeight - 1}` : ""}`].filter(Boolean).join("\n")}
             onClick={() => onOpen(asset.id)}
+            sx={[
+              {
+                position: "absolute",
+                left: "2.15rem",
+                right: 2,
+                top: (rack.heightU - (asset.uStart! + asset.uHeight - 1)) * U_PX + 1,
+                height: asset.uHeight * U_PX - 2,
+                overflow: "hidden",
+                px: 0.75,
+                py: 0,
+                font: "inherit",
+                fontSize: 11,
+                lineHeight: "16px",
+              },
+              ...tone(asset.status, selected === asset.id),
+            ]}
           >
-            <span className="block truncate font-mono">{asset.tag}</span>
-            {asset.uHeight > 1 ? <span className="block truncate opacity-80">{[asset.model || asset.sn, asset.customerName].filter(Boolean).join(" · ")}</span> : null}
-          </button>
+            <Box component="span" sx={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: MONO }}>
+              {asset.tag}
+            </Box>
+            {asset.uHeight > 1 ? (
+              <Box component="span" sx={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", opacity: 0.8 }}>
+                {[asset.model || asset.sn, asset.customerName].filter(Boolean).join(" · ")}
+              </Box>
+            ) : null}
+          </Box>
         ))}
-      </div>
+      </Paper>
       {loose.length ? (
-        <div className="grid gap-1">
-          <span className="text-xs text-muted-foreground">侧挂和没定 U 位的</span>
+        <Stack spacing={0.5}>
+          <Typography variant="caption" sx={{ color: "text.secondary" }}>
+            侧挂和没定 U 位的
+          </Typography>
           {loose.map((asset) => (
-            <button key={asset.id} type="button" className={`truncate rounded-sm px-1.5 text-left font-mono text-[11px] leading-5 ${tone(asset.status)}`} onClick={() => onOpen(asset.id)}>
+            <Box
+              key={asset.id}
+              component="button"
+              type="button"
+              onClick={() => onOpen(asset.id)}
+              sx={[
+                { px: 0.75, py: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", font: "inherit", fontFamily: MONO, fontSize: 11, lineHeight: "20px" },
+                ...tone(asset.status),
+              ]}
+            >
               {asset.tag}
               {asset.uHeight === 0 ? "（侧挂）" : ""}
-            </button>
+            </Box>
           ))}
-        </div>
+        </Stack>
       ) : null}
-    </section>
+    </Stack>
   );
 }
 
+/** 对话框里的错误。 */
+function FormError({ error }: { error: string }) {
+  return error ? (
+    <Typography variant="body2" color="error">
+      {error}
+    </Typography>
+  ) : null;
+}
 
 /** 数据中心：代码、名称、地址。 */
 function DatacenterDialog({ datacenter, onClose, onSaved }: { datacenter: Datacenter | "new" | null; onClose: () => void; onSaved: (id: string) => void }) {
@@ -441,36 +599,32 @@ function DatacenterDialog({ datacenter, onClose, onSaved }: { datacenter: Datace
   }
 
   return (
-    <Dialog open={Boolean(datacenter)} onOpenChange={(open) => (open ? undefined : onClose())}>
-      <DialogContent className="sm:max-w-lg">
-        <form onSubmit={save} className="grid gap-4">
-          <DialogHeader>
-            <DialogTitle>{editing ? `编辑 ${editing.name}` : "新建数据中心"}</DialogTitle>
-            <DialogDescription>数据中心是最大的一层，下面是机房、机柜和设备。代码是简称，例如 KIX13。</DialogDescription>
-          </DialogHeader>
-          <div className="grid gap-3 sm:grid-cols-[8rem_1fr]">
-            <Labeled label="代码">
-              <Input value={form.code} onChange={(event) => setForm({ ...form, code: event.target.value })} required className="font-mono uppercase" placeholder="KIX13" />
-            </Labeled>
-            <Labeled label="名称">
-              <Input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required placeholder="大阪 KIX13" />
-            </Labeled>
-          </div>
-          <Labeled label="地址">
-            <Input value={form.address} onChange={(event) => setForm({ ...form, address: event.target.value })} />
-          </Labeled>
-          <Labeled label="备注">
-            <Textarea value={form.note} onChange={(event) => setForm({ ...form, note: event.target.value })} className="min-h-16" />
-          </Labeled>
-          {error ? <p className="text-sm text-destructive">{error}</p> : null}
-          <div className="flex justify-end gap-2">
-            <Button type="button" variant="ghost" onClick={onClose}>
-              取消
-            </Button>
-            <Button type="submit">保存</Button>
-          </div>
-        </form>
+    <Dialog open={Boolean(datacenter)} onClose={onClose} slotProps={{ paper: { component: "form", onSubmit: save } }}>
+      <DialogTitle>{editing ? `编辑 ${editing.name}` : "新建数据中心"}</DialogTitle>
+      <DialogContent>
+        <Stack spacing={2}>
+          <DialogContentText variant="body2">数据中心是最大的一层，下面是机房、机柜和设备。代码是简称，例如 KIX13。</DialogContentText>
+          <Grid container spacing={2}>
+            <Grid size={{ xs: 12, sm: 4 }}>
+              <TextField label="代码" value={form.code} onChange={(event) => setForm({ ...form, code: event.target.value })} required fullWidth sx={CODE_INPUT} placeholder="KIX13" />
+            </Grid>
+            <Grid size={{ xs: 12, sm: 8 }}>
+              <TextField label="名称" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required fullWidth placeholder="大阪 KIX13" />
+            </Grid>
+          </Grid>
+          <TextField label="地址" value={form.address} onChange={(event) => setForm({ ...form, address: event.target.value })} fullWidth />
+          <TextField label="备注" value={form.note} onChange={(event) => setForm({ ...form, note: event.target.value })} multiline minRows={2} fullWidth />
+          <FormError error={error} />
+        </Stack>
       </DialogContent>
+      <DialogActions>
+        <Button type="button" onClick={onClose}>
+          取消
+        </Button>
+        <Button type="submit" variant="contained">
+          保存
+        </Button>
+      </DialogActions>
     </Dialog>
   );
 }
@@ -513,45 +667,39 @@ function SiteDialog({
   }
 
   return (
-    <Dialog open={Boolean(site)} onOpenChange={(open) => (open ? undefined : onClose())}>
-      <DialogContent className="sm:max-w-lg">
-        <form onSubmit={save} className="grid gap-4">
-          <DialogHeader>
-            <DialogTitle>{editing ? `编辑 ${editing.name}` : "新建机房"}</DialogTitle>
-            <DialogDescription>代码是简称，在所有数据中心里不能重复，显示在资产位置里，例如 S110 / A01 / U10。</DialogDescription>
-          </DialogHeader>
-          <Labeled label="数据中心">
-            <NativeSelect value={form.datacenterId} onChange={(event) => setForm({ ...form, datacenterId: event.target.value })} required>
-              {datacenters.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.code} · {item.name}
-                </option>
-              ))}
-            </NativeSelect>
-          </Labeled>
-          <div className="grid gap-3 sm:grid-cols-[8rem_1fr]">
-            <Labeled label="代码">
-              <Input value={form.code} onChange={(event) => setForm({ ...form, code: event.target.value })} required className="font-mono uppercase" placeholder="S110" />
-            </Labeled>
-            <Labeled label="名称">
-              <Input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required placeholder="S110 机房" />
-            </Labeled>
-          </div>
-          <Labeled label="位置">
-            <Input value={form.address} onChange={(event) => setForm({ ...form, address: event.target.value })} placeholder="例如 3 楼" />
-          </Labeled>
-          <Labeled label="备注">
-            <Textarea value={form.note} onChange={(event) => setForm({ ...form, note: event.target.value })} className="min-h-16" />
-          </Labeled>
-          {error ? <p className="text-sm text-destructive">{error}</p> : null}
-          <div className="flex justify-end gap-2">
-            <Button type="button" variant="ghost" onClick={onClose}>
-              取消
-            </Button>
-            <Button type="submit">保存</Button>
-          </div>
-        </form>
+    <Dialog open={Boolean(site)} onClose={onClose} slotProps={{ paper: { component: "form", onSubmit: save } }}>
+      <DialogTitle>{editing ? `编辑 ${editing.name}` : "新建机房"}</DialogTitle>
+      <DialogContent>
+        <Stack spacing={2}>
+          <DialogContentText variant="body2">代码是简称，在所有数据中心里不能重复，显示在资产位置里，例如 S110 / A01 / U10。</DialogContentText>
+          <TextField select slotProps={NATIVE} label="数据中心" value={form.datacenterId} onChange={(event) => setForm({ ...form, datacenterId: event.target.value })} required fullWidth>
+            {datacenters.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.code} · {item.name}
+              </option>
+            ))}
+          </TextField>
+          <Grid container spacing={2}>
+            <Grid size={{ xs: 12, sm: 4 }}>
+              <TextField label="代码" value={form.code} onChange={(event) => setForm({ ...form, code: event.target.value })} required fullWidth sx={CODE_INPUT} placeholder="S110" />
+            </Grid>
+            <Grid size={{ xs: 12, sm: 8 }}>
+              <TextField label="名称" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required fullWidth placeholder="S110 机房" />
+            </Grid>
+          </Grid>
+          <TextField label="位置" value={form.address} onChange={(event) => setForm({ ...form, address: event.target.value })} fullWidth placeholder="例如 3 楼" />
+          <TextField label="备注" value={form.note} onChange={(event) => setForm({ ...form, note: event.target.value })} multiline minRows={2} fullWidth />
+          <FormError error={error} />
+        </Stack>
       </DialogContent>
+      <DialogActions>
+        <Button type="button" onClick={onClose}>
+          取消
+        </Button>
+        <Button type="submit" variant="contained">
+          保存
+        </Button>
+      </DialogActions>
     </Dialog>
   );
 }
@@ -637,102 +785,111 @@ function RackDialog({
     onClose();
   }
 
-  const field = (key: keyof typeof form) => ({ value: form[key], onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => setForm({ ...form, [key]: event.target.value }) });
+  const field = (key: keyof typeof form) => ({ value: form[key], onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => setForm({ ...form, [key]: event.target.value }), fullWidth: true });
+  const half = { xs: 12, sm: 6 } as const;
 
   return (
-    <Dialog open={Boolean(rack)} onOpenChange={(open) => (open ? undefined : onClose())}>
-      <DialogContent className="sm:max-w-lg">
-        <form onSubmit={save} className="grid gap-4">
-          <DialogHeader>
-            <DialogTitle>{editing ? `编辑机柜 ${editing.name}` : "新建机柜"}</DialogTitle>
-            <DialogDescription>{editing ? "改矮时不能低于已经放着的设备。" : "批量建：选从第几排到第几排、每排编号从几到几，一次建好多排。已经有的机柜号会跳过。每个柜子高度、功率不一样的，用「Excel 导入机柜」。"}</DialogDescription>
-          </DialogHeader>
+    <Dialog open={Boolean(rack)} onClose={onClose} slotProps={{ paper: { component: "form", onSubmit: save } }}>
+      <DialogTitle>{editing ? `编辑机柜 ${editing.name}` : "新建机柜"}</DialogTitle>
+      <DialogContent>
+        <Stack spacing={2}>
+          <DialogContentText variant="body2">
+            {editing ? "改矮时不能低于已经放着的设备。" : "批量建：选从第几排到第几排、每排编号从几到几，一次建好多排。已经有的机柜号会跳过。每个柜子高度、功率不一样的，用「Excel 导入机柜」。"}
+          </DialogContentText>
           {!editing ? (
-            <div className="flex gap-2">
-              <Button type="button" size="sm" variant={batch ? "ghost" : "default"} onClick={() => setBatch(false)}>
+            <ToggleButtonGroup exclusive value={batch ? "batch" : "one"} onChange={(_, next: "batch" | "one" | null) => next && setBatch(next === "batch")} aria-label="建一个还是批量建">
+              <ToggleButton value="one" sx={{ px: 1.5 }}>
                 建一个
-              </Button>
-              <Button type="button" size="sm" variant={batch ? "default" : "ghost"} onClick={() => setBatch(true)}>
+              </ToggleButton>
+              <ToggleButton value="batch" sx={{ px: 1.5 }}>
                 批量建
-              </Button>
-            </div>
+              </ToggleButton>
+            </ToggleButtonGroup>
           ) : null}
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Labeled label="机房">
-              <NativeSelect {...field("siteId")}>
+          <Grid container spacing={2}>
+            <Grid size={half}>
+              <TextField select slotProps={NATIVE} label="机房" {...field("siteId")}>
                 <SiteOptions sites={sites} datacenters={datacenters} />
-              </NativeSelect>
-            </Labeled>
-            {batch ? (
-              <span />
-            ) : (
-              <Labeled label="机柜号">
-                <Input {...field("name")} required className="font-mono" placeholder="A01" />
-              </Labeled>
+              </TextField>
+            </Grid>
+            {batch ? null : (
+              <Grid size={half}>
+                <TextField label="机柜号" {...field("name")} required sx={{ "& input": { fontFamily: MONO } }} placeholder="A01" />
+              </Grid>
             )}
             {batch ? (
               <>
-                <Labeled label="从第几排">
-                  <Input {...field("rowFrom")} className="font-mono uppercase" placeholder="A" />
-                </Labeled>
-                <Labeled label="到第几排">
-                  <Input {...field("rowTo")} className="font-mono uppercase" placeholder="D" />
-                </Labeled>
-                <Labeled label="每排编号从">
-                  <Input {...field("from")} type="number" min={0} />
-                </Labeled>
-                <Labeled label="到">
-                  <Input {...field("to")} type="number" min={0} />
-                </Labeled>
-                <Labeled label="编号补零到几位">
-                  <Input {...field("pad")} type="number" min={0} max={4} />
-                </Labeled>
-                <span />
-                <div className="rounded-md bg-muted p-2 font-mono text-xs leading-5 sm:col-span-2">
-                  {typeof preview === "string" ? (
-                    <span className="text-destructive">{preview}</span>
-                  ) : (
-                    <>
-                      {preview.lines.map((line) => (
-                        <div key={line}>{line}</div>
-                      ))}
-                      <div className="mt-1 font-sans">
-                        共 {Array.isArray(rows) ? rows.length : 0} 排 {preview.total} 个机柜
-                      </div>
-                    </>
-                  )}
-                </div>
+                {/* 机房占一行，范围从下一行开始，两两对齐。 */}
+                <Grid size={half} sx={{ display: { xs: "none", sm: "block" } }} />
+                <Grid size={half}>
+                  <TextField label="从第几排" {...field("rowFrom")} sx={CODE_INPUT} placeholder="A" />
+                </Grid>
+                <Grid size={half}>
+                  <TextField label="到第几排" {...field("rowTo")} sx={CODE_INPUT} placeholder="D" />
+                </Grid>
+                <Grid size={half}>
+                  <TextField label="每排编号从" {...field("from")} type="number" slotProps={{ htmlInput: { min: 0 } }} />
+                </Grid>
+                <Grid size={half}>
+                  <TextField label="到" {...field("to")} type="number" slotProps={{ htmlInput: { min: 0 } }} />
+                </Grid>
+                <Grid size={half}>
+                  <TextField label="编号补零到几位" {...field("pad")} type="number" slotProps={{ htmlInput: { min: 0, max: 4 } }} />
+                </Grid>
+                <Grid size={12}>
+                  <Box sx={{ borderRadius: 1, bgcolor: "action.hover", p: 1, fontFamily: MONO, fontSize: 12, lineHeight: "20px" }}>
+                    {typeof preview === "string" ? (
+                      <Box component="span" sx={{ color: "error.main" }}>
+                        {preview}
+                      </Box>
+                    ) : (
+                      <>
+                        {preview.lines.map((line) => (
+                          <div key={line}>{line}</div>
+                        ))}
+                        <Typography variant="caption" component="div" sx={{ mt: 0.5 }}>
+                          共 {Array.isArray(rows) ? rows.length : 0} 排 {preview.total} 个机柜
+                        </Typography>
+                      </>
+                    )}
+                  </Box>
+                </Grid>
               </>
             ) : null}
-            <Labeled label="列 / 排">
-              <Input {...field("rowLabel")} placeholder={batch ? "留空就用排名（A、B…）" : "可留空，例如 A 列"} />
-            </Labeled>
-            <Labeled label="高度（U）">
-              <Input {...field("heightU")} type="number" min={1} max={60} required />
-            </Labeled>
-            <Labeled label="额定功率">
-              <Input {...field("powerKw")} placeholder="可留空，例如 12kW" />
-            </Labeled>
-          </div>
-          <Labeled label="备注">
-            <Textarea {...field("note")} className="min-h-14" />
-          </Labeled>
-          <label className="flex items-start gap-2 text-sm">
-            <input type="checkbox" className="mt-1" checked={disabled} onChange={(event) => setDisabled(event.target.checked)} />
-            <span>
-              不可用（坏了、预留、没通电）
-              <span className="block text-xs text-muted-foreground">不能往里放设备；俯视图里画成斜纹。原因写在备注里。柜里有设备时要先挪走。</span>
-            </span>
-          </label>
-          {error ? <p className="text-sm text-destructive">{error}</p> : null}
-          <div className="flex justify-end gap-2">
-            <Button type="button" variant="ghost" onClick={onClose}>
-              取消
-            </Button>
-            <Button type="submit" disabled={batch && !editing && typeof preview === "string"}>{batch && !editing && typeof preview !== "string" ? `建 ${preview.total} 个机柜` : "保存"}</Button>
-          </div>
-        </form>
+            <Grid size={half}>
+              <TextField label="列 / 排" {...field("rowLabel")} placeholder={batch ? "留空就用排名（A、B…）" : "可留空，例如 A 列"} />
+            </Grid>
+            <Grid size={half}>
+              <TextField label="高度（U）" {...field("heightU")} type="number" slotProps={{ htmlInput: { min: 1, max: 60 } }} required />
+            </Grid>
+            <Grid size={half}>
+              <TextField label="额定功率" {...field("powerKw")} placeholder="可留空，例如 12kW" />
+            </Grid>
+          </Grid>
+          <TextField label="备注" {...field("note")} multiline minRows={2} />
+          <FormControlLabel
+            sx={{ alignItems: "flex-start", ml: -0.75 }}
+            control={<Checkbox checked={disabled} onChange={(event) => setDisabled(event.target.checked)} sx={{ mt: -0.5 }} />}
+            label={
+              <Box>
+                <Typography variant="body2">不可用（坏了、预留、没通电）</Typography>
+                <Typography variant="caption" sx={{ display: "block", color: "text.secondary" }}>
+                  不能往里放设备；俯视图里画成斜纹。原因写在备注里。柜里有设备时要先挪走。
+                </Typography>
+              </Box>
+            }
+          />
+          <FormError error={error} />
+        </Stack>
       </DialogContent>
+      <DialogActions>
+        <Button type="button" onClick={onClose}>
+          取消
+        </Button>
+        <Button type="submit" variant="contained" disabled={batch && !editing && typeof preview === "string"}>
+          {batch && !editing && typeof preview !== "string" ? `建 ${preview.total} 个机柜` : "保存"}
+        </Button>
+      </DialogActions>
     </Dialog>
   );
 }
@@ -764,6 +921,11 @@ function PlaceDialog({ target, assets, occupied, onClose, onSaved }: { target: {
     return top - target.u + 1;
   }, [target, occupied]);
 
+  function choose(asset: AssetRow) {
+    setAssetId(asset.id);
+    if (asset.uHeight) setHeight(String(asset.uHeight));
+  }
+
   async function save(event: React.FormEvent) {
     event.preventDefault();
     if (!target || !assetId) return;
@@ -777,52 +939,52 @@ function PlaceDialog({ target, assets, occupied, onClose, onSaved }: { target: {
   }
 
   return (
-    <Dialog open={Boolean(target)} onOpenChange={(open) => (open ? undefined : onClose())}>
-      <DialogContent className="sm:max-w-lg">
-        <form onSubmit={save} className="grid gap-4">
-          <DialogHeader>
-            <DialogTitle>
-              放到 {target?.rack.name} 的 U{target?.u}
-            </DialogTitle>
-            <DialogDescription>从 U{target?.u} 往上占，最多能放 {room}U。还在「入库」的资产放进来后自动改成「上架」。</DialogDescription>
-          </DialogHeader>
-          <Input placeholder="搜编号、序列号、型号、客户…" value={q} onChange={(event) => setQ(event.target.value)} />
+    <Dialog open={Boolean(target)} onClose={onClose} slotProps={{ paper: { component: "form", onSubmit: save } }}>
+      <DialogTitle>
+        放到 {target?.rack.name} 的 U{target?.u}
+      </DialogTitle>
+      <DialogContent>
+        <Stack spacing={2}>
+          <DialogContentText variant="body2">
+            从 U{target?.u} 往上占，最多能放 {room}U。还在「入库」的资产放进来后自动改成「上架」。
+          </DialogContentText>
+          <TextField placeholder="搜编号、序列号、型号、客户…" value={q} onChange={(event) => setQ(event.target.value)} fullWidth />
           {candidates.length === 0 ? (
-            <p className="text-sm text-muted-foreground">所有资产都已经放进机柜了。</p>
+            <Typography variant="body2" sx={{ color: "text.secondary" }}>
+              所有资产都已经放进机柜了。
+            </Typography>
           ) : (
-            <NativeSelect className="h-40"
-              size={8}
-              value={assetId}
-              onChange={(event) => {
-                setAssetId(event.target.value);
-                const chosen = assets.find((asset) => asset.id === event.target.value);
-                if (chosen?.uHeight) setHeight(String(chosen.uHeight));
-              }}
-            >
-              {shown.map((asset) => (
-                <option key={asset.id} value={asset.id}>
-                  {asset.tag} · {asset.sn}
-                  {asset.model ? ` · ${asset.model}` : ""}
-                  {asset.customerName ? ` · ${asset.customerName}` : ""}
-                </option>
-              ))}
-            </NativeSelect>
+            // 原来是一个 8 行高的列表框，这里用可滚动的列表，点一行选中。
+            <Paper variant="outlined" sx={{ height: 176, overflowY: "auto" }}>
+              <List dense disablePadding role="listbox" aria-label="选一台资产">
+                {shown.map((asset) => (
+                  <ListItemButton key={asset.id} role="option" selected={asset.id === assetId} aria-selected={asset.id === assetId} onClick={() => choose(asset)} sx={{ py: 0.25, borderRadius: 0, fontSize: 13 }}>
+                    {asset.tag} · {asset.sn}
+                    {asset.model ? ` · ${asset.model}` : ""}
+                    {asset.customerName ? ` · ${asset.customerName}` : ""}
+                  </ListItemButton>
+                ))}
+              </List>
+            </Paper>
           )}
-          <Labeled label="占用 U">
-            <Input type="number" min={1} max={room || 1} value={height} onChange={(event) => setHeight(event.target.value)} className="w-28" />
-          </Labeled>
-          {picked ? <p className="text-xs text-muted-foreground">会放在 U{target?.u}{Number(height) > 1 ? `-U${(target?.u || 0) + Number(height) - 1}` : ""}。</p> : null}
-          {error ? <p className="text-sm text-destructive">{error}</p> : null}
-          <div className="flex justify-end gap-2">
-            <Button type="button" variant="ghost" onClick={onClose}>
-              取消
-            </Button>
-            <Button type="submit" disabled={!assetId}>
-              放进去
-            </Button>
-          </div>
-        </form>
+          <TextField label="占用 U" type="number" slotProps={{ htmlInput: { min: 1, max: room || 1 } }} value={height} onChange={(event) => setHeight(event.target.value)} sx={{ width: 112 }} />
+          {picked ? (
+            <Typography variant="caption" sx={{ color: "text.secondary" }}>
+              会放在 U{target?.u}
+              {Number(height) > 1 ? `-U${(target?.u || 0) + Number(height) - 1}` : ""}。
+            </Typography>
+          ) : null}
+          <FormError error={error} />
+        </Stack>
       </DialogContent>
+      <DialogActions>
+        <Button type="button" onClick={onClose}>
+          取消
+        </Button>
+        <Button type="submit" variant="contained" disabled={!assetId}>
+          放进去
+        </Button>
+      </DialogActions>
     </Dialog>
   );
 }

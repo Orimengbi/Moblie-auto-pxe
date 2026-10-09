@@ -2,10 +2,25 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
+import Stack from "@mui/material/Stack";
+import TextField from "@mui/material/TextField";
+import Typography from "@mui/material/Typography";
 import { ASSET_TYPES, renderTag } from "@/lib/asset-labels";
 import type { AssetType, Customer, TagSettings } from "@/lib/types";
+
+const MONO = "var(--font-geist-mono), monospace";
+const MONO_INPUT = { "& input": { fontFamily: MONO } } as const;
+
+/** 规则说明里的占位符。 */
+function Code({ children }: { children: React.ReactNode }) {
+  return (
+    <Box component="code" sx={{ fontFamily: MONO, fontSize: "0.95em", px: 0.5, borderRadius: 0.5, bgcolor: "action.hover" }}>
+      {children}
+    </Box>
+  );
+}
 
 type Sample = { id: string; seq: number; type: AssetType; sn: string; customerId: string | null; createdAt: string; tagOverride: string; tag: string };
 
@@ -41,50 +56,74 @@ export function TagSettingsForm({ settings, customers, samples }: { settings: Ta
   }
 
   return (
-    <form onSubmit={save} className="grid max-w-3xl gap-5">
-      <label className="grid gap-1.5 text-sm">
-        <span className="font-medium">编号规则</span>
-        <Input value={form.template} onChange={(event) => setForm({ ...form, template: event.target.value })} className="font-mono" required />
-        <span className="text-xs leading-5 text-muted-foreground">
-          可用：<code>{"{type}"}</code> 类型代码，<code>{"{customer}"}</code> 客户代码，<code>{"{seq}"}</code> 入库顺序号（<code>{"{seq:5}"}</code> 补零到 5 位），
-          <code>{"{year}"}</code> 入库年份，<code>{"{sn}"}</code> 序列号。要有 {"{seq}"} 或 {"{sn}"}，不然会重复。
-        </span>
-      </label>
-      <div className="grid gap-3 sm:grid-cols-5">
+    <Stack component="form" onSubmit={save} spacing={3} sx={{ maxWidth: 768 }}>
+      <TextField
+        label="编号规则"
+        value={form.template}
+        onChange={(event) => setForm({ ...form, template: event.target.value })}
+        sx={MONO_INPUT}
+        required
+        fullWidth
+        helperText={
+          <Box component="span" sx={{ lineHeight: 1.7 }}>
+            可用：<Code>{"{type}"}</Code> 类型代码，<Code>{"{customer}"}</Code> 客户代码，<Code>{"{seq}"}</Code> 入库顺序号（<Code>{"{seq:5}"}</Code> 补零到 5 位），
+            <Code>{"{year}"}</Code> 入库年份，<Code>{"{sn}"}</Code> 序列号。要有 {"{seq}"} 或 {"{sn}"}，不然会重复。
+          </Box>
+        }
+      />
+      <Box sx={{ display: "grid", gap: 2, gridTemplateColumns: { xs: "repeat(2, minmax(0, 1fr))", sm: "repeat(5, minmax(0, 1fr))" } }}>
         {(Object.keys(ASSET_TYPES) as AssetType[]).map((type) => (
-          <label key={type} className="grid gap-1.5 text-sm">
-            <span className="font-medium">{ASSET_TYPES[type]}代码</span>
-            <Input value={form.typeCodes[type]} onChange={(event) => setForm({ ...form, typeCodes: { ...form.typeCodes, [type]: event.target.value } })} className="font-mono" />
-          </label>
+          <TextField
+            key={type}
+            label={`${ASSET_TYPES[type]}代码`}
+            value={form.typeCodes[type]}
+            onChange={(event) => setForm({ ...form, typeCodes: { ...form.typeCodes, [type]: event.target.value } })}
+            sx={MONO_INPUT}
+          />
         ))}
-        <label className="grid gap-1.5 text-sm">
-          <span className="font-medium">无客户时</span>
-          <Input value={form.noCustomer} onChange={(event) => setForm({ ...form, noCustomer: event.target.value })} className="font-mono" />
-        </label>
-      </div>
+        <TextField label="无客户时" value={form.noCustomer} onChange={(event) => setForm({ ...form, noCustomer: event.target.value })} sx={MONO_INPUT} />
+      </Box>
       {preview.length ? (
-        <div className="grid gap-1.5 text-sm">
-          <span className="font-medium">预览</span>
-          <ul className="grid gap-1 font-mono text-xs">
+        <Stack spacing={0.75}>
+          <Typography variant="subtitle2">预览</Typography>
+          <Stack component="ul" spacing={0.5} sx={{ m: 0, p: 0, listStyle: "none", fontFamily: MONO, fontSize: 12 }}>
             {preview.map((item) => (
-              <li key={item.id} className="flex flex-wrap gap-2">
-                <span className="w-44 text-muted-foreground">{item.sn}</span>
-                <span className="text-muted-foreground">{item.tag}</span>
+              <Stack component="li" key={item.id} direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap" }}>
+                <Box component="span" sx={{ width: 176, color: "text.secondary" }}>
+                  {item.sn}
+                </Box>
+                <Box component="span" sx={{ color: "text.secondary" }}>
+                  {item.tag}
+                </Box>
                 <span>→</span>
-                <span className={item.next !== item.tag ? "font-semibold" : ""}>{item.next}</span>
-                {item.tagOverride ? <span className="font-sans text-muted-foreground">（手动指定，不受规则影响）</span> : null}
-              </li>
+                <Box component="span" sx={{ fontWeight: item.next !== item.tag ? 600 : undefined }}>
+                  {item.next}
+                </Box>
+                {item.tagOverride ? (
+                  <Typography variant="caption" component="span" sx={{ color: "text.secondary" }}>
+                    （手动指定，不受规则影响）
+                  </Typography>
+                ) : null}
+              </Stack>
             ))}
-          </ul>
-        </div>
+          </Stack>
+        </Stack>
       ) : null}
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
-      {message ? <p className="text-sm text-muted-foreground">{message}</p> : null}
-      <div>
-        <Button type="submit" disabled={pending}>
+      {error ? (
+        <Typography variant="body2" color="error">
+          {error}
+        </Typography>
+      ) : null}
+      {message ? (
+        <Typography variant="body2" sx={{ color: "text.secondary" }}>
+          {message}
+        </Typography>
+      ) : null}
+      <Box>
+        <Button type="submit" variant="contained" disabled={pending}>
           {pending ? "保存中" : "保存"}
         </Button>
-      </div>
-    </form>
+      </Box>
+    </Stack>
   );
 }

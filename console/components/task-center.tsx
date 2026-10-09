@@ -3,8 +3,21 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
-import { ListChecks, X } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import Badge from "@mui/material/Badge";
+import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
+import Checkbox from "@mui/material/Checkbox";
+import FormControlLabel from "@mui/material/FormControlLabel";
+import IconButton from "@mui/material/IconButton";
+import LinearProgress from "@mui/material/LinearProgress";
+import MuiLink from "@mui/material/Link";
+import Paper from "@mui/material/Paper";
+import Popover from "@mui/material/Popover";
+import Stack from "@mui/material/Stack";
+import Tooltip from "@mui/material/Tooltip";
+import Typography from "@mui/material/Typography";
+import CloseOutlined from "@mui/icons-material/CloseOutlined";
+import ChecklistOutlined from "@mui/icons-material/ChecklistOutlined";
 import { formatBytes, percent, useUploads, type LiveUpload } from "@/components/upload-provider";
 import type { TaskFeed, TaskSummary } from "@/lib/types";
 import { formatTime } from "@/lib/time";
@@ -27,53 +40,62 @@ function loadPrefs(): FloatPrefs {
 }
 
 function Bar({ value, active }: { value: number; active: boolean }) {
+  return <LinearProgress variant="determinate" value={value} color={active ? "primary" : "inherit"} sx={{ height: 6, borderRadius: 3, color: active ? undefined : "text.disabled" }} />;
+}
+
+function Row({ title, state, error, titleHint }: { title: string; state: string; error?: boolean; titleHint?: string }) {
   return (
-    <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-      <div className={`h-full transition-all ${active ? "bg-primary" : "bg-muted-foreground/40"}`} style={{ width: `${value}%` }} />
-    </div>
+    <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+      <Typography noWrap title={titleHint || title} sx={{ flex: 1, minWidth: 0, fontWeight: 500, fontSize: 14 }}>
+        {title}
+      </Typography>
+      <Typography variant="caption" sx={{ flexShrink: 0, color: error ? "error.main" : "text.secondary" }}>
+        {state}
+      </Typography>
+    </Stack>
   );
 }
 
 function UploadItem({ item }: { item: LiveUpload }) {
   const uploads = useUploads();
   return (
-    <div className="grid gap-1">
-      <div className="flex items-center gap-2">
-        <span className="min-w-0 flex-1 truncate font-medium" title={item.filename}>
-          {item.name || item.filename}
-        </span>
-        <span className={`shrink-0 text-xs ${item.state === "error" ? "text-destructive" : "text-muted-foreground"}`}>
-          {item.state === "running" ? `${percent(item.offset, item.size)}%` : item.state === "done" ? "已传完" : item.state === "error" ? "已中断" : "已暂停"}
-        </span>
-      </div>
+    <Stack spacing={0.5}>
+      <Row
+        title={item.name || item.filename}
+        titleHint={item.filename}
+        error={item.state === "error"}
+        state={item.state === "running" ? `${percent(item.offset, item.size)}%` : item.state === "done" ? "已传完" : item.state === "error" ? "已中断" : "已暂停"}
+      />
       <Bar value={percent(item.offset, item.size)} active={item.state === "running" || item.state === "done"} />
-      <p className="text-xs text-muted-foreground">
+      <Typography variant="caption" sx={{ color: "text.secondary" }}>
         {item.state === "done" ? "后台正在识别和抽取" : `${formatBytes(item.offset)} / ${formatBytes(item.size)}`}
-      </p>
-      {item.error ? <p className="text-xs text-destructive">{item.error}</p> : null}
-      <div className="flex justify-end gap-1">
+      </Typography>
+      {item.error ? (
+        <Typography variant="caption" sx={{ color: "error.main" }}>
+          {item.error}
+        </Typography>
+      ) : null}
+      <Stack direction="row" spacing={0.5} sx={{ justifyContent: "flex-end" }}>
         {item.state === "running" ? (
-          <Button type="button" variant="secondary" size="sm" onClick={uploads.pause}>
+          <Button variant="outlined" color="inherit" onClick={uploads.pause}>
             暂停
           </Button>
         ) : item.state !== "done" && uploads.hasFile(item.id) ? (
-          <Button type="button" variant="secondary" size="sm" disabled={uploads.running} onClick={() => uploads.resume(item.id)}>
+          <Button variant="outlined" color="inherit" disabled={uploads.running} onClick={() => uploads.resume(item.id)}>
             继续
           </Button>
         ) : item.state !== "done" ? (
-          <Link href="/images" className="px-2 py-1 text-xs text-muted-foreground underline-offset-4 hover:underline">
+          <MuiLink component={Link} href="/images" variant="caption" color="text.secondary" sx={{ alignSelf: "center", px: 1 }}>
             到镜像页选文件继续
-          </Link>
+          </MuiLink>
         ) : null}
         {item.state === "done" ? (
-          <Button type="button" variant="ghost" size="sm" onClick={() => uploads.dismiss(item.id)}>
+          <Button color="inherit" onClick={() => uploads.dismiss(item.id)}>
             关闭
           </Button>
         ) : (
           <Button
-            type="button"
-            variant="ghost"
-            size="sm"
+            color="inherit"
             onClick={async () => {
               if (!window.confirm(`取消上传 ${item.name || item.filename}？已经传上去的部分会删除。`)) return;
               const failed = await uploads.cancel(item);
@@ -83,8 +105,8 @@ function UploadItem({ item }: { item: LiveUpload }) {
             取消
           </Button>
         )}
-      </div>
-    </div>
+      </Stack>
+    </Stack>
   );
 }
 
@@ -93,44 +115,51 @@ function BatchItem({ task, onDismiss }: { task: TaskSummary; onDismiss?: () => v
   const value = task.total ? Math.floor((finished / task.total) * 100) : 100;
   const state = task.status === "running" ? `${finished} / ${task.total}` : task.failed ? `${task.failed} 台没成功` : "全部成功";
   return (
-    <div className="grid gap-1">
-      <div className="flex items-center gap-2">
-        <span className="min-w-0 flex-1 truncate font-medium" title={task.name}>
-          {task.name}
-        </span>
-        <span className={`shrink-0 text-xs ${task.status === "done" && task.failed ? "text-destructive" : "text-muted-foreground"}`}>{state}</span>
-      </div>
+    <Stack spacing={0.5}>
+      <Row title={task.name} state={state} error={task.status === "done" && task.failed > 0} />
       <Bar value={value} active={task.status === "running" || !task.failed} />
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <span className="min-w-0 flex-1 truncate">
+      <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+        <Typography variant="caption" noWrap sx={{ flex: 1, minWidth: 0, color: "text.secondary" }}>
           {task.projectName || "资产"} · 成功 {task.ok}
           {task.failed ? ` · 失败 ${task.failed}` : ""} · {formatTime(task.createdAt)}
-        </span>
-        <Link href={`/tasks/${task.id}`} className="shrink-0 underline-offset-4 hover:underline">
+        </Typography>
+        <MuiLink component={Link} href={`/tasks/${task.id}`} variant="caption" underline="hover">
           查看
-        </Link>
+        </MuiLink>
         {onDismiss ? (
-          <button type="button" className="shrink-0 underline-offset-4 hover:underline" onClick={onDismiss}>
+          <MuiLink component="button" type="button" variant="caption" underline="hover" color="text.secondary" onClick={onDismiss}>
             关闭
-          </button>
+          </MuiLink>
         ) : null}
-      </div>
-    </div>
+      </Stack>
+    </Stack>
   );
 }
 
 function Section({ title, float, onFloat, children }: { title: string; float: boolean; onFloat: (on: boolean) => void; children: React.ReactNode }) {
   return (
-    <section className="grid gap-3">
-      <div className="flex items-center justify-between">
-        <p className="text-xs font-medium text-muted-foreground">{title}</p>
-        <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
-          <input type="checkbox" checked={float} onChange={(event) => onFloat(event.target.checked)} />
-          小浮窗
-        </label>
-      </div>
+    <Stack spacing={1.5} component="section">
+      <Stack direction="row" sx={{ alignItems: "center", justifyContent: "space-between" }}>
+        <Typography variant="subtitle2" sx={{ color: "text.secondary" }}>
+          {title}
+        </Typography>
+        <FormControlLabel
+          control={<Checkbox checked={float} onChange={(event) => onFloat(event.target.checked)} sx={{ p: 0.5 }} />}
+          label="小浮窗"
+          slotProps={{ typography: { variant: "caption", color: "text.secondary" } }}
+          sx={{ mr: 0 }}
+        />
+      </Stack>
       {children}
-    </section>
+    </Stack>
+  );
+}
+
+function Empty({ children }: { children: React.ReactNode }) {
+  return (
+    <Typography variant="caption" sx={{ color: "text.secondary" }}>
+      {children}
+    </Typography>
   );
 }
 
@@ -144,7 +173,7 @@ export function TaskCenter() {
   // 小浮窗只跟这次打开页面以后跑过的批量任务，免得旧任务一上来就弹出来。
   const [followed, setFollowed] = useState<string[]>([]);
   const [dismissed, setDismissed] = useState<string[]>([]);
-  const wrapper = useRef<HTMLDivElement>(null);
+  const anchor = useRef<HTMLButtonElement>(null);
 
   const live = Object.values(uploads.live);
   const liveIds = new Set(live.map((item) => item.id));
@@ -183,22 +212,6 @@ export function TaskCenter() {
     setFollowed((current) => [...new Set([...current, ...runningIds.split(",")])]);
   }, [runningIds]);
 
-  useEffect(() => {
-    if (!open) return;
-    const close = (event: PointerEvent) => {
-      if (!wrapper.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("pointerdown", close);
-    document.addEventListener("keydown", escape);
-    return () => {
-      document.removeEventListener("pointerdown", close);
-      document.removeEventListener("keydown", escape);
-    };
-  }, [open]);
-
   useEffect(() => setOpen(false), [pathname]);
 
   function setFloat(kind: FloatKind, on: boolean) {
@@ -218,40 +231,39 @@ export function TaskCenter() {
 
   return (
     <>
-      <div ref={wrapper} className="relative">
-        <Button type="button" variant="outline" size="sm" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
-          <ListChecks />
-          任务
-          {busy ? <span className="rounded-full bg-primary px-1.5 text-[10px] leading-4 text-primary-foreground">{busy}</span> : null}
-        </Button>
-        {open ? (
-          <div className="absolute top-full right-0 z-50 mt-2 grid max-h-[75vh] w-[min(24rem,calc(100vw-2rem))] gap-5 overflow-y-auto rounded-xl bg-card p-4 text-sm shadow-lg ring-1 ring-foreground/10">
-            <Section title="镜像上传" float={prefs.upload} onFloat={(on) => setFloat("upload", on)}>
-              {panelUploads.map((item) => (
-                <UploadItem key={item.id} item={item} />
-              ))}
-              {feed.extracting.map((image) => (
-                <div key={image.id} className="grid gap-1">
-                  <div className="flex items-center gap-2">
-                    <span className="min-w-0 flex-1 truncate font-medium">{image.name}</span>
-                    <span className="shrink-0 text-xs text-muted-foreground">识别和抽取中</span>
-                  </div>
-                  <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-                    <div className="h-full w-1/3 animate-pulse rounded-full bg-primary" />
-                  </div>
-                </div>
-              ))}
-              {!panelUploads.length && !feed.extracting.length ? <p className="text-xs text-muted-foreground">没有进行中的上传。</p> : null}
-            </Section>
-            <Section title="批量任务" float={prefs.batch} onFloat={(on) => setFloat("batch", on)}>
-              {feed.tasks.map((task) => (
-                <BatchItem key={task.id} task={task} />
-              ))}
-              {!feed.tasks.length ? <p className="text-xs text-muted-foreground">还没有执行过批量任务。</p> : null}
-            </Section>
-          </div>
-        ) : null}
-      </div>
+      <Button ref={anchor} variant="outlined" color="inherit" onClick={() => setOpen((value) => !value)} aria-expanded={open} startIcon={<ChecklistOutlined />} sx={{ borderColor: "divider" }}>
+        任务
+        {busy ? <Badge color="primary" badgeContent={busy} sx={{ ml: 1.75, mr: 0.5 }} /> : null}
+      </Button>
+      <Popover
+        open={open}
+        anchorEl={anchor.current}
+        onClose={() => setOpen(false)}
+        anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+        transformOrigin={{ vertical: "top", horizontal: "right" }}
+        slotProps={{ paper: { variant: "outlined", sx: { mt: 1, width: "min(24rem, calc(100vw - 2rem))", maxHeight: "75vh", p: 2, boxShadow: 6 } } }}
+      >
+        <Stack spacing={2.5}>
+          <Section title="镜像上传" float={prefs.upload} onFloat={(on) => setFloat("upload", on)}>
+            {panelUploads.map((item) => (
+              <UploadItem key={item.id} item={item} />
+            ))}
+            {feed.extracting.map((image) => (
+              <Stack key={image.id} spacing={0.5}>
+                <Row title={image.name} state="识别和抽取中" />
+                <LinearProgress sx={{ height: 6, borderRadius: 3 }} />
+              </Stack>
+            ))}
+            {!panelUploads.length && !feed.extracting.length ? <Empty>没有进行中的上传。</Empty> : null}
+          </Section>
+          <Section title="批量任务" float={prefs.batch} onFloat={(on) => setFloat("batch", on)}>
+            {feed.tasks.map((task) => (
+              <BatchItem key={task.id} task={task} />
+            ))}
+            {!feed.tasks.length ? <Empty>还没有执行过批量任务。</Empty> : null}
+          </Section>
+        </Stack>
+      </Popover>
       <TaskFloat
         uploads={floatUploads}
         batch={floatBatch}
@@ -307,27 +319,32 @@ function TaskFloat({
   if (!visible) return null;
 
   const heading = (title: string, kind: FloatKind, link?: { href: string; label: string }) => (
-    <div className="flex items-center gap-2">
-      <span className="flex-1 text-xs font-medium text-muted-foreground">{title}</span>
+    <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+      <Typography variant="caption" sx={{ flex: 1, fontWeight: 500, color: "text.secondary" }}>
+        {title}
+      </Typography>
       {link ? (
-        <Link href={link.href} className="text-xs text-muted-foreground underline-offset-4 hover:underline">
+        <MuiLink component={Link} href={link.href} variant="caption" color="text.secondary" underline="hover">
           {link.label}
-        </Link>
+        </MuiLink>
       ) : null}
-      <button type="button" title="关掉这类的小浮窗，可以在右上角任务列表里重新打开" className="text-muted-foreground hover:text-foreground" onClick={() => onHide(kind, false)}>
-        <X className="size-3.5" />
-      </button>
-    </div>
+      <Tooltip title="关掉这类的小浮窗，可以在右上角任务列表里重新打开">
+        <IconButton onClick={() => onHide(kind, false)} sx={{ p: 0.25 }}>
+          <CloseOutlined sx={{ fontSize: 16 }} />
+        </IconButton>
+      </Tooltip>
+    </Stack>
   );
 
   return (
-    <div
+    <Paper
       ref={box}
-      className="fixed z-50 grid max-h-[70vh] w-72 gap-3 overflow-y-auto rounded-xl bg-card p-3 text-sm shadow-lg ring-1 ring-foreground/10"
+      variant="outlined"
+      sx={{ position: "fixed", zIndex: 1300, width: 288, maxHeight: "70vh", overflowY: "auto", boxShadow: 6, borderRadius: 3 }}
       style={pos ? { left: pos.x, top: pos.y } : { right: 16, bottom: 16 }}
     >
-      <div
-        className="-m-3 mb-0 flex cursor-move touch-none items-center rounded-t-xl bg-muted/60 px-3 py-1.5 text-xs font-medium select-none"
+      <Box
+        sx={{ cursor: "move", touchAction: "none", userSelect: "none", px: 1.5, py: 0.75, bgcolor: "action.hover", fontSize: 12, fontWeight: 500 }}
         onPointerDown={(event) => {
           const rect = box.current!.getBoundingClientRect();
           drag.current = { dx: event.clientX - rect.left, dy: event.clientY - rect.top };
@@ -347,23 +364,25 @@ function TaskFloat({
         }}
       >
         任务
-      </div>
-      {uploads.length ? (
-        <div className="grid gap-2">
-          {heading("镜像上传", "upload", { href: "/images", label: "打开镜像页" })}
-          {uploads.map((item) => (
-            <UploadItem key={item.id} item={item} />
-          ))}
-        </div>
-      ) : null}
-      {batch.length ? (
-        <div className="grid gap-2">
-          {heading("批量任务", "batch")}
-          {batch.map((task) => (
-            <BatchItem key={task.id} task={task} onDismiss={task.status === "done" ? () => onDismissBatch(task.id) : undefined} />
-          ))}
-        </div>
-      ) : null}
-    </div>
+      </Box>
+      <Stack spacing={1.5} sx={{ p: 1.5 }}>
+        {uploads.length ? (
+          <Stack spacing={1}>
+            {heading("镜像上传", "upload", { href: "/images", label: "打开镜像页" })}
+            {uploads.map((item) => (
+              <UploadItem key={item.id} item={item} />
+            ))}
+          </Stack>
+        ) : null}
+        {batch.length ? (
+          <Stack spacing={1}>
+            {heading("批量任务", "batch")}
+            {batch.map((task) => (
+              <BatchItem key={task.id} task={task} onDismiss={task.status === "done" ? () => onDismissBatch(task.id) : undefined} />
+            ))}
+          </Stack>
+        ) : null}
+      </Stack>
+    </Paper>
   );
 }

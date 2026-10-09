@@ -1,19 +1,46 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Box from "@mui/material/Box";
+import Grid from "@mui/material/Grid";
+import Paper from "@mui/material/Paper";
+import Stack from "@mui/material/Stack";
+import Table from "@mui/material/Table";
+import TableBody from "@mui/material/TableBody";
+import TableCell from "@mui/material/TableCell";
+import TableHead from "@mui/material/TableHead";
+import TableRow from "@mui/material/TableRow";
+import Typography from "@mui/material/Typography";
+import type { Theme } from "@mui/material/styles";
 import { cardKey, LINK_LABEL, linkBetween, linkText, type LinkType } from "@/lib/topology";
 import type { InventorySnapshot, Topology, TopoDevice } from "@/lib/types";
 import { formatTime } from "@/lib/time";
 
-const LINK_CLASS: Record<LinkType, string> = {
-  X: "bg-muted text-muted-foreground",
-  NV: "bg-emerald-500/20 text-emerald-800 dark:text-emerald-300",
-  PIX: "bg-green-500/15 text-green-800 dark:text-green-300",
-  PXB: "bg-sky-500/15 text-sky-800 dark:text-sky-300",
-  PHB: "bg-amber-500/15 text-amber-800 dark:text-amber-300",
-  NODE: "bg-orange-500/15 text-orange-800 dark:text-orange-300",
-  SYS: "bg-rose-500/15 text-rose-800 dark:text-rose-300",
+const MONO = "var(--font-geist-mono), monospace";
+
+/** 链路从近到远：绿 → 青 → 蓝 → 灰 → 橙 → 红，越暖越远。X 是自己。 */
+const LINK_COLOR: Record<Exclude<LinkType, "X">, "success" | "info" | "primary" | "secondary" | "warning" | "error"> = {
+  NV: "success",
+  PIX: "info",
+  PXB: "primary",
+  PHB: "secondary",
+  NODE: "warning",
+  SYS: "error",
 };
+
+/** 浅底深字的链路色块；深色模式下字换浅一档，底色加深一点，保证看得清。 */
+function linkSx(type: LinkType) {
+  return (theme: Theme) => {
+    const vars = theme.vars || theme;
+    if (type === "X") return { bgcolor: vars.palette.action.hover, color: vars.palette.text.secondary };
+    const palette = vars.palette[LINK_COLOR[type]];
+    return {
+      bgcolor: theme.alpha(palette.main, type === "NV" ? 0.24 : 0.16),
+      color: palette.dark,
+      ...theme.applyStyles("dark", { bgcolor: theme.alpha(palette.main, type === "NV" ? 0.3 : 0.2), color: palette.light }),
+    };
+  };
+}
 
 function shortPci(pci: string): string {
   return pci.replace(/^0000:/, "");
@@ -49,41 +76,61 @@ function switchGroups(devices: TopoDevice[]): { key: string; label: string; devi
   return [...groups.values()];
 }
 
+/** GPU 和网卡卡片：左边一道色条区分，GPU 绿、网卡蓝。 */
+const CARD_SX = { display: "grid", gap: 0.25, border: 1, borderColor: "divider", borderLeftWidth: 4, borderRadius: 1.5, bgcolor: "background.paper", px: 1, py: 0.75, typography: "caption" } as const;
+
 function GpuCard({ device }: { device: TopoDevice }) {
   return (
-    <div className="grid gap-0.5 rounded-md border border-l-4 border-l-emerald-500 bg-background px-2 py-1.5 text-xs">
-      <span className="font-medium">
-        {device.name} <span className="font-mono font-normal text-muted-foreground">{shortPci(device.pci)}</span>
-      </span>
+    <Box sx={{ ...CARD_SX, borderLeftColor: "success.main" }}>
+      <Box component="span" sx={{ fontWeight: 500 }}>
+        {device.name}{" "}
+        <Box component="span" sx={{ fontFamily: MONO, fontWeight: 400, color: "text.secondary" }}>
+          {shortPci(device.pci)}
+        </Box>
+      </Box>
       {device.model ? <span>{device.model}</span> : null}
-      {device.sn ? <span className="font-mono text-muted-foreground">SN {device.sn}</span> : null}
-    </div>
+      {device.sn ? (
+        <Box component="span" sx={{ fontFamily: MONO, color: "text.secondary" }}>
+          SN {device.sn}
+        </Box>
+      ) : null}
+    </Box>
   );
 }
 
 function NicCard({ card }: { card: Card }) {
   const first = card.ports[0];
   return (
-    <div className="grid gap-0.5 rounded-md border border-l-4 border-l-sky-500 bg-background px-2 py-1.5 text-xs">
-      <span className="font-medium">
-        网卡 <span className="font-mono font-normal text-muted-foreground">{shortPci(card.key)}</span>
-      </span>
+    <Box sx={{ ...CARD_SX, borderLeftColor: "info.main" }}>
+      <Box component="span" sx={{ fontWeight: 500 }}>
+        网卡{" "}
+        <Box component="span" sx={{ fontFamily: MONO, fontWeight: 400, color: "text.secondary" }}>
+          {shortPci(card.key)}
+        </Box>
+      </Box>
       {first.model ? <span>{first.model}</span> : null}
       {card.ports.map((port) => (
-        <span key={port.pci} className="font-mono text-muted-foreground">
+        <Box key={port.pci} component="span" sx={{ fontFamily: MONO, color: "text.secondary" }}>
           {[port.netdevs.join(", ") || shortPci(port.pci), ...port.rdma].join(" · ")}
-        </span>
+        </Box>
       ))}
-    </div>
+    </Box>
   );
 }
+
+/** 矩阵单元格的边框和内边距。 */
+const MATRIX_CELL = { border: 1, borderColor: "divider", px: 0.75, py: 0.5, fontSize: 12 } as const;
 
 function LinkCell({ topology, a, b }: { topology: Topology; a: TopoDevice; b: TopoDevice }) {
   const link = linkBetween(topology, a, b);
   return (
-    <td className={`border px-1.5 py-1 text-center font-mono text-xs ${LINK_CLASS[link.type]}`} title={link.type === "X" ? "自己" : LINK_LABEL[link.type]}>
+    <TableCell
+      align="center"
+      title={link.type === "X" ? "自己" : LINK_LABEL[link.type]}
+      sx={[{ ...MATRIX_CELL, fontFamily: MONO, whiteSpace: "nowrap" }, linkSx(link.type)]}
+    >
       {linkText(link)}
-    </td>
+    </TableCell>
   );
 }
 
@@ -118,15 +165,25 @@ export function ServerTopology({ row }: { row: { id: string } }) {
     };
   }, [row.id]);
 
-  if (state === "loading") return <p className="text-sm text-muted-foreground">正在读取</p>;
-  if (state === "error") return <p className="text-sm text-destructive">读取失败</p>;
+  const muted = (text: React.ReactNode) => (
+    <Typography variant="body2" color="text.secondary">
+      {text}
+    </Typography>
+  );
+  if (state === "loading") return muted("正在读取");
+  if (state === "error")
+    return (
+      <Typography variant="body2" color="error">
+        读取失败
+      </Typography>
+    );
   const topology = snapshot?.topology;
   if (!snapshot || !topology) {
-    return (
-      <p className="text-sm text-muted-foreground">
+    return muted(
+      <>
         {snapshot ? "最近一次系统内采集没有拓扑数据：可能是这个功能上线前采集的，或者机器上没有 GPU 和网卡。" : "这台机器还没有系统内采集。"}
         在「硬件配置」标签里勾上「系统内（SSH）」再采集一次。拓扑只能从系统里读，BMC 采集没有。
-      </p>
+      </>,
     );
   }
 
@@ -141,101 +198,124 @@ export function ServerTopology({ row }: { row: { id: string } }) {
   const rowLabel = (device: TopoDevice) => (device.kind === "gpu" ? device.name : shortPci(cardKey(device)));
 
   return (
-    <section className="grid gap-4">
-      <div className="grid gap-1">
-        <h3 className="font-medium">GPU / 网卡拓扑</h3>
-        <p className="text-xs text-muted-foreground">
+    <Stack component="section" spacing={2}>
+      <Stack spacing={0.5}>
+        <Typography variant="h3">GPU / 网卡拓扑</Typography>
+        <Typography variant="caption" color="text.secondary">
           来自 {formatTime(snapshot.at)} 的系统内采集。PCIe 关系按 sysfs 里的上游路径算，和 nvidia-smi topo -m 的叫法一致；NVLink 取自 nvidia-smi。
-        </p>
-      </div>
+        </Typography>
+      </Stack>
 
-      {gpus.length > 1 ? <p className="text-sm">{nvlinkSummary(topology, gpus)}</p> : null}
+      {gpus.length > 1 ? <Typography variant="body2">{nvlinkSummary(topology, gpus)}</Typography> : null}
 
-      <div className={`grid gap-3 ${numas.length > 1 ? "lg:grid-cols-2" : ""}`}>
+      <Grid container spacing={1.5}>
         {numas.map((numa) => {
           const inNuma = topology.devices.filter((device) => device.numa === numa);
           const roots = [...new Set(inNuma.map((device) => device.root))].sort();
           return (
-            <div key={String(numa)} className="grid content-start gap-2 rounded-lg border bg-muted/40 p-2">
-              <div className="text-sm font-medium">
-                {numa === null ? "NUMA 未知" : `NUMA ${numa}`}
-                {numa !== null && topology.numaCpus[String(numa)] ? <span className="font-normal text-muted-foreground"> · CPU {topology.numaCpus[String(numa)]}</span> : null}
-              </div>
-              {roots.map((root) => (
-                <div key={root} className="grid gap-2 rounded-md border bg-background/60 p-2">
-                  <div className="font-mono text-xs text-muted-foreground">根复合体 {root}</div>
-                  {switchGroups(inNuma.filter((device) => device.root === root)).map((group) => {
-                    const groupGpus = group.devices.filter((device) => device.kind === "gpu");
-                    const groupCards = cardsOf(group.devices);
-                    return (
-                      <div key={group.key} className="grid gap-1.5 rounded-md border border-dashed p-1.5">
-                        <div className="text-xs text-muted-foreground">{group.label}</div>
-                        <div className="grid gap-1.5 sm:grid-cols-2">
-                          {groupGpus.map((gpu) => (
-                            <GpuCard key={gpu.pci} device={gpu} />
-                          ))}
-                          {groupCards.map((card) => (
-                            <NicCard key={card.key} card={card} />
-                          ))}
-                        </div>
-                        {groupGpus.flatMap((gpu) =>
-                          groupCards.map((card) => {
-                            const link = linkBetween(topology, gpu, card.ports[0]);
-                            return (
-                              <div key={`${gpu.pci}-${card.key}`} className="text-xs text-muted-foreground">
-                                {gpu.name} ↔ 网卡 {shortPci(card.key)}：<span className={`rounded px-1 font-mono ${LINK_CLASS[link.type]}`}>{linkText(link)}</span> {link.type !== "X" ? LINK_LABEL[link.type] : ""}
-                              </div>
-                            );
-                          }),
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              ))}
-            </div>
+            <Grid key={String(numa)} size={{ xs: 12, lg: numas.length > 1 ? 6 : 12 }}>
+              <Paper variant="outlined" sx={{ p: 1, bgcolor: "action.hover", display: "grid", gap: 1, alignContent: "start", height: "100%" }}>
+                <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                  {numa === null ? "NUMA 未知" : `NUMA ${numa}`}
+                  {numa !== null && topology.numaCpus[String(numa)] ? (
+                    <Box component="span" sx={{ fontWeight: 400, color: "text.secondary" }}>
+                      {" "}
+                      · CPU {topology.numaCpus[String(numa)]}
+                    </Box>
+                  ) : null}
+                </Typography>
+                {roots.map((root) => (
+                  <Paper key={root} variant="outlined" sx={{ p: 1, display: "grid", gap: 1 }}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontFamily: MONO }}>
+                      根复合体 {root}
+                    </Typography>
+                    {switchGroups(inNuma.filter((device) => device.root === root)).map((group) => {
+                      const groupGpus = group.devices.filter((device) => device.kind === "gpu");
+                      const groupCards = cardsOf(group.devices);
+                      return (
+                        <Box key={group.key} sx={{ display: "grid", gap: 0.75, border: 1, borderStyle: "dashed", borderColor: "divider", borderRadius: 1.5, p: 0.75 }}>
+                          <Typography variant="caption" color="text.secondary">
+                            {group.label}
+                          </Typography>
+                          <Box sx={{ display: "grid", gap: 0.75, gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" } }}>
+                            {groupGpus.map((gpu) => (
+                              <GpuCard key={gpu.pci} device={gpu} />
+                            ))}
+                            {groupCards.map((card) => (
+                              <NicCard key={card.key} card={card} />
+                            ))}
+                          </Box>
+                          {groupGpus.flatMap((gpu) =>
+                            groupCards.map((card) => {
+                              const link = linkBetween(topology, gpu, card.ports[0]);
+                              return (
+                                <Typography key={`${gpu.pci}-${card.key}`} variant="caption" color="text.secondary">
+                                  {gpu.name} ↔ 网卡 {shortPci(card.key)}：
+                                  <Box component="span" sx={[{ borderRadius: 0.5, px: 0.5, fontFamily: MONO }, linkSx(link.type)]}>
+                                    {linkText(link)}
+                                  </Box>{" "}
+                                  {link.type !== "X" ? LINK_LABEL[link.type] : ""}
+                                </Typography>
+                              );
+                            }),
+                          )}
+                        </Box>
+                      );
+                    })}
+                  </Paper>
+                ))}
+              </Paper>
+            </Grid>
           );
         })}
-      </div>
+      </Grid>
 
-      <div className="grid gap-1">
-        <h4 className="text-sm font-medium">{gpus.length ? "GPU 到 GPU 和各张网卡" : "网卡之间"}</h4>
-        <div className="overflow-x-auto">
-          <table className="border-collapse text-xs">
-            <thead>
-              <tr>
-                <th className="border bg-muted px-1.5 py-1" />
+      <Stack spacing={0.5}>
+        <Typography variant="subtitle2">{gpus.length ? "GPU 到 GPU 和各张网卡" : "网卡之间"}</Typography>
+        <Box sx={{ overflowX: "auto" }}>
+          <Table size="small" sx={{ width: "auto", borderCollapse: "collapse" }}>
+            <TableHead>
+              <TableRow>
+                <TableCell sx={MATRIX_CELL} />
                 {columns.map((column) => (
-                  <th key={column.key} className="border bg-muted px-1.5 py-1 font-normal">
-                    <div className="font-medium">{column.label}</div>
-                    <div className="font-mono text-[10px] text-muted-foreground">{column.sub}</div>
-                  </th>
+                  <TableCell key={column.key} align="center" sx={{ ...MATRIX_CELL, fontWeight: 400 }}>
+                    <Box sx={{ fontWeight: 500, color: "text.primary" }}>{column.label}</Box>
+                    <Box sx={{ fontFamily: MONO, fontSize: 10 }}>{column.sub}</Box>
+                  </TableCell>
                 ))}
-              </tr>
-            </thead>
-            <tbody>
+              </TableRow>
+            </TableHead>
+            <TableBody>
               {rows.map((device) => (
-                <tr key={device.pci}>
-                  <th className="border bg-muted px-1.5 py-1 text-left font-medium whitespace-nowrap">{rowLabel(device)}</th>
+                <TableRow key={device.pci}>
+                  <TableCell component="th" scope="row" sx={{ ...MATRIX_CELL, bgcolor: "action.hover", fontWeight: 500, whiteSpace: "nowrap" }}>
+                    {rowLabel(device)}
+                  </TableCell>
                   {columns.map((column) => (
                     <LinkCell key={column.key} topology={topology} a={device} b={column.device} />
                   ))}
-                </tr>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
+            </TableBody>
+          </Table>
+        </Box>
+      </Stack>
 
-      <div className="grid gap-1 text-xs">
+      <Stack spacing={0.5} sx={{ typography: "caption" }}>
         {(Object.keys(LINK_LABEL) as Exclude<LinkType, "X">[]).map((type) => (
-          <div key={type} className="flex items-center gap-2">
-            <span className={`w-12 rounded px-1 text-center font-mono ${LINK_CLASS[type]}`}>{type === "NV" ? "NV#" : type}</span>
-            <span className="text-muted-foreground">{LINK_LABEL[type]}</span>
-          </div>
+          <Stack key={type} direction="row" spacing={1} sx={{ alignItems: "center" }}>
+            <Box component="span" sx={[{ width: 48, borderRadius: 0.5, px: 0.5, textAlign: "center", fontFamily: MONO }, linkSx(type)]}>
+              {type === "NV" ? "NV#" : type}
+            </Box>
+            <Box component="span" sx={{ color: "text.secondary" }}>
+              {LINK_LABEL[type]}
+            </Box>
+          </Stack>
         ))}
-        <p className="text-muted-foreground">从上往下越来越远。GPU 和网卡在 PIX/PXB 时 GPUDirect RDMA 最快。</p>
-      </div>
-    </section>
+        <Typography variant="caption" color="text.secondary">
+          从上往下越来越远。GPU 和网卡在 PIX/PXB 时 GPUDirect RDMA 最快。
+        </Typography>
+      </Stack>
+    </Stack>
   );
 }

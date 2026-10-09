@@ -1,9 +1,12 @@
 import { headers } from "next/headers";
+import Card from "@mui/material/Card";
+import CardContent from "@mui/material/CardContent";
+import CardHeader from "@mui/material/CardHeader";
+import Stack from "@mui/material/Stack";
 import { PageHeader } from "@/components/page-header";
 import { MonitorSettingsForm } from "@/components/monitor-settings-form";
 import { SnmpProfileManager } from "@/components/snmp-profile-manager";
 import { TagSettingsForm } from "@/components/tag-settings-form";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { getTagSettings, listAssets, listCustomers } from "@/lib/assets";
 import { authenticate } from "@/lib/auth";
 import { getMonitorSettings } from "@/lib/monitor";
@@ -20,32 +23,26 @@ export default async function SettingsPage() {
     .slice(-8)
     .map(({ id, seq, type, sn, customerId, createdAt, tagOverride, tag }) => ({ id, seq, type, sn, customerId, createdAt, tagOverride, tag }));
   return (
-    <div className="grid gap-4">
+    <Stack spacing={2}>
       <PageHeader title="设置" description="全局设置，改了马上生效。" />
       <Card>
-        <CardHeader>
-          <CardTitle>资产编号</CardTitle>
-        </CardHeader>
+        <CardHeader title="资产编号" />
         <CardContent>
           <TagSettingsForm settings={getTagSettings()} customers={listCustomers()} samples={samples} />
         </CardContent>
       </Card>
       <Card>
-        <CardHeader>
-          <CardTitle>监控</CardTitle>
-        </CardHeader>
+        <CardHeader title="监控" />
         <CardContent>
           <MonitorSettingsForm settings={getMonitorSettings()} />
         </CardContent>
       </Card>
       <Card>
-        <CardHeader>
-          <CardTitle>SNMP 凭据</CardTitle>
-        </CardHeader>
+        <CardHeader title="SNMP 凭据" />
         <CardContent>
           <SnmpProfileManager profiles={listSnmpProfiles().map(publicSnmpProfile)} />
         </CardContent>
       </Card>
-    </div>
+    </Stack>
   );
 }

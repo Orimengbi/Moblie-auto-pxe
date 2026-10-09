@@ -2,12 +2,39 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
+import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
+import Dialog from "@mui/material/Dialog";
+import DialogActions from "@mui/material/DialogActions";
+import DialogContent from "@mui/material/DialogContent";
+import DialogContentText from "@mui/material/DialogContentText";
+import DialogTitle from "@mui/material/DialogTitle";
+import Stack from "@mui/material/Stack";
+import TextField from "@mui/material/TextField";
+import Typography from "@mui/material/Typography";
 import type { PublicUser } from "@/lib/auth";
 import { api } from "@/lib/client-api";
+
+const MONO = "var(--font-geist-mono), monospace";
+
+/** 已有的一把公钥或访问密钥：名称、摘要，右边删除。 */
+function KeyRow({ name, detail, truncate, disabled, onRemove }: { name: string; detail: React.ReactNode; truncate?: boolean; disabled: boolean; onRemove: () => void }) {
+  return (
+    <Stack component="li" direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", borderRadius: 2, bgcolor: "action.hover", px: 1.5, py: 1 }}>
+      <Box sx={{ minWidth: 0, flex: truncate ? 1 : undefined }}>
+        <Typography variant="body2" sx={{ fontWeight: 500 }}>
+          {name}
+        </Typography>
+        <Typography variant="caption" component="p" noWrap={truncate} sx={{ fontFamily: MONO, color: "text.secondary" }}>
+          {detail}
+        </Typography>
+      </Box>
+      <Button color="error" disabled={disabled} onClick={onRemove}>
+        删除
+      </Button>
+    </Stack>
+  );
+}
 
 function day(iso?: string) {
   return iso ? iso.slice(0, 10) : "从未";
@@ -69,87 +96,102 @@ export function CredentialManager({ user }: { user: PublicUser }) {
   }
 
   return (
-    <div className="grid gap-6">
-      <section className="grid gap-3">
-        <h3 className="font-medium">SSH 公钥</h3>
+    <Stack spacing={4}>
+      <Stack component="section" spacing={1.5}>
+        <Typography variant="h3">SSH 公钥</Typography>
         {user.sshKeys.length === 0 ? (
-          <p className="text-sm text-muted-foreground">还没有公钥。添加后可以在登录页用 ssh-keygen 签名登录。</p>
+          <Typography variant="body2" sx={{ color: "text.secondary" }}>
+            还没有公钥。添加后可以在登录页用 ssh-keygen 签名登录。
+          </Typography>
         ) : (
-          <ul className="grid gap-2">
+          <Stack component="ul" spacing={1} sx={{ m: 0, p: 0, listStyle: "none" }}>
             {user.sshKeys.map((key) => (
-              <li key={key.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-muted/50 px-3 py-2 text-sm">
-                <div className="min-w-0">
-                  <p className="font-medium">{key.name}</p>
-                  <p className="truncate font-mono text-xs text-muted-foreground">
-                    {key.publicKey.split(" ")[0]} {key.fingerprint} · 添加于 {day(key.createdAt)}
-                  </p>
-                </div>
-                <Button size="sm" variant="ghost" disabled={pending} onClick={() => remove("ssh-keys", key.id, key.name)}>
-                  删除
-                </Button>
-              </li>
+              <KeyRow
+                key={key.id}
+                name={key.name}
+                truncate
+                detail={`${key.publicKey.split(" ")[0]} ${key.fingerprint} · 添加于 ${day(key.createdAt)}`}
+                disabled={pending}
+                onRemove={() => remove("ssh-keys", key.id, key.name)}
+              />
             ))}
-          </ul>
+          </Stack>
         )}
-        <form onSubmit={addSsh} className="grid gap-2">
-          <Textarea
+        <Stack component="form" onSubmit={addSsh} spacing={1.5}>
+          <TextField
             value={sshKey}
             onChange={(event) => setSshKey(event.target.value)}
             placeholder="ssh-ed25519 AAAA... user@host（~/.ssh/id_ed25519.pub 的内容）"
-            className="min-h-20 font-mono text-xs"
+            multiline
+            minRows={3}
+            fullWidth
             required
+            slotProps={{ htmlInput: { style: { fontFamily: MONO, fontSize: 12 } } }}
           />
-          <div className="flex flex-wrap gap-2">
-            <Input className="max-w-xs" value={sshName} onChange={(event) => setSshName(event.target.value)} placeholder="名称（可不填，默认用公钥注释）" />
-            <Button type="submit" variant="secondary" disabled={pending}>
+          <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center" }}>
+            <TextField value={sshName} onChange={(event) => setSshName(event.target.value)} placeholder="名称（可不填，默认用公钥注释）" sx={{ width: 320, maxWidth: "100%" }} />
+            <Button type="submit" variant="outlined" disabled={pending}>
               添加公钥
             </Button>
-          </div>
-        </form>
-      </section>
+          </Stack>
+        </Stack>
+      </Stack>
 
-      <section className="grid gap-3">
-        <h3 className="font-medium">访问密钥</h3>
-        <p className="text-sm text-muted-foreground">
-          可以在登录页直接粘贴登录，也可以给脚本用：<code className="font-mono text-xs">curl -H &quot;Authorization: Bearer pxe_...&quot;</code>。权限和这个用户相同。
-        </p>
+      <Stack component="section" spacing={1.5}>
+        <Typography variant="h3">访问密钥</Typography>
+        <Typography variant="body2" sx={{ color: "text.secondary" }}>
+          可以在登录页直接粘贴登录，也可以给脚本用：
+          <Box component="code" sx={{ fontFamily: MONO, fontSize: 12 }}>
+            curl -H &quot;Authorization: Bearer pxe_...&quot;
+          </Box>
+          。权限和这个用户相同。
+        </Typography>
         {user.accessKeys.length ? (
-          <ul className="grid gap-2">
+          <Stack component="ul" spacing={1} sx={{ m: 0, p: 0, listStyle: "none" }}>
             {user.accessKeys.map((key) => (
-              <li key={key.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-muted/50 px-3 py-2 text-sm">
-                <div>
-                  <p className="font-medium">{key.name}</p>
-                  <p className="font-mono text-xs text-muted-foreground">
-                    pxe_{key.id}_… · 创建于 {day(key.createdAt)} · 最近使用 {day(key.lastUsedAt)}
-                  </p>
-                </div>
-                <Button size="sm" variant="ghost" disabled={pending} onClick={() => remove("access-keys", key.id, key.name)}>
-                  删除
-                </Button>
-              </li>
+              <KeyRow
+                key={key.id}
+                name={key.name}
+                detail={`pxe_${key.id}_… · 创建于 ${day(key.createdAt)} · 最近使用 ${day(key.lastUsedAt)}`}
+                disabled={pending}
+                onRemove={() => remove("access-keys", key.id, key.name)}
+              />
             ))}
-          </ul>
+          </Stack>
         ) : null}
-        <form onSubmit={addAccessKey} className="flex flex-wrap gap-2">
-          <Input className="max-w-xs" value={keyName} onChange={(event) => setKeyName(event.target.value)} placeholder="用途，例如 笔记本 / 巡检脚本" />
-          <Button type="submit" variant="secondary" disabled={pending}>
+        <Stack component="form" onSubmit={addAccessKey} direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center" }}>
+          <TextField value={keyName} onChange={(event) => setKeyName(event.target.value)} placeholder="用途，例如 笔记本 / 巡检脚本" sx={{ width: 320, maxWidth: "100%" }} />
+          <Button type="submit" variant="outlined" disabled={pending}>
             生成访问密钥
           </Button>
-        </form>
-      </section>
+        </Stack>
+      </Stack>
 
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      {error ? (
+        <Typography variant="body2" color="error">
+          {error}
+        </Typography>
+      ) : null}
 
-      <Dialog open={Boolean(created)} onOpenChange={(open) => !open && setCreated("")}>
+      <Dialog open={Boolean(created)} onClose={() => setCreated("")}>
+        <DialogTitle>新的访问密钥</DialogTitle>
         <DialogContent>
-          <DialogHeader>
-            <DialogTitle>新的访问密钥</DialogTitle>
-            <DialogDescription>只显示这一次，关掉后无法再查看。丢了就删掉重新生成。</DialogDescription>
-          </DialogHeader>
-          <pre className="overflow-x-auto rounded-lg bg-muted p-3 font-mono text-xs break-all whitespace-pre-wrap select-all">{created}</pre>
-          <Button onClick={() => navigator.clipboard?.writeText(created)}>复制</Button>
+          <DialogContentText variant="body2" sx={{ mb: 1.5 }}>
+            只显示这一次，关掉后无法再查看。丢了就删掉重新生成。
+          </DialogContentText>
+          <Box
+            component="pre"
+            sx={{ m: 0, p: 1.5, overflowX: "auto", borderRadius: 2, bgcolor: "action.hover", fontFamily: MONO, fontSize: 12, whiteSpace: "pre-wrap", wordBreak: "break-all", userSelect: "all" }}
+          >
+            {created}
+          </Box>
         </DialogContent>
+        <DialogActions>
+          <Button variant="contained" onClick={() => navigator.clipboard?.writeText(created)}>
+            复制
+          </Button>
+        </DialogActions>
       </Dialog>
-    </div>
+    </Stack>
   );
 }

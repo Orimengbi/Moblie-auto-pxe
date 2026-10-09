@@ -94,51 +94,41 @@ export const ALERT_SEVERITY: Record<AlertSeverity, string> = { critical: "严重
 export const ALERT_STATUS: Record<AlertStatus, string> = { active: "告警中", acked: "已确认", resolved: "已恢复" };
 export const ALERT_SOURCE: Record<AlertSource, string> = { sensor: "传感器", sel: "BMC 事件", bmc: "BMC", gpu: "GPU", xid: "GPU Xid", disk: "硬盘", snmp: "SNMP", port: "端口" };
 
-type BadgeVariant = "default" | "outline" | "destructive" | "success" | "warning" | "info";
+/** 状态颜色：success 正常，info 进行中，warning 要留意，error 出问题，neutral 不再用或未开始。各列表共用。 */
+export type Tone = "neutral" | "primary" | "success" | "info" | "warning" | "error";
 
-/** 状态标签的配色：正常绿色，进行中蓝/黄，出问题红色，不再用的灰色。各列表共用。 */
-export function partStatusVariant(status: PartStatus): BadgeVariant {
-  return status === "stock" ? "success" : status === "installed" ? "info" : status === "faulty" ? "destructive" : status === "rma" || status === "removed" ? "warning" : "outline";
+export function partStatusTone(status: PartStatus): Tone {
+  return status === "stock" ? "success" : status === "installed" ? "info" : status === "faulty" ? "error" : status === "rma" || status === "removed" ? "warning" : "neutral";
 }
 
-export const ASSET_STATUS_VARIANT: Record<AssetStatus, BadgeVariant> = {
-  stock: "outline",
+export function priorityTone(priority: TicketPriority): Tone {
+  return priority === "urgent" ? "error" : priority === "high" ? "warning" : "neutral";
+}
+
+export function taskTargetTone(status: string): Tone {
+  return status === "ok" ? "success" : status === "running" ? "info" : status === "pending" ? "neutral" : "error";
+}
+
+export const ASSET_STATUS_TONE: Record<AssetStatus, Tone> = {
+  stock: "neutral",
   racked: "info",
-  installing: "info",
+  installing: "primary",
   pending: "warning",
   active: "success",
-  repair: "destructive",
-  offline: "outline",
-  scrapped: "outline",
+  repair: "error",
+  offline: "neutral",
+  scrapped: "neutral",
 };
 
-/** 总览页状态分布条用的颜色（Tailwind 类名）。 */
-export const ASSET_STATUS_COLOR: Record<AssetStatus, string> = {
-  stock: "bg-chart-5",
-  racked: "bg-info",
-  installing: "bg-chart-4",
-  pending: "bg-warning",
-  active: "bg-success",
-  repair: "bg-destructive",
-  offline: "bg-muted-foreground/40",
-  scrapped: "bg-muted-foreground/20",
-};
-
-export const TICKET_STATUS_VARIANT: Record<TicketStatus, BadgeVariant> = {
+export const TICKET_STATUS_TONE: Record<TicketStatus, Tone> = {
   open: "warning",
   processing: "info",
-  waiting: "outline",
+  waiting: "neutral",
   resolved: "success",
-  closed: "outline",
+  closed: "neutral",
 };
 
-export function priorityVariant(priority: TicketPriority): BadgeVariant {
-  return priority === "urgent" ? "destructive" : priority === "high" ? "warning" : "outline";
-}
-
-export function taskTargetVariant(status: string): BadgeVariant {
-  return status === "ok" ? "success" : status === "running" ? "info" : status === "pending" ? "outline" : "destructive";
-}
+export const ALERT_SEVERITY_TONE: Record<AlertSeverity, Tone> = { critical: "error", warning: "warning" };
 
 export const FLOOR_ITEM_KINDS: Record<FloorItemKind, string> = {
   pillar: "柱子",

@@ -2,38 +2,32 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import Alert from "@mui/material/Alert";
+import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
+import Checkbox from "@mui/material/Checkbox";
+import FormControlLabel from "@mui/material/FormControlLabel";
+import Stack from "@mui/material/Stack";
+import TextField from "@mui/material/TextField";
+import Typography from "@mui/material/Typography";
+import { DataGrid, type GridColDef, type GridRowProps, type GridRowSelectionModel } from "@mui/x-data-grid";
 import { AssetEditDialog } from "@/components/asset-edit-dialog";
 import { AssetImportDialog } from "@/components/asset-import-dialog";
+import { StatusChip } from "@/components/mui/status-chip";
+import { FONT_SANS } from "@/components/mui/theme";
 import { HOST_SOURCE, ProjectTaskRunner } from "@/components/project-task-runner";
 import { RemoteConsole } from "@/components/remote-console";
-import { ResizeHandle, useColumnWidths } from "@/components/resizable-columns";
 import { ServerPowerDialog } from "@/components/server-power-dialog";
 import { ServerSidebar } from "@/components/server-sidebar";
-import { Badge } from "@/components/ui/badge";
-import { NativeSelect } from "@/components/ui/native-select";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { AssetRow } from "@/lib/asset-view";
-import { ASSET_STATUS, ASSET_STATUS_VARIANT, ASSET_TYPES, WARRANTY_LABEL } from "@/lib/asset-labels";
+import { ASSET_STATUS, ASSET_STATUS_TONE, ASSET_TYPES, WARRANTY_LABEL } from "@/lib/asset-labels";
 import type { AssetStatus, Customer, Datacenter, RemoteFile, RemoteTask, Site } from "@/lib/types";
 import { SiteOptions } from "@/components/site-options";
 import { formatTime } from "@/lib/time";
 
-const COLUMNS = [
-  { key: "select", label: "" },
-  { key: "tag", label: "编号" },
-  { key: "sn", label: "序列号" },
-  { key: "model", label: "厂商 / 型号" },
-  { key: "customer", label: "归属" },
-  { key: "status", label: "状态" },
-  { key: "place", label: "位置" },
-  { key: "bmc", label: "BMC" },
-  { key: "host", label: "系统地址" },
-  { key: "warranty", label: "保修" },
-  { key: "hardware", label: "硬件" },
-  { key: "actions", label: "" },
-];
+const MONO = "var(--font-geist-mono), monospace";
+const WIDTH_KEY = "pxe-asset-columns";
+const NATIVE = { select: { native: true } } as const;
 
 interface Filters {
   q: string;
@@ -66,6 +60,25 @@ function matches(row: AssetRow, filters: Filters): boolean {
     .includes(needle);
 }
 
+/** 单元格里的第二行小字。 */
+function Sub({ children, color = "text.secondary" }: { children: React.ReactNode; color?: string }) {
+  return (
+    <Typography component="span" variant="caption" sx={{ display: "block", color, fontFamily: FONT_SANS }}>
+      {children}
+    </Typography>
+  );
+}
+
+function Dash() {
+  return (
+    <Box component="span" sx={{ color: "text.secondary", fontFamily: FONT_SANS }}>
+      —
+    </Box>
+  );
+}
+
+const tagCompare = (a: string, b: string) => a.localeCompare(b, "zh-CN", { numeric: true });
+
 /** 资产列表：筛选、勾选后批量改状态或归属、电源、批量任务；点一行打开侧边栏。 */
 export function AssetList({
   rows,
@@ -97,7 +110,7 @@ export function AssetList({
   const [bulkCustomer, setBulkCustomer] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  const columnWidths = useColumnWidths("pxe-asset-columns", COLUMNS.map((column) => column.key));
+  const [widths, setWidths] = useState<Record<string, number>>({});
 
   // 地址栏带的筛选（总览页点进来的）优先，其次是这个浏览器上次用的。
   useEffect(() => {
@@ -119,6 +132,26 @@ export function AssetList({
     if (open) setSideId(open);
   }, [search]);
 
+  // 拖过的列宽记在这个浏览器里，键名和格式沿用以前的表格（列 key → 像素）。
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(WIDTH_KEY) || "null");
+      if (saved && typeof saved === "object") setWidths(saved);
+    } catch {
+      // 读不到就用默认宽度。
+    }
+  }, []);
+
+  function saveWidth(field: string, width: number) {
+    const next = { ...widths, [field]: Math.round(width) };
+    setWidths(next);
+    try {
+      localStorage.setItem(WIDTH_KEY, JSON.stringify(next));
+    } catch {
+      // 存不了也照样能拖，只是刷新后要重来。
+    }
+  }
+
   function setFilter(key: keyof Filters, value: string) {
     const next = { ...filters, [key]: value };
     setFilters(next);
@@ -129,15 +162,19 @@ export function AssetList({
     }
   }
 
-  const shown = useMemo(
-    () => rows.filter((row) => matches(row, filters)).sort((a, b) => a.tag.localeCompare(b.tag, "zh-CN", { numeric: true })),
-    [rows, filters],
-  );
+  const shown = useMemo(() => rows.filter((row) => matches(row, filters)).sort((a, b) => tagCompare(a.tag, b.tag)), [rows, filters]);
   const filtering = Object.values(filters).some(Boolean);
-  const allPicked = shown.length > 0 && shown.every((row) => picked.includes(row.id));
   const sideRow = rows.find((row) => row.id === sideId) || null;
   const pickedRows = rows.filter((row) => picked.includes(row.id));
   const installed = rows.filter((row) => row.host).map((row) => row.id);
+
+  // 表格只管当前显示的行；被筛掉但之前勾过的照样留着，和以前一样。
+  const selection = useMemo<GridRowSelectionModel>(() => ({ type: "include", ids: new Set(picked) }), [picked]);
+  function onSelection(model: GridRowSelectionModel) {
+    const shownIds = shown.map((row) => row.id);
+    const inGrid = model.type === "include" ? shownIds.filter((id) => model.ids.has(id)) : shownIds.filter((id) => !model.ids.has(id));
+    setPicked((list) => [...list.filter((id) => !shownIds.includes(id)), ...inGrid]);
+  }
 
   async function bulkUpdate(body: Record<string, unknown>, label: string) {
     if (!pickedRows.length) return;
@@ -158,19 +195,149 @@ export function AssetList({
     router.refresh();
   }
 
+  const columns = useMemo<GridColDef<AssetRow>[]>(() => {
+    const list: GridColDef<AssetRow>[] = [
+      {
+        field: "tag",
+        headerName: "编号",
+        width: 130,
+        sortComparator: tagCompare,
+        renderCell: ({ row }) => <Box sx={{ fontFamily: MONO, fontSize: 12 }}>{row.tag}</Box>,
+      },
+      {
+        field: "sn",
+        headerName: "序列号",
+        width: 150,
+        renderCell: ({ row }) => <Box sx={{ fontFamily: MONO, fontSize: 12 }}>{row.sn}</Box>,
+      },
+      {
+        field: "model",
+        headerName: "厂商 / 型号",
+        width: 170,
+        valueGetter: (_value, row) => [row.vendor, row.model].filter(Boolean).join(" "),
+        renderCell: ({ row, value }) => (
+          <Box sx={{ fontSize: 12 }}>
+            {value || <Dash />}
+            {row.type !== "server" ? <Sub>{ASSET_TYPES[row.type]}</Sub> : null}
+          </Box>
+        ),
+      },
+      {
+        field: "customer",
+        headerName: "归属",
+        width: 130,
+        valueGetter: (_value, row) => row.customerName || "自有",
+        renderCell: ({ row }) => (
+          <Box sx={{ fontSize: 12 }}>
+            {row.customerName || <Box component="span" sx={{ color: "text.secondary" }}>自有</Box>}
+            {row.owner ? <Sub>{row.owner}</Sub> : null}
+          </Box>
+        ),
+      },
+      {
+        field: "status",
+        headerName: "状态",
+        width: 100,
+        type: "singleSelect",
+        valueOptions: Object.entries(ASSET_STATUS).map(([value, label]) => ({ value, label })),
+        renderCell: ({ row }) => <StatusChip tone={ASSET_STATUS_TONE[row.status]} label={ASSET_STATUS[row.status]} />,
+      },
+      {
+        field: "place",
+        headerName: "位置",
+        width: 140,
+        renderCell: ({ row }) => (
+          <Box sx={{ fontFamily: MONO, fontSize: 12 }}>
+            {row.place || <Dash />}
+            {row.location ? <Sub>{row.location}</Sub> : null}
+          </Box>
+        ),
+      },
+      {
+        field: "bmc",
+        headerName: "BMC",
+        width: 150,
+        valueGetter: (_value, row) => row.bmcIp || row.mgmtIp || "",
+        renderCell: ({ row }) => (
+          <Box sx={{ fontFamily: MONO, fontSize: 12 }}>
+            {row.bmcIp || (row.mgmtIp ? "" : "—")}
+            {row.mgmtIp ? <Box component="span" sx={{ display: "block" }}>管理 {row.mgmtIp}</Box> : null}
+          </Box>
+        ),
+      },
+      {
+        field: "host",
+        headerName: "系统地址",
+        width: 130,
+        renderCell: ({ row }) => (
+          <Box title={row.hostSource ? HOST_SOURCE[row.hostSource] : undefined} sx={{ fontFamily: MONO, fontSize: 12 }}>
+            {row.host || "—"}
+          </Box>
+        ),
+      },
+      {
+        field: "warranty",
+        headerName: "保修",
+        width: 110,
+        valueGetter: (_value, row) => (row.warranty === "none" ? "" : row.warrantyEnd || ""),
+        renderCell: ({ row }) =>
+          row.warranty === "none" ? (
+            <Dash />
+          ) : (
+            <Box sx={{ fontSize: 12, color: row.warranty === "expired" ? "error.main" : undefined, fontWeight: row.warranty === "expiring" ? 500 : undefined }}>
+              {WARRANTY_LABEL[row.warranty]}
+              <Sub>{row.warrantyEnd}</Sub>
+            </Box>
+          ),
+      },
+      {
+        field: "hardware",
+        headerName: "硬件",
+        width: 130,
+        valueGetter: (_value, row) => hardwareText(row),
+        renderCell: ({ row, value }) => (
+          <Box sx={{ fontSize: 12 }}>
+            {value}
+            {row.inventory.issues ? <Sub color="error.main">不符合基准 {row.inventory.issues} 项</Sub> : null}
+          </Box>
+        ),
+      },
+      {
+        field: "actions",
+        headerName: "",
+        width: 170,
+        sortable: false,
+        filterable: false,
+        disableColumnMenu: true,
+        align: "right",
+        renderCell: ({ row }) => (
+          <Box sx={{ whiteSpace: "nowrap" }}>
+            <Button disabled={!row.bmcIp} onClick={() => setConsoleRow(row)}>
+              远程控制台
+            </Button>
+            <Button disabled={!row.bmcIp} onClick={() => setPowerTargets([row])}>
+              电源
+            </Button>
+          </Box>
+        ),
+      },
+    ];
+    return list.map((column) => (widths[column.field] ? { ...column, width: widths[column.field] } : column));
+  }, [widths]);
+
   return (
-    <div className="grid gap-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <Input className="h-8 w-56" placeholder="搜编号、序列号、型号、IP…" value={filters.q} onChange={(event) => setFilter("q", event.target.value)} />
-        <NativeSelect value={filters.status} onChange={(event) => setFilter("status", event.target.value)}>
+    <Stack spacing={2}>
+      <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center" }}>
+        <TextField sx={{ width: 224 }} placeholder="搜编号、序列号、型号、IP…" value={filters.q} onChange={(event) => setFilter("q", event.target.value)} />
+        <TextField select slotProps={NATIVE} value={filters.status} onChange={(event) => setFilter("status", event.target.value)}>
           <option value="">全部状态</option>
           {Object.entries(ASSET_STATUS).map(([value, label]) => (
             <option key={value} value={value}>
               {label}（{rows.filter((row) => row.status === value).length}）
             </option>
           ))}
-        </NativeSelect>
-        <NativeSelect value={filters.customer} onChange={(event) => setFilter("customer", event.target.value)}>
+        </TextField>
+        <TextField select slotProps={NATIVE} value={filters.customer} onChange={(event) => setFilter("customer", event.target.value)}>
           <option value="">全部归属</option>
           <option value="none">无（自有）</option>
           {customers.map((customer) => (
@@ -178,61 +345,57 @@ export function AssetList({
               {customer.code} · {customer.name}
             </option>
           ))}
-        </NativeSelect>
-        <NativeSelect value={filters.site} onChange={(event) => setFilter("site", event.target.value)}>
+        </TextField>
+        <TextField select slotProps={NATIVE} value={filters.site} onChange={(event) => setFilter("site", event.target.value)}>
           <option value="">全部位置</option>
           <option value="none">没放进机柜的</option>
           <SiteOptions sites={sites} datacenters={datacenters} wholeDatacenter="整个数据中心" />
-        </NativeSelect>
-        <NativeSelect value={filters.type} onChange={(event) => setFilter("type", event.target.value)}>
+        </TextField>
+        <TextField select slotProps={NATIVE} value={filters.type} onChange={(event) => setFilter("type", event.target.value)}>
           <option value="">全部类型</option>
           {Object.entries(ASSET_TYPES).map(([value, label]) => (
             <option key={value} value={value}>
               {label}
             </option>
           ))}
-        </NativeSelect>
-        <label className="flex items-center gap-1.5 text-sm">
-          <input type="checkbox" checked={Boolean(filters.warranty)} onChange={(event) => setFilter("warranty", event.target.checked ? "1" : "")} />
-          只看过保和快到期的
-        </label>
-        {filtering ? (
-          <Button type="button" size="sm" variant="ghost" onClick={() => setFilters(EMPTY)}>
-            清除筛选
-          </Button>
-        ) : null}
-        <div className="ml-auto flex gap-2">
-          <Button type="button" size="sm" variant="outline" onClick={() => window.location.assign("/api/assets/export")}>
+        </TextField>
+        <FormControlLabel
+          control={<Checkbox checked={Boolean(filters.warranty)} onChange={(event) => setFilter("warranty", event.target.checked ? "1" : "")} />}
+          label={<Typography variant="body2">只看过保和快到期的</Typography>}
+        />
+        {filtering ? <Button onClick={() => setFilters(EMPTY)}>清除筛选</Button> : null}
+        <Stack direction="row" useFlexGap spacing={1} sx={{ ml: "auto", flexWrap: "wrap" }}>
+          <Button variant="outlined" onClick={() => window.location.assign("/api/assets/export")}>
             导出 Excel
           </Button>
-          <Button type="button" size="sm" variant="outline" onClick={() => setImporting(true)}>
+          <Button variant="outlined" onClick={() => setImporting(true)}>
             Excel 导入
           </Button>
-          <Button type="button" size="sm" onClick={() => setCreating(true)}>
+          <Button variant="contained" onClick={() => setCreating(true)}>
             资产入库
           </Button>
-        </div>
-      </div>
+        </Stack>
+      </Stack>
 
-      <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-        <span>
+      <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center" }}>
+        <Typography variant="body2" sx={{ color: "text.secondary" }}>
           共 {rows.length} 台{filtering ? `，筛选后 ${shown.length} 台` : ""}
           {picked.length ? `，选中 ${picked.length} 台` : ""}。
-        </span>
+        </Typography>
         {picked.length ? (
           <>
-            <NativeSelect value={bulkStatus} onChange={(event) => setBulkStatus(event.target.value)}>
+            <TextField select slotProps={NATIVE} value={bulkStatus} onChange={(event) => setBulkStatus(event.target.value)}>
               <option value="">改状态为…</option>
               {Object.entries(ASSET_STATUS).map(([value, label]) => (
                 <option key={value} value={value}>
                   {label}
                 </option>
               ))}
-            </NativeSelect>
-            <Button type="button" size="xs" variant="outline" disabled={!bulkStatus} onClick={() => void bulkUpdate({ status: bulkStatus }, `改成「${ASSET_STATUS[bulkStatus as AssetStatus]}」`)}>
+            </TextField>
+            <Button variant="outlined" disabled={!bulkStatus} onClick={() => void bulkUpdate({ status: bulkStatus }, `改成「${ASSET_STATUS[bulkStatus as AssetStatus]}」`)}>
               改状态
             </Button>
-            <NativeSelect value={bulkCustomer} onChange={(event) => setBulkCustomer(event.target.value)}>
+            <TextField select slotProps={NATIVE} value={bulkCustomer} onChange={(event) => setBulkCustomer(event.target.value)}>
               <option value="">改归属为…</option>
               <option value="none">无（自有）</option>
               {customers.map((customer) => (
@@ -240,11 +403,9 @@ export function AssetList({
                   {customer.code} · {customer.name}
                 </option>
               ))}
-            </NativeSelect>
+            </TextField>
             <Button
-              type="button"
-              size="xs"
-              variant="outline"
+              variant="outlined"
               disabled={!bulkCustomer}
               onClick={() =>
                 void bulkUpdate(
@@ -255,123 +416,54 @@ export function AssetList({
             >
               改归属
             </Button>
-            <Button type="button" size="xs" variant="outline" onClick={() => setPowerTargets(pickedRows.filter((row) => row.bmcIp))}>
+            <Button variant="outlined" onClick={() => setPowerTargets(pickedRows.filter((row) => row.bmcIp))}>
               电源和引导
             </Button>
-            <Button type="button" size="xs" variant="ghost" onClick={() => setPicked([])}>
-              取消选择
-            </Button>
+            <Button onClick={() => setPicked([])}>取消选择</Button>
           </>
         ) : null}
-      </div>
-      {message ? <p className="text-sm text-muted-foreground">{message}</p> : null}
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      </Stack>
+      {message ? (
+        <Typography variant="body2" sx={{ color: "text.secondary" }}>
+          {message}
+        </Typography>
+      ) : null}
+      {error ? (
+        <Typography variant="body2" color="error">
+          {error}
+        </Typography>
+      ) : null}
 
       {rows.length === 0 ? (
-        <p className="text-sm text-muted-foreground">还没有资产。点「资产入库」一台台录，用「Excel 导入」批量导入，或者在装机批次里上传服务器表，表里的机器会自动入库。</p>
+        <Alert severity="info">还没有资产。点「资产入库」一台台录，用「Excel 导入」批量导入，或者在装机批次里上传服务器表，表里的机器会自动入库。</Alert>
       ) : (
-        <div className="overflow-x-auto">
-          <Table className={columnWidths.tableClassName} style={columnWidths.tableStyle}>
-            <TableHeader>
-              <TableRow>
-                {COLUMNS.map((column) => (
-                  <TableHead key={column.key} data-col={column.key} className="relative" style={columnWidths.headStyle(column.key)}>
-                    {column.key === "select" ? (
-                      <input
-                        type="checkbox"
-                        aria-label="全选当前显示的"
-                        checked={allPicked}
-                        onChange={() => {
-                          const ids = shown.map((row) => row.id);
-                          setPicked((list) => (allPicked ? list.filter((id) => !ids.includes(id)) : [...new Set([...list, ...ids])]));
-                        }}
-                      />
-                    ) : (
-                      column.label
-                    )}
-                    <ResizeHandle onStart={(event) => columnWidths.startResize(column.key, event)} onReset={columnWidths.reset} />
-                  </TableHead>
-                ))}
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {shown.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={COLUMNS.length} className="py-6 text-center text-sm text-muted-foreground">
-                    没有符合筛选条件的资产。
-                  </TableCell>
-                </TableRow>
-              ) : null}
-              {shown.map((row) => (
-                <TableRow
-                  key={row.id}
-                  data-server-row
-                  data-state={picked.includes(row.id) ? "selected" : undefined}
-                  className={`cursor-pointer ${sideId === row.id ? "bg-muted" : ""}`}
-                  onClick={(event) => {
-                    if ((event.target as HTMLElement).closest("button, input, a, select, label")) return;
-                    setSideId(row.id);
-                  }}
-                >
-                  <TableCell>
-                    <input
-                      type="checkbox"
-                      aria-label={`选择 ${row.tag}`}
-                      checked={picked.includes(row.id)}
-                      onChange={() => setPicked((list) => (list.includes(row.id) ? list.filter((id) => id !== row.id) : [...list, row.id]))}
-                    />
-                  </TableCell>
-                  <TableCell className="font-mono text-xs">{row.tag}</TableCell>
-                  <TableCell className="font-mono text-xs">{row.sn}</TableCell>
-                  <TableCell className="text-xs">
-                    {[row.vendor, row.model].filter(Boolean).join(" ") || <span className="text-muted-foreground">—</span>}
-                    {row.type !== "server" ? <span className="block text-muted-foreground">{ASSET_TYPES[row.type]}</span> : null}
-                  </TableCell>
-                  <TableCell className="text-xs">
-                    {row.customerName || <span className="text-muted-foreground">自有</span>}
-                    {row.owner ? <span className="block text-muted-foreground">{row.owner}</span> : null}
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant={ASSET_STATUS_VARIANT[row.status]}>{ASSET_STATUS[row.status]}</Badge>
-                  </TableCell>
-                  <TableCell className="font-mono text-xs">
-                    {row.place || <span className="font-sans text-muted-foreground">—</span>}
-                    {row.location ? <span className="mt-1 block font-sans text-muted-foreground">{row.location}</span> : null}
-                  </TableCell>
-                  <TableCell className="font-mono text-xs">
-                    {row.bmcIp || (row.mgmtIp ? "" : "—")}
-                    {row.mgmtIp ? <span className="block">管理 {row.mgmtIp}</span> : null}
-                  </TableCell>
-                  <TableCell className="font-mono text-xs" title={row.hostSource ? HOST_SOURCE[row.hostSource] : undefined}>
-                    {row.host || "—"}
-                  </TableCell>
-                  <TableCell className="text-xs">
-                    {row.warranty === "none" ? (
-                      <span className="text-muted-foreground">—</span>
-                    ) : (
-                      <span className={row.warranty === "expired" ? "text-destructive" : row.warranty === "expiring" ? "font-medium" : ""}>
-                        {WARRANTY_LABEL[row.warranty]}
-                        <span className="block text-muted-foreground">{row.warrantyEnd}</span>
-                      </span>
-                    )}
-                  </TableCell>
-                  <TableCell className="text-xs">
-                    {hardwareText(row)}
-                    {row.inventory.issues ? <span className="block text-destructive">不符合基准 {row.inventory.issues} 项</span> : null}
-                  </TableCell>
-                  <TableCell className="text-right whitespace-nowrap">
-                    <Button type="button" size="xs" variant="ghost" disabled={!row.bmcIp} onClick={() => setConsoleRow(row)}>
-                      远程控制台
-                    </Button>
-                    <Button type="button" size="xs" variant="ghost" disabled={!row.bmcIp} onClick={() => setPowerTargets([row])}>
-                      电源
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
+        <Box sx={{ width: "100%", minWidth: 0 }}>
+          <DataGrid
+            rows={shown}
+            columns={columns}
+            checkboxSelection
+            rowSelectionModel={selection}
+            onRowSelectionModelChange={onSelection}
+            onColumnWidthChange={({ colDef, width }) => saveWidth(colDef.field, width)}
+            getRowHeight={() => "auto"}
+            // 打开侧边栏的那一行一直标着，方便对照。
+            getRowClassName={({ id }) => (id === sideId ? "asset-row-open" : "")}
+            onRowClick={({ id }, event) => {
+              if ((event.target as HTMLElement).closest("button, input, a, select, label, .MuiDataGrid-cellCheckbox")) return;
+              setSideId(String(id));
+            }}
+            slotProps={{ row: { "data-server-row": "" } as Partial<GridRowProps> }}
+            localeText={{ noRowsLabel: "没有符合筛选条件的资产。" }}
+            autoHeight
+            pageSizeOptions={[25, 50, 100]}
+            initialState={{ pagination: { paginationModel: { pageSize: 100 } } }}
+            sx={{
+              "& .MuiDataGrid-row": { cursor: "pointer" },
+              "& .MuiDataGrid-cell": { py: 0.75, display: "flex", alignItems: "center" },
+              "& .asset-row-open": { bgcolor: "action.selected" },
+            }}
+          />
+        </Box>
       )}
 
       <AssetEditDialog
@@ -392,11 +484,13 @@ export function AssetList({
         onClose={() => setSideId(null)}
         onChanged={() => router.refresh()}
       />
-      <div className="grid gap-3 border-t pt-4">
-        <h3 className="font-medium">批量任务</h3>
-        <p className="text-sm text-muted-foreground">在上面的列表里勾选机器。控制台用自己的 SSH 密钥登录系统地址执行，装机时会写入这把公钥；不是这里装的机器要自己把公钥放进 root 的 authorized_keys。</p>
+      <Stack spacing={1.5} sx={{ borderTop: 1, borderColor: "divider", pt: 2 }}>
+        <Typography variant="h3">批量任务</Typography>
+        <Typography variant="body2" sx={{ color: "text.secondary" }}>
+          在上面的列表里勾选机器。控制台用自己的 SSH 密钥登录系统地址执行，装机时会写入这把公钥；不是这里装的机器要自己把公钥放进 root 的 authorized_keys。
+        </Typography>
         <ProjectTaskRunner picked={picked} installed={installed} onPick={setPicked} files={files} tasks={tasks} />
-      </div>
-    </div>
+      </Stack>
+    </Stack>
   );
 }

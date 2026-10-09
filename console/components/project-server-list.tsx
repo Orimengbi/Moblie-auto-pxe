@@ -2,16 +2,29 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ColumnHead, type ColumnFilter, type SortState } from "@/components/column-head";
+import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
+import Divider from "@mui/material/Divider";
+import Stack from "@mui/material/Stack";
+import Typography from "@mui/material/Typography";
+import {
+  DataGrid,
+  gridFilteredTopLevelRowCountSelector,
+  useGridApiRef,
+  type GridColDef,
+  type GridFilterItem,
+  type GridFilterModel,
+  type GridRowSelectionModel,
+  type GridSortCellParams,
+  type GridSortModel,
+} from "@mui/x-data-grid";
+import { StatusChip } from "@/components/mui/status-chip";
 import { HOST_SOURCE, ProjectTaskRunner } from "@/components/project-task-runner";
 import { ServerEditDialog } from "@/components/server-edit-dialog";
-import { ResizeHandle, useColumnWidths } from "@/components/resizable-columns";
 import { ServerSidebar } from "@/components/server-sidebar";
 import { RemoteConsole } from "@/components/remote-console";
 import { ServerPowerDialog } from "@/components/server-power-dialog";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import type { Tone } from "@/lib/asset-labels";
 import type { InstallState, InventoryStatus, IpmiLink, IpSource, PowerState, RemoteFile, RemoteTask, ServerImportReport, ServerRow, ServerStage, TaskHostSource } from "@/lib/types";
 import { formatTime } from "@/lib/time";
 
@@ -48,6 +61,9 @@ const INSTALLED: Record<InstallState, string> = {
 };
 
 const AUTO_CHECK_MS = 30000;
+const MONO = "var(--font-geist-mono), monospace";
+/** 列宽所有批次共用一套，键名沿用以前自己画的表。 */
+const WIDTHS_KEY = "pxe-server-columns";
 
 export type ServerListRow = Omit<ServerRow, "originalPassword" | "targetPassword"> & { host: string; hostSource: TaskHostSource; inventory: InventoryStatus };
 
@@ -55,10 +71,18 @@ function stageLabel(row: ServerListRow): string {
   return row.installed === "yes" ? "已安装" : STAGE[row.stage];
 }
 
+function stageTone(row: ServerListRow): Tone {
+  return row.installed === "yes" ? "success" : row.stage === "error" ? "error" : row.stage === "installing" ? "primary" : "neutral";
+}
+
 function hardwareLabel(row: ServerListRow): string {
   if (!row.inventory.os && !row.inventory.bmc) return "未采集";
   if (row.inventory.issues === null) return "已采集";
   return row.inventory.issues ? "不符合基准" : "符合基准";
+}
+
+function hardwareTone(label: string): Tone {
+  return label === "不符合基准" ? "error" : label === "未采集" ? "neutral" : label === "符合基准" ? "success" : "primary";
 }
 
 function collectedLine(label: string, item: InventoryStatus["os"]): string {
@@ -75,32 +99,57 @@ function ipKey(ip: string | undefined): string {
 interface Column {
   key: string;
   label: string;
+  /** 没拖过列宽时的默认宽度。 */
+  width: number;
   /** 排序用的值；空值总排在最后。 */
   sortValue: (row: ServerListRow) => string;
-  /** 有就是勾选筛选（按显示的文字），没有就按 text 做关键字筛选。 */
+  /** 有就是选项筛选（按显示的文字），没有就按 text 做关键字筛选。 */
   pick?: (row: ServerListRow) => string;
   text?: (row: ServerListRow) => string;
 }
 
 const COLUMNS: Column[] = [
-  { key: "sn", label: "序列号", sortValue: (row) => row.sn, text: (row) => row.sn },
-  { key: "mac", label: "IPMI MAC", sortValue: (row) => row.ipmiMac || "", text: (row) => row.ipmiMac || "" },
-  { key: "stage", label: "状态", sortValue: stageLabel, pick: stageLabel },
-  { key: "ipmi", label: "IPMI", sortValue: (row) => ipKey(row.bmcIp), pick: (row) => LINK[row.ipmiLink] },
-  { key: "source", label: "地址", sortValue: (row) => SOURCE[row.ipSource], pick: (row) => SOURCE[row.ipSource] },
-  { key: "power", label: "开关机", sortValue: (row) => POWER[row.power], pick: (row) => POWER[row.power] },
-  { key: "installed", label: "系统", sortValue: (row) => INSTALLED[row.installed], pick: (row) => INSTALLED[row.installed] },
-  { key: "host", label: "系统地址", sortValue: (row) => ipKey(row.host), text: (row) => row.host || "" },
-  { key: "hardware", label: "硬件", sortValue: hardwareLabel, pick: hardwareLabel },
+  { key: "sn", label: "序列号", width: 150, sortValue: (row) => row.sn, text: (row) => row.sn },
+  { key: "mac", label: "IPMI MAC", width: 150, sortValue: (row) => row.ipmiMac || "", text: (row) => row.ipmiMac || "" },
+  { key: "stage", label: "状态", width: 220, sortValue: stageLabel, pick: stageLabel },
+  { key: "ipmi", label: "IPMI", width: 200, sortValue: (row) => ipKey(row.bmcIp), pick: (row) => LINK[row.ipmiLink] },
+  { key: "source", label: "地址", width: 80, sortValue: (row) => SOURCE[row.ipSource], pick: (row) => SOURCE[row.ipSource] },
+  { key: "power", label: "开关机", width: 80, sortValue: (row) => POWER[row.power], pick: (row) => POWER[row.power] },
+  { key: "installed", label: "系统", width: 90, sortValue: (row) => INSTALLED[row.installed], pick: (row) => INSTALLED[row.installed] },
+  { key: "host", label: "系统地址", width: 150, sortValue: (row) => ipKey(row.host), text: (row) => row.host || "" },
+  { key: "hardware", label: "硬件", width: 180, sortValue: hardwareLabel, pick: hardwareLabel },
 ];
 
-/** 列宽要算上勾选框和最后的操作列。 */
-const WIDTH_KEYS = ["select", ...COLUMNS.map((column) => column.key), "actions"];
+const EMPTY_FILTER: GridFilterModel = { items: [] };
 
-function matches(row: ServerListRow, column: Column, filter: ColumnFilter): boolean {
-  if (filter.kind === "pick") return !column.pick || filter.value.includes(column.pick(row));
-  const needle = filter.value.trim().toLowerCase();
-  return !needle || (column.text?.(row) || "").toLowerCase().includes(needle);
+/** 以前自己画的表头存的是 { sort, filters }，换成表格组件后照样认；免费版一次只能筛一列，只取第一个。 */
+function readView(saved: unknown): { sortModel: GridSortModel; filterModel: GridFilterModel } | null {
+  if (!saved || typeof saved !== "object") return null;
+  const view = saved as Record<string, unknown>;
+  if (Array.isArray(view.sortModel) || view.filterModel) {
+    const filterModel = view.filterModel as GridFilterModel | undefined;
+    return { sortModel: (view.sortModel as GridSortModel) || [], filterModel: filterModel && Array.isArray(filterModel.items) ? filterModel : EMPTY_FILTER };
+  }
+  const sort = view.sort as { key: string; dir: "asc" | "desc" } | null | undefined;
+  const filters = (view.filters || {}) as Record<string, { kind: "text"; value: string } | { kind: "pick"; value: string[] }>;
+  const items: GridFilterItem[] = Object.entries(filters)
+    .slice(0, 1)
+    .map(([field, filter], id) => (filter.kind === "pick" ? { id, field, operator: "isAnyOf", value: filter.value } : { id, field, operator: "contains", value: filter.value }));
+  return { sortModel: sort ? [{ field: sort.key, sort: sort.dir }] : [], filterModel: { items } };
+}
+
+/** 筛选面板打开时会先放一条空条件，没填值的不算在筛。 */
+function hasValue(item: GridFilterItem): boolean {
+  if (item.operator === "isEmpty" || item.operator === "isNotEmpty") return true;
+  return Array.isArray(item.value) ? item.value.length > 0 : item.value !== undefined && item.value !== null && item.value !== "";
+}
+
+function Caption({ children, mono, color = "text.secondary" }: { children: React.ReactNode; mono?: boolean; color?: string }) {
+  return (
+    <Typography variant="caption" component="div" sx={{ color, ...(mono ? { fontFamily: MONO } : {}) }}>
+      {children}
+    </Typography>
+  );
 }
 
 export function ProjectServerList({
@@ -127,66 +176,71 @@ export function ProjectServerList({
   bmcPort: string;
 }) {
   const router = useRouter();
+  const apiRef = useGridApiRef();
   const [picked, setPicked] = useState<string[]>([]);
   const [error, setError] = useState("");
   const installed = rows.filter((row) => row.installed === "yes").map((row) => row.id);
-  const [sort, setSort] = useState<SortState | null>(null);
-  const [filters, setFilters] = useState<Record<string, ColumnFilter>>({});
+  const [sortModel, setSortModel] = useState<GridSortModel>([]);
+  const [filterModel, setFilterModel] = useState<GridFilterModel>(EMPTY_FILTER);
+  const [widths, setWidths] = useState<Record<string, number> | null>(null);
+  const [shownCount, setShownCount] = useState(rows.length);
   const viewKey = `pxe-server-view:${projectId}`;
-  const shown = useMemo(() => {
-    const kept = rows.filter((row) => COLUMNS.every((column) => !filters[column.key] || matches(row, column, filters[column.key])));
-    const column = sort && COLUMNS.find((item) => item.key === sort.key);
-    if (!column || !sort) return kept;
-    return [...kept].sort((a, b) => {
-      const left = column.sortValue(a);
-      const right = column.sortValue(b);
-      if (!left || !right) return left ? -1 : right ? 1 : 0;
-      const order = left.localeCompare(right, "zh-CN", { numeric: true });
-      return sort.dir === "asc" ? order : -order;
-    });
-  }, [rows, filters, sort]);
-  const filtering = Object.keys(filters).length > 0;
-  const columnWidths = useColumnWidths("pxe-server-columns", WIDTH_KEYS);
-  const allPicked = shown.length > 0 && shown.every((row) => picked.includes(row.id));
+  const filtering = filterModel.items.some(hasValue);
+  // 筛选的可选值按当前列表算；放 ref 里，列表每 30 秒刷新时不用重建列。
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
 
   // 排序和筛选按项目记在这个浏览器里，刷新后还在。
   useEffect(() => {
     try {
-      const saved = JSON.parse(localStorage.getItem(viewKey) || "null");
+      const saved = readView(JSON.parse(localStorage.getItem(viewKey) || "null"));
       if (saved) {
-        setSort(saved.sort || null);
-        setFilters(saved.filters || {});
+        setSortModel(saved.sortModel);
+        setFilterModel(saved.filterModel);
       }
     } catch {
       // 读不到就用默认顺序。
     }
   }, [viewKey]);
 
-  function saveView(nextSort: SortState | null, nextFilters: Record<string, ColumnFilter>) {
-    setSort(nextSort);
-    setFilters(nextFilters);
+  useEffect(() => {
     try {
-      localStorage.setItem(viewKey, JSON.stringify({ sort: nextSort, filters: nextFilters }));
+      const saved = JSON.parse(localStorage.getItem(WIDTHS_KEY) || "null");
+      if (saved && typeof saved === "object") setWidths(saved);
+    } catch {
+      // 读不到就用默认列宽。
+    }
+  }, []);
+
+  function saveView(nextSort: GridSortModel, nextFilter: GridFilterModel) {
+    setSortModel(nextSort);
+    setFilterModel(nextFilter);
+    try {
+      localStorage.setItem(viewKey, JSON.stringify({ sortModel: nextSort, filterModel: nextFilter }));
     } catch {
       // 存不了也照样能筛，只是刷新后要重来。
     }
   }
 
-  function setFilter(key: string, next: ColumnFilter | undefined) {
-    const nextFilters = { ...filters };
-    if (next) nextFilters[key] = next;
-    else delete nextFilters[key];
-    saveView(sort, nextFilters);
+  function saveWidths(next: Record<string, number> | null) {
+    setWidths(next);
+    try {
+      if (next) localStorage.setItem(WIDTHS_KEY, JSON.stringify(next));
+      else localStorage.removeItem(WIDTHS_KEY);
+    } catch {
+      // 存不了也照样能拖，只是刷新后要重来。
+    }
   }
 
-  function optionsFor(column: Column): [string, number][] | undefined {
-    if (!column.pick) return undefined;
-    const counts = new Map<string, number>();
-    for (const row of rows) counts.set(column.pick(row), (counts.get(column.pick(row)) || 0) + 1);
-    const current = filters[column.key];
-    if (current?.kind === "pick") for (const value of current.value) if (!counts.has(value)) counts.set(value, 0);
-    return [...counts.entries()];
-  }
+  // “筛选后显示几台”跟着表格实际筛出来的行数走。
+  useEffect(() => {
+    const api = apiRef.current;
+    if (!api) return;
+    const update = () => setShownCount(gridFilteredTopLevelRowCountSelector(apiRef));
+    update();
+    return api.subscribeEvent("filteredRowsSet", update);
+  }, [apiRef, rows.length]);
+
   const [checking, setChecking] = useState(false);
   const [checkedAt, setCheckedAt] = useState<Date | null>(null);
   const [checkError, setCheckError] = useState("");
@@ -246,10 +300,6 @@ export function ProjectServerList({
     return () => clearInterval(timer);
   }, [enabled, check]);
 
-  function toggle(id: string) {
-    setPicked((list) => (list.includes(id) ? list.filter((item) => item !== id) : [...list, id]));
-  }
-
   async function reinstall(row: ServerListRow) {
     const prompt = liveOsNames.includes(row.osName)
       ? `重新启动 ${row.sn} 进内存系统？会让它从网卡启动，按「${row.osName}」在内存里运行，不碰硬盘。`
@@ -266,185 +316,259 @@ export function ProjectServerList({
     await check(false);
   }
 
+  // 操作列的按钮要拿到最新的回调；放进 ref，列定义只在列宽变化时重建。
+  const actions = useRef({ reinstall, remove });
+  actions.current = { reinstall, remove };
+
+  const columns = useMemo<GridColDef<ServerListRow>[]>(() => {
+    const widthOf = (key: string, fallback: number) => widths?.[key] ?? fallback;
+    const cell = (key: string): Partial<GridColDef<ServerListRow>> => {
+      switch (key) {
+        case "sn":
+          return { renderCell: ({ row }) => <Caption mono color="text.primary">{row.sn}</Caption> };
+        case "mac":
+          return { renderCell: ({ row }) => <Caption mono color="text.primary">{row.ipmiMac || "—"}</Caption> };
+        case "stage":
+          return {
+            renderCell: ({ row }) => (
+              <Box sx={{ minWidth: 0 }}>
+                <StatusChip tone={stageTone(row)} label={stageLabel(row)} />
+                {row.detail ? <Caption>{row.detail}</Caption> : null}
+                {row.osName ? <Caption>安装系统 {row.osName}</Caption> : null}
+              </Box>
+            ),
+          };
+        case "ipmi":
+          return {
+            renderCell: ({ row }) => (
+              <Box sx={{ minWidth: 0 }}>
+                {row.ipmiLink === "down" ? (
+                  <Typography variant="body2" sx={{ color: "error.main" }}>
+                    不通
+                  </Typography>
+                ) : row.ipmiLink === "denied" ? (
+                  <>
+                    <Caption mono color="text.primary">
+                      {row.bmcIp || "—"}
+                    </Caption>
+                    <Caption color="error.main">密码不对</Caption>
+                  </>
+                ) : row.ipmiLink === "up" ? (
+                  <Caption mono color="text.primary">
+                    {row.bmcIp || "通"}
+                  </Caption>
+                ) : row.bmcIp ? (
+                  <Caption mono>{row.bmcIp}</Caption>
+                ) : (
+                  <Typography variant="body2" sx={{ color: "text.secondary" }}>
+                    未探测
+                  </Typography>
+                )}
+                {row.ipmiAddress ? (
+                  <Caption>
+                    规划 {row.ipmiAddress} / {row.ipmiNetmask}
+                  </Caption>
+                ) : null}
+                {row.ipmiGateway ? (
+                  <Caption>
+                    路由 {row.ipmiGateway}
+                    {row.ipmiVlan ? ` · VLAN ${row.ipmiVlan}` : ""}
+                  </Caption>
+                ) : null}
+              </Box>
+            ),
+          };
+        case "host":
+          return {
+            renderCell: ({ row }) => (
+              <Box sx={{ minWidth: 0 }}>
+                <Caption mono color="text.primary">
+                  {row.host || "—"}
+                </Caption>
+                {row.hostSource ? <Caption>{HOST_SOURCE[row.hostSource]}</Caption> : null}
+              </Box>
+            ),
+          };
+        case "hardware":
+          return {
+            renderCell: ({ row }) => {
+              const label = hardwareLabel(row);
+              return (
+                <Box sx={{ minWidth: 0 }}>
+                  <StatusChip tone={hardwareTone(label)} label={`${label}${row.inventory.issues ? ` ${row.inventory.issues} 项` : ""}`} />
+                  {[collectedLine("系统内", row.inventory.os), collectedLine("BMC", row.inventory.bmc)]
+                    .filter(Boolean)
+                    .map((line) => (
+                      <Caption key={line}>{line}</Caption>
+                    ))}
+                </Box>
+              );
+            },
+          };
+        default:
+          return {};
+      }
+    };
+    const list: GridColDef<ServerListRow>[] = COLUMNS.map((column) => {
+      // 按 sortValue 排（IP 按数字），不按显示的文字；空值不管升序降序都排在最后。
+      const compare = (dir: "asc" | "desc") => (_a: unknown, _b: unknown, p1: GridSortCellParams, p2: GridSortCellParams) => {
+        const left = column.sortValue(p1.api.getRow(p1.id));
+        const right = column.sortValue(p2.api.getRow(p2.id));
+        if (!left || !right) return left ? -1 : right ? 1 : 0;
+        const order = left.localeCompare(right, "zh-CN", { numeric: true });
+        return dir === "asc" ? order : -order;
+      };
+      const pick = column.pick;
+      return {
+        field: column.key,
+        headerName: column.label,
+        width: widthOf(column.key, column.width),
+        minWidth: 40,
+        ...(pick
+          ? {
+              type: "singleSelect" as const,
+              valueOptions: () => [...new Set(rowsRef.current.map(pick))],
+              valueGetter: (_value: unknown, row: ServerListRow) => pick(row),
+            }
+          : { valueGetter: (_value: unknown, row: ServerListRow) => column.text?.(row) || "" }),
+        getSortComparator: (dir) => (dir ? compare(dir) : undefined),
+        ...cell(column.key),
+      };
+    });
+    list.push({
+      field: "actions",
+      headerName: "",
+      width: widthOf("actions", 300),
+      minWidth: 40,
+      sortable: false,
+      filterable: false,
+      disableColumnMenu: true,
+      align: "right",
+      renderCell: ({ row }) => (
+        <Stack direction="row" sx={{ flexWrap: "wrap", justifyContent: "flex-end" }}>
+          <Button disabled={!row.bmcIp} onClick={() => setConsoleRow(row)}>
+            远程控制台
+          </Button>
+          <Button disabled={!row.bmcIp} onClick={() => setPowerTargets([row])}>
+            电源
+          </Button>
+          <Button onClick={() => setEditing(row)}>编辑</Button>
+          {row.installed === "yes" ? <Button onClick={() => void actions.current.reinstall(row)}>重装</Button> : null}
+          <Button color="error" onClick={() => void actions.current.remove(row)}>
+            删除
+          </Button>
+        </Stack>
+      ),
+    });
+    return list;
+  }, [widths]);
+
+  const selection = useMemo<GridRowSelectionModel>(() => ({ type: "include", ids: new Set(picked) }), [picked]);
+
   return (
-    <div className="grid gap-6">
-      <div className="grid gap-3">
-        <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-          <span>
-            已列入 {rows.length} 台，已安装 {installed.length} 台。{filtering ? `筛选后显示 ${shown.length} 台。` : ""}
-          </span>
+    <Stack spacing={3}>
+      <Stack spacing={1.5}>
+        <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: "wrap", alignItems: "center" }}>
+          <Typography variant="body2" sx={{ color: "text.secondary" }}>
+            已列入 {rows.length} 台，已安装 {installed.length} 台。{filtering ? `筛选后显示 ${shownCount} 台。` : ""}
+          </Typography>
           {filtering ? (
-            <Button type="button" size="xs" variant="outline" onClick={() => saveView(sort, {})}>
+            <Button variant="outlined" onClick={() => saveView(sortModel, EMPTY_FILTER)}>
               清除筛选
             </Button>
           ) : null}
-          <Button type="button" size="xs" variant="outline" onClick={() => setAdding(true)}>
+          <Button variant="outlined" onClick={() => setAdding(true)}>
             新增一台
           </Button>
-          <Button type="button" size="xs" variant="outline" disabled={checking || rows.length === 0} onClick={() => void check(true)}>
+          <Button variant="outlined" disabled={checking || rows.length === 0} onClick={() => void check(true)}>
             {checking ? "检查中" : "立即检查"}
           </Button>
-          <span className="text-xs">
+          <Typography variant="caption" sx={{ color: "text.secondary" }}>
             {enabled ? "批次开着，每 30 秒自动检查一次，密码不对的机器不自动重试。" : "批次关着，不自动检查；立即检查只读取状态，不改 BMC。"}
             {checkedAt ? ` 上次检查 ${formatTime(checkedAt, "time")}` : ""}
-          </span>
+          </Typography>
           {rows.length ? (
             <>
-              <Button type="button" size="xs" variant="outline" onClick={() => setPicked(installed)}>
+              <Button variant="outlined" onClick={() => setPicked(installed)}>
                 选中已安装的
               </Button>
               {picked.length ? (
-                <Button type="button" size="xs" variant="outline" onClick={() => setPowerTargets(rows.filter((row) => picked.includes(row.id)))}>
+                <Button variant="outlined" onClick={() => setPowerTargets(rows.filter((row) => picked.includes(row.id)))}>
                   电源和引导（{picked.length}）
                 </Button>
               ) : null}
-              {picked.length ? (
-                <Button type="button" size="xs" variant="ghost" onClick={() => setPicked([])}>
-                  取消选择（{picked.length}）
-                </Button>
-              ) : null}
+              {picked.length ? <Button onClick={() => setPicked([])}>取消选择（{picked.length}）</Button> : null}
+              {/* 以前双击表头分隔线恢复默认列宽，表格组件里双击是按内容自动调宽，恢复放到这里。 */}
+              {widths ? <Button onClick={() => saveWidths(null)}>恢复默认列宽</Button> : null}
             </>
           ) : null}
-        </div>
+        </Stack>
         {report ? (
-          <p className="text-sm text-muted-foreground">
+          <Typography variant="body2" sx={{ color: "text.secondary" }}>
             最近一次上传处理 {report.rows} 行，列入 {report.servers} 台。
             {report.errors.length ? `有 ${report.errors.length} 行需要改表：${report.errors.map((item) => `第 ${item.row} 行 ${item.message}`).join("；")}` : ""}
-          </p>
+          </Typography>
         ) : null}
-        {error ? <p className="text-sm text-destructive">{error}</p> : null}
-        {checkError ? <p className="text-sm text-destructive">{checkError}</p> : null}
+        {error ? (
+          <Typography variant="body2" sx={{ color: "error.main" }}>
+            {error}
+          </Typography>
+        ) : null}
+        {checkError ? (
+          <Typography variant="body2" sx={{ color: "error.main" }}>
+            {checkError}
+          </Typography>
+        ) : null}
         {rows.length === 0 ? (
-          <p className="text-sm text-muted-foreground">上传后每一行会出现在下面。表头要能认出序列号和 IPMI MAC，原用户和原密码可以分成两列，也可以写成「用户/密码」。</p>
+          <Typography variant="body2" sx={{ color: "text.secondary" }}>
+            上传后每一行会出现在下面。表头要能认出序列号和 IPMI MAC，原用户和原密码可以分成两列，也可以写成「用户/密码」。
+          </Typography>
         ) : (
-          <div className="overflow-x-auto">
-            <Table className={columnWidths.tableClassName} style={columnWidths.tableStyle}>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-8" data-col="select" style={columnWidths.headStyle("select")}>
-                    <input
-                      type="checkbox"
-                      aria-label="全选当前显示的"
-                      checked={allPicked}
-                      onChange={() => {
-                        const ids = shown.map((row) => row.id);
-                        setPicked((list) => (allPicked ? list.filter((id) => !ids.includes(id)) : [...new Set([...list, ...ids])]));
-                      }}
-                    />
-                  </TableHead>
-                  {COLUMNS.map((column) => (
-                    <TableHead key={column.key} data-col={column.key} className="relative" style={columnWidths.headStyle(column.key)}>
-                      <ColumnHead
-                        label={column.label}
-                        columnKey={column.key}
-                        sort={sort}
-                        onSort={(next) => saveView(next, filters)}
-                        filter={filters[column.key]}
-                        onFilter={(next) => setFilter(column.key, next)}
-                        options={optionsFor(column)}
-                      />
-                      <ResizeHandle onStart={(event) => columnWidths.startResize(column.key, event)} onReset={columnWidths.reset} />
-                    </TableHead>
-                  ))}
-                  <TableHead data-col="actions" className="relative" style={columnWidths.headStyle("actions")}>
-                    <ResizeHandle onStart={(event) => columnWidths.startResize("actions", event)} onReset={columnWidths.reset} />
-                  </TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {shown.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={COLUMNS.length + 2} className="py-6 text-center text-sm text-muted-foreground">
-                      没有符合筛选条件的机器。
-                    </TableCell>
-                  </TableRow>
-                ) : null}
-                {shown.map((row) => (
-                  <TableRow
-                    key={row.id}
-                    data-server-row
-                    data-state={picked.includes(row.id) ? "selected" : undefined}
-                    className={`cursor-pointer ${sideId === row.id ? "bg-muted" : ""}`}
-                    onClick={(event) => {
-                      // 勾选框和按钮照常用，点行里别的地方打开侧边栏。
-                      if ((event.target as HTMLElement).closest("button, input, a, select, label")) return;
-                      setSideId(row.id);
-                    }}
-                  >
-                    <TableCell>
-                      <input type="checkbox" aria-label={`选择 ${row.sn}`} checked={picked.includes(row.id)} onChange={() => toggle(row.id)} />
-                    </TableCell>
-                    <TableCell className="font-mono text-xs">{row.sn}</TableCell>
-                    <TableCell className="font-mono text-xs">{row.ipmiMac || "—"}</TableCell>
-                    <TableCell>
-                      <Badge variant={row.installed === "yes" ? "default" : row.stage === "error" ? "destructive" : "outline"}>
-                        {row.installed === "yes" ? "已安装" : STAGE[row.stage]}
-                      </Badge>
-                      <span className="mt-1 block max-w-56 text-xs text-muted-foreground">{row.detail}</span>
-                      {row.osName ? <span className="mt-1 block text-xs text-muted-foreground">安装系统 {row.osName}</span> : null}
-                    </TableCell>
-                    <TableCell>
-                      {row.ipmiLink === "down" ? (
-                        <span className="text-destructive">不通</span>
-                      ) : row.ipmiLink === "denied" ? (
-                        <>
-                          <span className="font-mono text-xs">{row.bmcIp || "—"}</span>
-                          <span className="block text-xs text-destructive">密码不对</span>
-                        </>
-                      ) : row.ipmiLink === "up" ? (
-                        <span className="font-mono text-xs">{row.bmcIp || "通"}</span>
-                      ) : (
-                        <span className="text-muted-foreground">{row.bmcIp ? <span className="font-mono text-xs">{row.bmcIp}</span> : "未探测"}</span>
-                      )}
-                      {row.ipmiAddress ? <span className="mt-1 block text-xs text-muted-foreground">规划 {row.ipmiAddress} / {row.ipmiNetmask}</span> : null}
-                      {row.ipmiGateway ? <span className="block text-xs text-muted-foreground">路由 {row.ipmiGateway}{row.ipmiVlan ? ` · VLAN ${row.ipmiVlan}` : ""}</span> : null}
-                    </TableCell>
-                    <TableCell>{SOURCE[row.ipSource]}</TableCell>
-                    <TableCell>{POWER[row.power]}</TableCell>
-                    <TableCell>{INSTALLED[row.installed]}</TableCell>
-                    <TableCell className="font-mono text-xs">
-                      {row.host || "—"}
-                      {row.hostSource ? <span className="mt-1 block font-sans text-muted-foreground">{HOST_SOURCE[row.hostSource]}</span> : null}
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={hardwareLabel(row) === "不符合基准" ? "destructive" : hardwareLabel(row) === "未采集" ? "outline" : "default"}>
-                        {hardwareLabel(row)}
-                        {row.inventory.issues ? ` ${row.inventory.issues} 项` : ""}
-                      </Badge>
-                      {[collectedLine("系统内", row.inventory.os), collectedLine("BMC", row.inventory.bmc)]
-                        .filter(Boolean)
-                        .map((line) => (
-                          <span key={line} className="mt-1 block text-xs text-muted-foreground">
-                            {line}
-                          </span>
-                        ))}
-                    </TableCell>
-                    <TableCell className="text-right whitespace-nowrap">
-                      <Button type="button" size="xs" variant="ghost" disabled={!row.bmcIp} onClick={() => setConsoleRow(row)}>
-                        远程控制台
-                      </Button>
-                      <Button type="button" size="xs" variant="ghost" disabled={!row.bmcIp} onClick={() => setPowerTargets([row])}>
-                        电源
-                      </Button>
-                      <Button type="button" size="xs" variant="ghost" onClick={() => setEditing(row)}>
-                        编辑
-                      </Button>
-                      {row.installed === "yes" ? (
-                        <Button type="button" size="xs" variant="ghost" onClick={() => reinstall(row)}>
-                          重装
-                        </Button>
-                      ) : null}
-                      <Button type="button" size="xs" variant="ghost" onClick={() => remove(row)}>
-                        删除
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+          <Box sx={{ width: "100%", minWidth: 0 }}>
+            <DataGrid
+              apiRef={apiRef}
+              rows={rows}
+              columns={columns}
+              autoHeight
+              getRowHeight={() => "auto"}
+              checkboxSelection
+              disableRowSelectionOnClick
+              // 全选只选当前筛出来的机器，选中的始终是明确的 id 列表。
+              disableRowSelectionExcludeModel
+              keepNonExistentRowsSelected
+              rowSelectionModel={selection}
+              onRowSelectionModelChange={(model) => setPicked([...model.ids].map(String))}
+              sortModel={sortModel}
+              onSortModelChange={(model) => saveView(model, filterModel)}
+              filterModel={filterModel}
+              onFilterModelChange={(model) => saveView(sortModel, model)}
+              onColumnWidthChange={(params) => {
+                // 拖一列时把其他列现在的宽度一起记下来，刷新后整张表按这些宽度排。
+                const next: Record<string, number> = {};
+                for (const column of apiRef.current?.getAllColumns() || []) {
+                  if (column.field !== "__check__") next[column.field] = Math.round(column.computedWidth || column.width || 0);
+                }
+                next[params.colDef.field] = Math.round(params.width);
+                saveWidths(next);
+              }}
+              onCellClick={(params, event) => {
+                // 勾选框和按钮照常用，点行里别的地方打开侧边栏。
+                if (params.field === "__check__" || params.field === "actions") return;
+                if ((event.target as HTMLElement).closest("button, input, a, select, label")) return;
+                setSideId(String(params.id));
+              }}
+              initialState={{ pagination: { paginationModel: { pageSize: 100 } } }}
+              pageSizeOptions={[25, 50, 100]}
+              localeText={{ noResultsOverlayLabel: "没有符合筛选条件的机器。" }}
+              sx={{
+                "& .MuiDataGrid-row": { cursor: "pointer" },
+                "& .MuiDataGrid-cell": { py: 0.75, whiteSpace: "normal", wordBreak: "break-word" },
+                ...(sideId ? { [`& .MuiDataGrid-row[data-id=${JSON.stringify(sideId)}]`]: { bgcolor: "action.selected" } } : {}),
+              }}
+            />
+          </Box>
         )}
-      </div>
+      </Stack>
       <ServerEditDialog
         projectId={projectId}
         row={editing}
@@ -472,8 +596,9 @@ export function ProjectServerList({
         onClose={() => setSideId(null)}
         onChanged={() => router.refresh()}
       />
-      <div className="grid gap-3 border-t pt-4">
-        <h3 className="font-medium">批量任务</h3>
+      <Divider />
+      <Stack spacing={1.5}>
+        <Typography variant="h3">批量任务</Typography>
         <ProjectTaskRunner
           projectId={projectId}
           toAssets={assetOf}
@@ -483,7 +608,7 @@ export function ProjectServerList({
           files={files}
           tasks={tasks}
         />
-      </div>
-    </div>
+      </Stack>
+    </Stack>
   );
 }

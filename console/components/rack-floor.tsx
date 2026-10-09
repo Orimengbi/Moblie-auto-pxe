@@ -1,9 +1,15 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { NativeSelect } from "@/components/ui/native-select";
+import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
+import Paper from "@mui/material/Paper";
+import Stack from "@mui/material/Stack";
+import TextField from "@mui/material/TextField";
+import ToggleButton from "@mui/material/ToggleButton";
+import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
+import Typography from "@mui/material/Typography";
+import type { Theme } from "@mui/material/styles";
 import { FLOOR_ITEM_KINDS } from "@/lib/asset-labels";
 import type { AssetRow } from "@/lib/asset-view";
 import { api } from "@/lib/client-api";
@@ -12,9 +18,16 @@ import type { AlertSeverity, FloorItem, FloorItemKind, Rack, RackFacing } from "
 
 const CELL_W = 64;
 const CELL_H = 44;
+const MONO = "var(--font-geist-mono), monospace";
+const NATIVE = { select: { native: true } } as const;
 
 /** 斜纹：不可用的机柜和障碍物。 */
-const HATCH = "repeating-linear-gradient(45deg, color-mix(in oklab, var(--foreground) 14%, transparent) 0 5px, transparent 5px 10px)";
+function hatch(theme: Theme) {
+  return {
+    backgroundColor: (theme.vars || theme).palette.action.hover,
+    backgroundImage: `repeating-linear-gradient(45deg, ${theme.alpha((theme.vars || theme).palette.text.primary, 0.14)} 0 5px, transparent 5px 10px)`,
+  };
+}
 
 type Mode = "usage" | "alerts";
 type Obstacle = Omit<FloorItem, "siteId">;
@@ -28,16 +41,21 @@ interface RackInfo {
 }
 
 /** 利用率配色：越满越深。没设备是浅灰。 */
-function usageStyle(info: RackInfo): React.CSSProperties {
-  if (!info.devices) return { background: "var(--muted)" };
+function usageStyle(theme: Theme, info: RackInfo) {
+  const palette = (theme.vars || theme).palette;
+  if (!info.devices) return { backgroundColor: palette.action.hover };
   const ratio = Math.min(1, info.used / info.rack.heightU);
-  return { background: `color-mix(in oklab, var(--primary) ${Math.round(20 + ratio * 70)}%, var(--background))`, color: ratio > 0.5 ? "var(--primary-foreground)" : undefined };
+  return {
+    backgroundColor: `color-mix(in oklab, ${palette.primary.main} ${Math.round(20 + ratio * 70)}%, ${palette.background.paper})`,
+    ...(ratio > 0.5 ? { color: palette.primary.contrastText } : {}),
+  };
 }
 
-function alertStyle(info: RackInfo): React.CSSProperties {
-  if (info.alert === "critical") return { background: "var(--destructive)", color: "white" };
-  if (info.alert === "warning") return { background: "color-mix(in oklab, orange 70%, var(--background))" };
-  return { background: info.devices ? "color-mix(in oklab, var(--primary) 25%, var(--background))" : "var(--muted)" };
+function alertStyle(theme: Theme, info: RackInfo) {
+  const palette = (theme.vars || theme).palette;
+  if (info.alert === "critical") return { backgroundColor: palette.error.main, color: palette.error.contrastText };
+  if (info.alert === "warning") return { backgroundColor: `color-mix(in oklab, ${palette.warning.main} 70%, ${palette.background.paper})` };
+  return { backgroundColor: info.devices ? `color-mix(in oklab, ${palette.primary.main} 25%, ${palette.background.paper})` : palette.action.hover };
 }
 
 function withoutSite(items: FloorItem[]): Obstacle[] {
@@ -189,37 +207,37 @@ export function RackFloor({
   const changed = Object.keys(draft).length > 0 || (items !== null && JSON.stringify(items) !== JSON.stringify(savedItems));
 
   return (
-    <div className="grid gap-3">
-      <div className="flex flex-wrap items-center gap-2 text-sm">
-        <Button type="button" size="xs" variant={mode === "usage" ? "default" : "outline"} onClick={() => setMode("usage")}>
-          按利用率
-        </Button>
-        <Button type="button" size="xs" variant={mode === "alerts" ? "default" : "outline"} onClick={() => setMode("alerts")}>
-          按告警
-        </Button>
-        <span className="text-xs text-muted-foreground">
+    <Stack spacing={1.5}>
+      <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center" }}>
+        <ToggleButtonGroup exclusive value={mode} onChange={(_, next: Mode | null) => next && setMode(next)} aria-label="上色方式">
+          <ToggleButton value="usage" sx={{ px: 1.5 }}>
+            按利用率
+          </ToggleButton>
+          <ToggleButton value="alerts" sx={{ px: 1.5 }}>
+            按告警
+          </ToggleButton>
+        </ToggleButtonGroup>
+        <Typography variant="caption" sx={{ color: "text.secondary" }}>
           {mode === "usage" ? "颜色越深 U 位用得越多，灰色是空柜。" : "红色有严重告警，黄色有警告。"}斜纹是不可用的机柜和柱子等障碍物。
           {editing ? "" : " 点机柜看正视图。"}
-        </span>
-        <span className="ml-auto flex flex-wrap gap-2">
+        </Typography>
+        <Stack direction="row" useFlexGap spacing={1} sx={{ ml: "auto", flexWrap: "wrap" }}>
           {editing ? (
             <>
               <Button
                 type="button"
-                size="xs"
-                variant="ghost"
                 onClick={() => {
                   if (window.confirm("把机柜都放回按列/排自动排布？柱子等障碍物留着。")) void save(racks.map((rack) => ({ id: rack.id, x: null, y: null, facing: "" })), currentItems);
                 }}
               >
                 恢复自动排布
               </Button>
-              <Button type="button" size="xs" variant="ghost" onClick={stopEdit}>
+              <Button type="button" onClick={stopEdit}>
                 取消
               </Button>
               <Button
                 type="button"
-                size="xs"
+                variant="contained"
                 disabled={saving}
                 // 保存时把所有机柜的当前位置都写下，自动排布的也固定住，之后新加的机柜不会把它们挤乱。
                 onClick={() => void save(cells.map((cell) => ({ id: cell.rack.id, x: cell.x, y: cell.y, facing: cell.facing })), currentItems)}
@@ -228,98 +246,124 @@ export function RackFloor({
               </Button>
             </>
           ) : (
-            <Button type="button" size="xs" variant="outline" onClick={startEdit}>
+            <Button type="button" variant="outlined" onClick={startEdit}>
               编辑布局
             </Button>
           )}
-        </span>
-      </div>
+        </Stack>
+      </Stack>
 
       {editing ? (
-        <div className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/40 p-2 text-sm">
-          <span className="text-xs text-muted-foreground">放障碍物：</span>
-          <NativeSelect
-            value={tool}
-            onChange={(event) => {
-              setTool(event.target.value as FloorItemKind | "");
-              setPicked(null);
-            }}
-          >
-            <option value="">不放（挪动模式）</option>
-            {Object.entries(FLOOR_ITEM_KINDS).map(([value, label]) => (
-              <option key={value} value={value}>
-                点空格放「{label}」
-              </option>
-            ))}
-          </NativeSelect>
-          {pickedRack ? (
-            <>
-              <span className="font-mono text-xs">机柜 {pickedRack.name}</span>
-              <Button type="button" size="xs" variant="outline" onClick={() => turn(pickedRack)}>
-                朝向：{{ "": "不设", up: "朝上", down: "朝下" }[position(pickedRack).facing]}
-              </Button>
-              <span className="text-xs text-muted-foreground">点空格把它挪过去</span>
-            </>
-          ) : null}
-          {pickedItem ? (
-            <>
-              <NativeSelect value={pickedItem.kind} onChange={(event) => updateItem(pickedItem.id, { kind: event.target.value as FloorItemKind })}>
-                {Object.entries(FLOOR_ITEM_KINDS).map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
-              </NativeSelect>
-              <Input className="h-8 w-28" value={pickedItem.label} placeholder="名字，可空" maxLength={20} onChange={(event) => updateItem(pickedItem.id, { label: event.target.value })} />
-              <span className="flex items-center text-xs">
-                宽 {pickedItem.w}
-                <Button type="button" size="xs" variant="ghost" onClick={() => resize(pickedItem, -1, 0)}>
-                  −
+        <Paper variant="outlined" sx={{ p: 1, bgcolor: "action.hover" }}>
+          <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center" }}>
+            <Typography variant="caption" sx={{ color: "text.secondary" }}>
+              放障碍物：
+            </Typography>
+            <TextField
+              select
+              slotProps={NATIVE}
+              value={tool}
+              onChange={(event) => {
+                setTool(event.target.value as FloorItemKind | "");
+                setPicked(null);
+              }}
+              sx={{ bgcolor: "background.paper" }}
+            >
+              <option value="">不放（挪动模式）</option>
+              {Object.entries(FLOOR_ITEM_KINDS).map(([value, label]) => (
+                <option key={value} value={value}>
+                  点空格放「{label}」
+                </option>
+              ))}
+            </TextField>
+            {pickedRack ? (
+              <>
+                <Typography variant="caption" sx={{ fontFamily: MONO }}>
+                  机柜 {pickedRack.name}
+                </Typography>
+                <Button type="button" variant="outlined" onClick={() => turn(pickedRack)}>
+                  朝向：{{ "": "不设", up: "朝上", down: "朝下" }[position(pickedRack).facing]}
                 </Button>
-                <Button type="button" size="xs" variant="ghost" onClick={() => resize(pickedItem, 1, 0)}>
-                  ＋
+                <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                  点空格把它挪过去
+                </Typography>
+              </>
+            ) : null}
+            {pickedItem ? (
+              <>
+                <TextField select slotProps={NATIVE} value={pickedItem.kind} onChange={(event) => updateItem(pickedItem.id, { kind: event.target.value as FloorItemKind })} sx={{ bgcolor: "background.paper" }}>
+                  {Object.entries(FLOOR_ITEM_KINDS).map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </TextField>
+                <TextField
+                  value={pickedItem.label}
+                  placeholder="名字，可空"
+                  slotProps={{ htmlInput: { maxLength: 20 } }}
+                  onChange={(event) => updateItem(pickedItem.id, { label: event.target.value })}
+                  sx={{ width: 112, bgcolor: "background.paper" }}
+                />
+                <Stack direction="row" sx={{ alignItems: "center" }}>
+                  <Typography variant="caption">宽 {pickedItem.w}</Typography>
+                  <Button type="button" aria-label="变窄" sx={{ minWidth: 28 }} onClick={() => resize(pickedItem, -1, 0)}>
+                    −
+                  </Button>
+                  <Button type="button" aria-label="变宽" sx={{ minWidth: 28 }} onClick={() => resize(pickedItem, 1, 0)}>
+                    ＋
+                  </Button>
+                  <Typography variant="caption">高 {pickedItem.h}</Typography>
+                  <Button type="button" aria-label="变矮" sx={{ minWidth: 28 }} onClick={() => resize(pickedItem, 0, -1)}>
+                    −
+                  </Button>
+                  <Button type="button" aria-label="变高" sx={{ minWidth: 28 }} onClick={() => resize(pickedItem, 0, 1)}>
+                    ＋
+                  </Button>
+                </Stack>
+                <Button
+                  type="button"
+                  color="error"
+                  onClick={() => {
+                    setItems((list) => (list || []).filter((item) => item.id !== pickedItem.id));
+                    setPicked(null);
+                  }}
+                >
+                  删除
                 </Button>
-                高 {pickedItem.h}
-                <Button type="button" size="xs" variant="ghost" onClick={() => resize(pickedItem, 0, -1)}>
-                  −
-                </Button>
-                <Button type="button" size="xs" variant="ghost" onClick={() => resize(pickedItem, 0, 1)}>
-                  ＋
-                </Button>
-              </span>
-              <Button
-                type="button"
-                size="xs"
-                variant="ghost"
-                onClick={() => {
-                  setItems((list) => (list || []).filter((item) => item.id !== pickedItem.id));
-                  setPicked(null);
-                }}
-              >
-                删除
-              </Button>
-              <span className="text-xs text-muted-foreground">点空格把它挪过去</span>
-            </>
-          ) : null}
-          {!picked && !tool ? <span className="text-xs text-muted-foreground">点机柜或障碍物选中，再点空格挪过去；机柜也可以直接拖。</span> : null}
-        </div>
+                <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                  点空格把它挪过去
+                </Typography>
+              </>
+            ) : null}
+            {!picked && !tool ? (
+              <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                点机柜或障碍物选中，再点空格挪过去；机柜也可以直接拖。
+              </Typography>
+            ) : null}
+          </Stack>
+        </Paper>
       ) : null}
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      {error ? (
+        <Typography variant="body2" color="error">
+          {error}
+        </Typography>
+      ) : null}
 
-      <div className="overflow-auto rounded-md border bg-card p-2">
-        <div className="relative" style={{ width: width * CELL_W, height: height * CELL_H }}>
+      <Paper variant="outlined" sx={{ overflow: "auto", p: 1 }}>
+        <Box sx={{ position: "relative", width: width * CELL_W, height: height * CELL_H }}>
           {editing
             ? Array.from({ length: width * height }, (_, index) => {
                 const x = index % width;
                 const y = Math.floor(index / width);
                 if (occupied(x, y)) return null;
+                const armed = Boolean(picked || tool);
                 return (
-                  <button
+                  <Box
                     key={`${x}-${y}`}
+                    component="button"
                     type="button"
                     aria-label={`空格 ${x + 1},${y + 1}`}
-                    className={`absolute rounded-sm border border-dashed ${picked || tool ? "border-primary/40 hover:bg-primary/10" : "border-border/50"}`}
-                    style={{ left: x * CELL_W + 2, top: y * CELL_H + 2, width: CELL_W - 4, height: CELL_H - 4 }}
                     onClick={() => clickEmpty(x, y)}
                     onDragOver={(event) => event.preventDefault()}
                     onDrop={(event) => {
@@ -328,6 +372,23 @@ export function RackFloor({
                       if (id) moveRack(id, x, y);
                       setPicked(null);
                     }}
+                    sx={(theme) => {
+                      const palette = (theme.vars || theme).palette;
+                      return {
+                        position: "absolute",
+                        left: x * CELL_W + 2,
+                        top: y * CELL_H + 2,
+                        width: CELL_W - 4,
+                        height: CELL_H - 4,
+                        p: 0,
+                        borderRadius: 0.5,
+                        border: "1px dashed",
+                        borderColor: armed ? theme.alpha(palette.primary.main, 0.4) : palette.divider,
+                        bgcolor: "transparent",
+                        cursor: "pointer",
+                        ...(armed ? { "&:hover": { bgcolor: theme.alpha(palette.primary.main, 0.1) } } : {}),
+                      };
+                    }}
                   />
                 );
               })
@@ -335,8 +396,9 @@ export function RackFloor({
           {currentItems.map((item) => {
             const isPicked = picked?.type === "item" && picked.id === item.id;
             return (
-              <button
+              <Box
                 key={item.id}
+                component="button"
                 type="button"
                 disabled={!editing}
                 title={`${FLOOR_ITEM_KINDS[item.kind]}${item.label ? `：${item.label}` : ""}`}
@@ -344,23 +406,34 @@ export function RackFloor({
                   setTool("");
                   setPicked(isPicked ? null : { type: "item", id: item.id });
                 }}
-                className={`absolute flex items-center justify-center rounded-sm border border-border text-[11px] text-muted-foreground disabled:cursor-default ${isPicked ? "ring-2 ring-ring" : ""}`}
-                style={{
+                sx={(theme) => ({
+                  ...hatch(theme),
+                  position: "absolute",
                   left: item.x * CELL_W + 2,
                   top: item.y * CELL_H + 2,
                   width: item.w * CELL_W - 4,
                   height: item.h * CELL_H - 4,
-                  backgroundImage: HATCH,
-                  backgroundColor: "var(--muted)",
-                }}
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  p: 0,
+                  borderRadius: 0.5,
+                  border: 1,
+                  borderColor: "divider",
+                  font: "inherit",
+                  fontSize: 11,
+                  color: "text.secondary",
+                  cursor: "pointer",
+                  "&:disabled": { cursor: "default" },
+                  ...(isPicked ? { outline: `2px solid ${(theme.vars || theme).palette.primary.main}`, outlineOffset: 1 } : {}),
+                })}
               >
                 {item.label || FLOOR_ITEM_KINDS[item.kind]}
-              </button>
+              </Box>
             );
           })}
           {cells.map((cell) => {
             const info = infos.get(cell.rack.id)!;
-            const style: React.CSSProperties = cell.rack.disabled ? { backgroundColor: "var(--muted)", backgroundImage: HATCH } : mode === "usage" ? usageStyle(info) : alertStyle(info);
             const title = [
               `${cell.rack.name}${cell.rack.rowLabel ? `（${cell.rack.rowLabel} 排）` : ""}${cell.rack.disabled ? "，不可用" : ""}`,
               `${info.devices} 台设备，U 位 ${info.used} / ${cell.rack.heightU}`,
@@ -371,9 +444,11 @@ export function RackFloor({
               .filter(Boolean)
               .join("\n");
             const isPicked = picked?.type === "rack" && picked.id === cell.rack.id;
+            const facingBar = { position: "absolute", left: 0, right: 0, height: 4, bgcolor: "text.secondary" } as const;
             return (
-              <button
+              <Box
                 key={cell.rack.id}
+                component="button"
                 type="button"
                 title={title}
                 draggable={editing}
@@ -386,19 +461,47 @@ export function RackFloor({
                   setTool("");
                   setPicked(isPicked ? null : { type: "rack", id: cell.rack.id });
                 }}
-                className={`absolute flex flex-col items-center justify-center rounded-sm border text-[11px] leading-4 transition-shadow ${isPicked ? "ring-2 ring-ring" : ""} ${draft[cell.rack.id] ? "border-primary" : "border-border"}`}
-                style={{ ...style, left: cell.x * CELL_W + 2, top: cell.y * CELL_H + 2, width: CELL_W - 4, height: CELL_H - 4 }}
+                sx={(theme) => ({
+                  color: "text.primary",
+                  ...(cell.rack.disabled ? hatch(theme) : mode === "usage" ? usageStyle(theme, info) : alertStyle(theme, info)),
+                  position: "absolute",
+                  left: cell.x * CELL_W + 2,
+                  top: cell.y * CELL_H + 2,
+                  width: CELL_W - 4,
+                  height: CELL_H - 4,
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  p: 0,
+                  overflow: "hidden",
+                  borderRadius: 0.5,
+                  border: 1,
+                  borderColor: draft[cell.rack.id] ? "primary.main" : "divider",
+                  font: "inherit",
+                  fontSize: 11,
+                  lineHeight: "16px",
+                  cursor: "pointer",
+                  transition: "outline-color 0.15s",
+                  ...(isPicked ? { outline: `2px solid ${(theme.vars || theme).palette.primary.main}`, outlineOffset: 1 } : {}),
+                })}
               >
-                {cell.facing === "up" ? <span className="absolute top-0 right-0 left-0 h-1 rounded-t-sm bg-foreground/60" /> : null}
-                {cell.facing === "down" ? <span className="absolute right-0 bottom-0 left-0 h-1 rounded-b-sm bg-foreground/60" /> : null}
-                <span className="font-mono font-semibold">{cell.rack.name}</span>
-                <span className="opacity-80">{cell.rack.disabled ? "不可用" : mode === "usage" ? `${Math.round((info.used / cell.rack.heightU) * 100)}%` : `${info.devices} 台`}</span>
-              </button>
+                {cell.facing === "up" ? <Box component="span" sx={{ ...facingBar, top: 0 }} /> : null}
+                {cell.facing === "down" ? <Box component="span" sx={{ ...facingBar, bottom: 0 }} /> : null}
+                <Box component="span" sx={{ fontFamily: MONO, fontWeight: 600 }}>
+                  {cell.rack.name}
+                </Box>
+                <Box component="span" sx={{ opacity: 0.8 }}>
+                  {cell.rack.disabled ? "不可用" : mode === "usage" ? `${Math.round((info.used / cell.rack.heightU) * 100)}%` : `${info.devices} 台`}
+                </Box>
+              </Box>
             );
           })}
-        </div>
-      </div>
-      <p className="text-xs text-muted-foreground">机柜边上的深色条是正面。还没摆过位置的机柜按列/排自动排成一行行（排之间空一行当通道），遇到柱子等障碍物往后挪一格。</p>
-    </div>
+        </Box>
+      </Paper>
+      <Typography variant="caption" sx={{ color: "text.secondary" }}>
+        机柜边上的深色条是正面。还没摆过位置的机柜按列/排自动排成一行行（排之间空一行当通道），遇到柱子等障碍物往后挪一格。
+      </Typography>
+    </Stack>
   );
 }

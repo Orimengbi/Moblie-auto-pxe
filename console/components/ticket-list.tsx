@@ -3,18 +3,71 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
+import Checkbox from "@mui/material/Checkbox";
+import FormControlLabel from "@mui/material/FormControlLabel";
+import MuiLink from "@mui/material/Link";
+import Stack from "@mui/material/Stack";
+import TextField from "@mui/material/TextField";
+import { DataGrid, type GridColDef } from "@mui/x-data-grid";
+import { StatusChip } from "@/components/mui/status-chip";
 import { TicketCreateDialog } from "@/components/ticket-create-dialog";
-import { Badge } from "@/components/ui/badge";
-import { NativeSelect } from "@/components/ui/native-select";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { OPEN_TICKET_STATUS, priorityVariant, TICKET_KINDS, TICKET_PRIORITY, TICKET_STATUS, TICKET_STATUS_VARIANT } from "@/lib/asset-labels";
+import { OPEN_TICKET_STATUS, priorityTone, TICKET_KINDS, TICKET_PRIORITY, TICKET_STATUS, TICKET_STATUS_TONE } from "@/lib/asset-labels";
 import type { Ticket } from "@/lib/types";
 import { formatTime } from "@/lib/time";
 
-
 export type TicketRow = Ticket & { assetTag: string; assetSn: string };
+
+const MONO = "var(--font-geist-mono), monospace";
+const NATIVE = { select: { native: true } } as const;
+
+const COLUMNS: GridColDef<TicketRow>[] = [
+  {
+    field: "no",
+    headerName: "编号",
+    width: 130,
+    renderCell: ({ row }) => (
+      <MuiLink component={Link} href={`/tickets/${row.id}`} color="inherit" underline="hover" sx={{ fontFamily: MONO, fontSize: 12 }}>
+        {row.no}
+      </MuiLink>
+    ),
+  },
+  { field: "title", headerName: "标题", flex: 1, minWidth: 220 },
+  {
+    field: "assetTag",
+    headerName: "资产",
+    width: 150,
+    renderCell: ({ row }) => <Box sx={{ fontFamily: MONO, fontSize: 12 }}>{row.assetTag || "—"}</Box>,
+  },
+  { field: "kind", headerName: "类型", width: 90, valueGetter: (_value, row) => TICKET_KINDS[row.kind] },
+  {
+    field: "priority",
+    headerName: "优先级",
+    width: 90,
+    valueGetter: (_value, row) => TICKET_PRIORITY[row.priority],
+    renderCell: ({ row }) => <StatusChip tone={priorityTone(row.priority)} label={TICKET_PRIORITY[row.priority]} />,
+  },
+  {
+    field: "status",
+    headerName: "状态",
+    width: 90,
+    valueGetter: (_value, row) => TICKET_STATUS[row.status],
+    renderCell: ({ row }) => <StatusChip tone={TICKET_STATUS_TONE[row.status]} label={TICKET_STATUS[row.status]} />,
+  },
+  {
+    field: "assignee",
+    headerName: "负责人",
+    width: 110,
+    renderCell: ({ row }) => row.assignee || <Box sx={{ color: "text.secondary" }}>未指派</Box>,
+  },
+  {
+    field: "updatedAt",
+    headerName: "更新",
+    width: 160,
+    renderCell: ({ row }) => <Box sx={{ fontSize: 12, color: "text.secondary" }}>{formatTime(row.updatedAt)}</Box>,
+  },
+];
 
 /** 工单列表：默认只看没解决的，可以按状态、优先级、负责人筛。 */
 export function TicketList({ tickets, me }: { tickets: TicketRow[]; me: string }) {
@@ -43,10 +96,10 @@ export function TicketList({ tickets, me }: { tickets: TicketRow[]; me: string }
   }, [tickets, status, priority, mine, me, q]);
 
   return (
-    <div className="grid gap-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <Input className="h-8 w-56" placeholder="搜编号、标题、资产、厂商单号…" value={q} onChange={(event) => setQ(event.target.value)} />
-        <NativeSelect value={status} onChange={(event) => setStatus(event.target.value)}>
+    <Stack spacing={2}>
+      <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center" }}>
+        <TextField placeholder="搜编号、标题、资产、厂商单号…" value={q} onChange={(event) => setQ(event.target.value)} sx={{ width: 224 }} />
+        <TextField select slotProps={NATIVE} value={status} onChange={(event) => setStatus(event.target.value)}>
           <option value="open">没解决的</option>
           <option value="all">全部</option>
           {Object.entries(TICKET_STATUS).map(([value, label]) => (
@@ -54,67 +107,34 @@ export function TicketList({ tickets, me }: { tickets: TicketRow[]; me: string }
               {label}（{tickets.filter((ticket) => ticket.status === value).length}）
             </option>
           ))}
-        </NativeSelect>
-        <NativeSelect value={priority} onChange={(event) => setPriority(event.target.value)}>
+        </TextField>
+        <TextField select slotProps={NATIVE} value={priority} onChange={(event) => setPriority(event.target.value)}>
           <option value="">全部优先级</option>
           {Object.entries(TICKET_PRIORITY).map(([value, label]) => (
             <option key={value} value={value}>
               {label}
             </option>
           ))}
-        </NativeSelect>
-        <label className="flex items-center gap-1.5 text-sm">
-          <input type="checkbox" checked={mine} onChange={(event) => setMine(event.target.checked)} />
-          只看我负责的
-        </label>
-        <Button type="button" size="sm" className="ml-auto" onClick={() => setCreating(true)}>
+        </TextField>
+        <FormControlLabel control={<Checkbox checked={mine} onChange={(event) => setMine(event.target.checked)} />} label="只看我负责的" />
+        <Button variant="contained" sx={{ ml: "auto" }} onClick={() => setCreating(true)}>
           新建工单
         </Button>
-      </div>
-      <div className="overflow-x-auto">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>编号</TableHead>
-              <TableHead>标题</TableHead>
-              <TableHead>资产</TableHead>
-              <TableHead>类型</TableHead>
-              <TableHead>优先级</TableHead>
-              <TableHead>状态</TableHead>
-              <TableHead>负责人</TableHead>
-              <TableHead>更新</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {shown.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={8} className="py-6 text-center text-sm text-muted-foreground">
-                  {tickets.length ? "没有符合条件的工单。" : "还没有工单。"}
-                </TableCell>
-              </TableRow>
-            ) : null}
-            {shown.map((ticket) => (
-              <TableRow key={ticket.id} className="cursor-pointer" onClick={() => router.push(`/tickets/${ticket.id}`)}>
-                <TableCell className="font-mono text-xs">
-                  <Link href={`/tickets/${ticket.id}`}>{ticket.no}</Link>
-                </TableCell>
-                <TableCell className="max-w-80 whitespace-normal">{ticket.title}</TableCell>
-                <TableCell className="font-mono text-xs">{ticket.assetTag || "—"}</TableCell>
-                <TableCell className="text-sm">{TICKET_KINDS[ticket.kind]}</TableCell>
-                <TableCell>
-                  <Badge variant={priorityVariant(ticket.priority)}>{TICKET_PRIORITY[ticket.priority]}</Badge>
-                </TableCell>
-                <TableCell>
-                  <Badge variant={TICKET_STATUS_VARIANT[ticket.status]}>{TICKET_STATUS[ticket.status]}</Badge>
-                </TableCell>
-                <TableCell className="text-sm">{ticket.assignee || <span className="text-muted-foreground">未指派</span>}</TableCell>
-                <TableCell className="text-xs whitespace-nowrap text-muted-foreground">{formatTime(ticket.updatedAt)}</TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </div>
+      </Stack>
+      <Box sx={{ width: "100%", minWidth: 0 }}>
+        <DataGrid
+          rows={shown}
+          columns={COLUMNS}
+          autoHeight
+          onRowClick={({ row }) => router.push(`/tickets/${row.id}`)}
+          initialState={{ pagination: { paginationModel: { pageSize: 100 } } }}
+          pageSizeOptions={[25, 50, 100]}
+          hideFooter={shown.length <= 100}
+          localeText={{ noRowsLabel: tickets.length ? "没有符合条件的工单。" : "还没有工单。" }}
+          sx={{ "& .MuiDataGrid-row": { cursor: "pointer" } }}
+        />
+      </Box>
       <TicketCreateDialog open={creating} onClose={() => setCreating(false)} onCreated={(ticket) => router.push(`/tickets/${ticket.id}`)} />
-    </div>
+    </Stack>
   );
 }

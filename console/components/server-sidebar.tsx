@@ -1,6 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import Box from "@mui/material/Box";
+import ClickAwayListener from "@mui/material/ClickAwayListener";
+import Drawer from "@mui/material/Drawer";
+import IconButton from "@mui/material/IconButton";
+import Portal from "@mui/material/Portal";
+import Tab from "@mui/material/Tab";
+import Tabs from "@mui/material/Tabs";
+import Tooltip from "@mui/material/Tooltip";
+import Typography from "@mui/material/Typography";
+import CloseOutlined from "@mui/icons-material/CloseOutlined";
 import { AssetHistory } from "@/components/asset-history";
 import { AssetMonitor } from "@/components/asset-monitor";
 import { AssetOverview } from "@/components/asset-overview";
@@ -11,8 +21,6 @@ import { ServerInventory } from "@/components/server-inventory";
 import { ServerOptics } from "@/components/server-optics";
 import { ServerPorts } from "@/components/server-ports";
 import { ServerTopology } from "@/components/server-topology";
-import { Button } from "@/components/ui/button";
-import { Sheet, SheetBody, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 
 interface Row {
   /** 资产 id。 */
@@ -51,8 +59,14 @@ const TABS: { id: Tab; label: string; where: "server" | "network" | "all"; rende
   { id: "history", label: "记录", where: "all", render: ({ row }) => <AssetHistory assetId={row.id} /> },
 ];
 
+/** 点在这些地方不算“点外面”：列表里的行（直接换台），和弹在上面的对话框、菜单。 */
+function keepsOpen(target: EventTarget | null): boolean {
+  return Boolean((target as Element | null)?.closest?.("[data-server-row], .MuiModal-root, .MuiPopover-root, .MuiPopper-root"));
+}
+
 /**
- * 点资产列表或装机批次里的一行，从右边滑出这台资产的侧边栏。点外面关闭；点到列表里别的行不关，直接换成那一台。
+ * 点资产列表或装机批次里的一行，从右边滑出这台资产的侧边栏。不加遮罩，页面照常能点；
+ * 点外面、按 Esc 或右上角关闭；点到列表里别的行不关，直接换成那一台。
  * 从装机批次打开时带 projectId，硬件配置按那个批次的基准检查。
  */
 export function ServerSidebar({ projectId, row, initialTab = "overview", onClose, onChanged }: { projectId?: string; row: Row | null; initialTab?: Tab; onClose: () => void; onChanged?: () => void }) {
@@ -61,37 +75,73 @@ export function ServerSidebar({ projectId, row, initialTab = "overview", onClose
   const network = Boolean(row?.type && row.type !== "server");
   const tabs = TABS.filter((item) => item.where === "all" || item.where === (network ? "network" : "server"));
   const current = tabs.find((item) => item.id === tab) || tabs.find((item) => item.id === "overview")!;
+  const open = Boolean(row);
+
+  // 没有遮罩就没有 Modal 自带的 Esc，自己听；对话框里按 Esc 只关对话框。
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented || keepsOpen(event.target)) return;
+      onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
+  // 放到 body 下，不占调用方的版面（停靠式 Drawer 会留一个空的外层节点）。
   return (
-    <Sheet
-      open={Boolean(row)}
-      onOpenChange={(open, details) => {
-        if (open) return;
-        if (details.reason === "outside-press" && (details.event.target as Element | null)?.closest?.("[data-server-row]")) {
-          details.cancel();
-          return;
-        }
-        onClose();
-      }}
-    >
-      <SheetContent>
+    <Portal>
+      <Drawer
+        anchor="right"
+        variant="persistent"
+        open={open}
+        slotProps={{
+          paper: {
+            sx: { zIndex: (theme) => theme.zIndex.drawer + 1, width: { xs: "100%", sm: "min(56rem, 92vw)" }, boxShadow: 8 },
+          },
+        }}
+      >
         {row ? (
-          <>
-            <SheetHeader>
-              <SheetTitle className="font-mono">{row.sn}</SheetTitle>
-              <SheetDescription>{row.description}</SheetDescription>
-              <div className="mt-2 flex flex-wrap gap-1">
-                {tabs.map((item) => (
-                  <Button key={item.id} type="button" size="sm" variant={current.id === item.id ? "default" : "ghost"} onClick={() => setTab(item.id)}>
-                    {item.label}
-                  </Button>
-                ))}
-              </div>
-            </SheetHeader>
-            {/* 换台时用 key 让这一页重新挂载、重新读数据。 */}
-            <SheetBody key={`${row.id}-${current.id}`}>{current.render({ row, projectId, onChanged })}</SheetBody>
-          </>
+          <ClickAwayListener
+            onClickAway={(event) => {
+              if (keepsOpen(event.target)) return;
+              onClose();
+            }}
+          >
+            <Box sx={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+              <Box sx={{ position: "relative", px: 2.5, pt: 2, pr: 6, borderBottom: 1, borderColor: "divider" }}>
+                <Typography variant="h3" sx={{ fontFamily: "var(--font-geist-mono), monospace", wordBreak: "break-all" }}>
+                  {row.sn}
+                </Typography>
+                <Typography variant="body2" sx={{ mt: 0.5, color: "text.secondary" }}>
+                  {row.description}
+                </Typography>
+                <Tooltip title="关闭">
+                  <IconButton aria-label="关闭" onClick={onClose} sx={{ position: "absolute", top: 12, right: 12 }}>
+                    <CloseOutlined fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+                <Tabs
+                  value={current.id}
+                  onChange={(_, next: Tab) => setTab(next)}
+                  variant="scrollable"
+                  scrollButtons="auto"
+                  allowScrollButtonsMobile
+                  sx={{ mt: 1, minHeight: 40, "& .MuiTab-root": { minHeight: 40, px: 1.5, minWidth: 0 } }}
+                >
+                  {tabs.map((item) => (
+                    <Tab key={item.id} value={item.id} label={item.label} />
+                  ))}
+                </Tabs>
+              </Box>
+              {/* 换台时用 key 让这一页重新挂载、重新读数据。 */}
+              <Box key={`${row.id}-${current.id}`} sx={{ flex: 1, minHeight: 0, overflowY: "auto", px: 2.5, py: 2, display: "flex", flexDirection: "column", gap: 2 }}>
+                {current.render({ row, projectId, onChanged })}
+              </Box>
+            </Box>
+          </ClickAwayListener>
         ) : null}
-      </SheetContent>
-    </Sheet>
+      </Drawer>
+    </Portal>
   );
 }

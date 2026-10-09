@@ -2,14 +2,20 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
+import Card from "@mui/material/Card";
+import CardContent from "@mui/material/CardContent";
+import CardHeader from "@mui/material/CardHeader";
+import Chip from "@mui/material/Chip";
+import Grid from "@mui/material/Grid";
+import MuiLink from "@mui/material/Link";
+import Stack from "@mui/material/Stack";
+import TextField from "@mui/material/TextField";
+import Typography from "@mui/material/Typography";
+import { StatusChip } from "@/components/mui/status-chip";
 import { useUserNames } from "@/components/use-user-names";
-import { Badge } from "@/components/ui/badge";
-import { NativeSelect } from "@/components/ui/native-select";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import { ASSET_STATUS, PART_KINDS, PART_STATUS, priorityVariant, TICKET_KINDS, TICKET_PRIORITY, TICKET_STATUS, TICKET_STATUS_VARIANT } from "@/lib/asset-labels";
+import { ASSET_STATUS, PART_KINDS, PART_STATUS, partStatusTone, priorityTone, TICKET_KINDS, TICKET_PRIORITY, TICKET_STATUS, TICKET_STATUS_TONE } from "@/lib/asset-labels";
 import type { AssetStatus, HwComponent, HwKind, InventorySnapshot, Part, PartKind, Ticket, TicketLog, TicketStatus } from "@/lib/types";
 import { formatTime } from "@/lib/time";
 import { api } from "@/lib/client-api";
@@ -20,6 +26,11 @@ interface View {
   parts: Part[];
   asset: { id: string; tag: string; sn: string; status: AssetStatus } | null;
 }
+
+const MONO = "var(--font-geist-mono), monospace";
+// 带标签的原生下拉框：标签始终浮在上面，免得和空值选项叠在一起。
+const NATIVE = { select: { native: true }, inputLabel: { shrink: true } } as const;
+const NATIVE_PLAIN = { select: { native: true } } as const;
 
 const LOG_KIND: Record<string, string> = { create: "建单", status: "状态", edit: "修改", replace: "换件", comment: "评论" };
 
@@ -51,6 +62,9 @@ async function post(url: string, body: unknown, method = "POST"): Promise<string
   return (await api(url, method, body)).error;
 }
 
+/** 竖线串起来的记录，处理记录和备件流转都用这个样子。 */
+const TIMELINE_ITEM = { borderLeft: 2, borderColor: "divider", pl: 1.5 } as const;
+
 export function TicketDetail({ id }: { id: string }) {
   const [view, setView] = useState<View | null>(null);
   const [error, setError] = useState("");
@@ -80,35 +94,40 @@ export function TicketDetail({ id }: { id: string }) {
     await load();
   }
 
-  if (!view) return <p className="text-sm text-muted-foreground">{error || "正在读取"}</p>;
+  if (!view)
+    return (
+      <Typography variant="body2" sx={{ color: "text.secondary" }}>
+        {error || "正在读取"}
+      </Typography>
+    );
   const { ticket, asset } = view;
   const dirty = edit.kind !== ticket.kind || edit.priority !== ticket.priority || edit.assignee !== ticket.assignee || edit.vendorCase !== ticket.vendorCase || edit.description !== ticket.description;
 
   return (
-    <div className="grid gap-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <Badge variant={priorityVariant(ticket.priority)}>{TICKET_PRIORITY[ticket.priority]}</Badge>
-        <Badge variant="outline">{TICKET_KINDS[ticket.kind]}</Badge>
-        <Badge variant={TICKET_STATUS_VARIANT[ticket.status]}>{TICKET_STATUS[ticket.status]}</Badge>
+    <Stack spacing={2}>
+      <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center" }}>
+        <StatusChip tone={priorityTone(ticket.priority)} label={TICKET_PRIORITY[ticket.priority]} />
+        <Chip variant="outlined" label={TICKET_KINDS[ticket.kind]} />
+        <StatusChip tone={TICKET_STATUS_TONE[ticket.status]} label={TICKET_STATUS[ticket.status]} />
         {asset ? (
-          <Link href={`/assets?open=${asset.id}`} className="font-mono text-sm underline underline-offset-4">
+          <MuiLink component={Link} href={`/assets?open=${asset.id}`} variant="body2" sx={{ fontFamily: MONO }}>
             {asset.tag} · {asset.sn}（{ASSET_STATUS[asset.status]}）
-          </Link>
+          </MuiLink>
         ) : (
-          <span className="text-sm text-muted-foreground">没有关联资产</span>
+          <Typography variant="body2" sx={{ color: "text.secondary" }}>
+            没有关联资产
+          </Typography>
         )}
-        <span className="text-xs text-muted-foreground">
+        <Typography variant="caption" sx={{ color: "text.secondary" }}>
           {ticket.reporter} 建于 {formatTime(ticket.createdAt)}
           {ticket.resolvedAt ? ` · 解决于 ${formatTime(ticket.resolvedAt)}` : ""}
-        </span>
-      </div>
-      <div className="flex flex-wrap gap-2">
+        </Typography>
+      </Stack>
+      <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap" }}>
         {NEXT[ticket.status].map(([status, label]) => (
           <Button
             key={status}
-            type="button"
-            size="sm"
-            variant={status === "resolved" ? "default" : "outline"}
+            variant={status === "resolved" ? "contained" : "outlined"}
             onClick={() => {
               const note = status === "resolved" ? window.prompt("怎么解决的？（可留空）") : "";
               if (note === null) return;
@@ -118,128 +137,160 @@ export function TicketDetail({ id }: { id: string }) {
             {label}
           </Button>
         ))}
-      </div>
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      </Stack>
+      {error ? (
+        <Typography variant="body2" color="error">
+          {error}
+        </Typography>
+      ) : null}
 
-      <div className="grid gap-4 xl:grid-cols-[1fr_1fr]">
-        <Card>
-          <CardHeader>
-            <CardTitle>信息</CardTitle>
-          </CardHeader>
-          <CardContent className="grid gap-3">
-            <div className="grid gap-3 sm:grid-cols-2">
-              <label className="grid gap-1.5 text-sm">
-                <span className="font-medium">类型</span>
-                <NativeSelect value={edit.kind} onChange={(event) => setEdit({ ...edit, kind: event.target.value })}>
-                  {Object.entries(TICKET_KINDS).map(([value, label]) => (
-                    <option key={value} value={value}>
-                      {label}
-                    </option>
-                  ))}
-                </NativeSelect>
-              </label>
-              <label className="grid gap-1.5 text-sm">
-                <span className="font-medium">优先级</span>
-                <NativeSelect value={edit.priority} onChange={(event) => setEdit({ ...edit, priority: event.target.value })}>
-                  {Object.entries(TICKET_PRIORITY).map(([value, label]) => (
-                    <option key={value} value={value}>
-                      {label}
-                    </option>
-                  ))}
-                </NativeSelect>
-              </label>
-              <label className="grid gap-1.5 text-sm">
-                <span className="font-medium">负责人</span>
-                <Input value={edit.assignee} list="ticket-detail-assignees" onChange={(event) => setEdit({ ...edit, assignee: event.target.value })} />
-                <datalist id="ticket-detail-assignees">
-                  {names.map((name) => (
-                    <option key={name} value={name} />
-                  ))}
-                </datalist>
-              </label>
-              <label className="grid gap-1.5 text-sm">
-                <span className="font-medium">厂商工单号</span>
-                <Input value={edit.vendorCase} onChange={(event) => setEdit({ ...edit, vendorCase: event.target.value })} />
-              </label>
-            </div>
-            <label className="grid gap-1.5 text-sm">
-              <span className="font-medium">描述</span>
-              <Textarea value={edit.description} onChange={(event) => setEdit({ ...edit, description: event.target.value })} className="min-h-28" />
-            </label>
-            <div>
-              <Button type="button" size="sm" disabled={!dirty} onClick={() => void act(post(`/api/tickets/${id}`, edit, "PATCH"))}>
-                保存修改
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-
-        {asset ? (
+      <Grid container spacing={2}>
+        <Grid size={{ xs: 12, xl: 6 }}>
           <Card>
-            <CardHeader>
-              <CardTitle>换件</CardTitle>
-            </CardHeader>
-            <CardContent className="grid gap-4">
-              <ReplaceForm ticketId={id} assetId={asset.id} onDone={(failed) => act(Promise.resolve(failed))} />
-              {view.parts.length ? (
-                <section className="grid gap-1.5">
-                  <h4 className="text-xs font-medium tracking-wide text-muted-foreground">这张单涉及的备件</h4>
-                  <ul className="grid gap-1 text-sm">
-                    {view.parts.map((part) => (
-                      <li key={part.id} className="flex flex-wrap gap-2">
-                        <span>{PART_KINDS[part.kind]}</span>
-                        <span>{part.model}</span>
-                        <span className="font-mono text-xs leading-5">{part.sn || "无序列号"}</span>
-                        <Badge variant={part.status === "faulty" || part.status === "rma" ? "destructive" : "outline"}>{PART_STATUS[part.status]}</Badge>
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-              ) : null}
+            <CardHeader title="信息" />
+            <CardContent>
+              <Stack spacing={2}>
+                <Grid container spacing={2}>
+                  <Grid size={{ xs: 12, sm: 6 }}>
+                    <TextField label="类型" select slotProps={NATIVE} fullWidth value={edit.kind} onChange={(event) => setEdit({ ...edit, kind: event.target.value })}>
+                      {Object.entries(TICKET_KINDS).map(([value, label]) => (
+                        <option key={value} value={value}>
+                          {label}
+                        </option>
+                      ))}
+                    </TextField>
+                  </Grid>
+                  <Grid size={{ xs: 12, sm: 6 }}>
+                    <TextField label="优先级" select slotProps={NATIVE} fullWidth value={edit.priority} onChange={(event) => setEdit({ ...edit, priority: event.target.value })}>
+                      {Object.entries(TICKET_PRIORITY).map(([value, label]) => (
+                        <option key={value} value={value}>
+                          {label}
+                        </option>
+                      ))}
+                    </TextField>
+                  </Grid>
+                  <Grid size={{ xs: 12, sm: 6 }}>
+                    <TextField
+                      label="负责人"
+                      fullWidth
+                      value={edit.assignee}
+                      onChange={(event) => setEdit({ ...edit, assignee: event.target.value })}
+                      slotProps={{ htmlInput: { list: "ticket-detail-assignees" } }}
+                    />
+                    <datalist id="ticket-detail-assignees">
+                      {names.map((name) => (
+                        <option key={name} value={name} />
+                      ))}
+                    </datalist>
+                  </Grid>
+                  <Grid size={{ xs: 12, sm: 6 }}>
+                    <TextField label="厂商工单号" fullWidth value={edit.vendorCase} onChange={(event) => setEdit({ ...edit, vendorCase: event.target.value })} />
+                  </Grid>
+                </Grid>
+                <TextField label="描述" multiline minRows={5} fullWidth value={edit.description} onChange={(event) => setEdit({ ...edit, description: event.target.value })} />
+                <Box>
+                  <Button variant="contained" disabled={!dirty} onClick={() => void act(post(`/api/tickets/${id}`, edit, "PATCH"))}>
+                    保存修改
+                  </Button>
+                </Box>
+              </Stack>
             </CardContent>
           </Card>
+        </Grid>
+
+        {asset ? (
+          <Grid size={{ xs: 12, xl: 6 }}>
+            <Card>
+              <CardHeader title="换件" />
+              <CardContent>
+                <Stack spacing={2}>
+                  <ReplaceForm ticketId={id} assetId={asset.id} onDone={(failed) => act(Promise.resolve(failed))} />
+                  {view.parts.length ? (
+                    <Stack spacing={1} component="section">
+                      <Typography variant="caption" sx={{ fontWeight: 500, color: "text.secondary" }}>
+                        这张单涉及的备件
+                      </Typography>
+                      <Stack component="ul" spacing={0.5} sx={{ m: 0, p: 0, listStyle: "none" }}>
+                        {view.parts.map((part) => (
+                          <Stack key={part.id} component="li" direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center" }}>
+                            <Typography variant="body2">{PART_KINDS[part.kind]}</Typography>
+                            <Typography variant="body2">{part.model}</Typography>
+                            <Typography variant="caption" sx={{ fontFamily: MONO }}>
+                              {part.sn || "无序列号"}
+                            </Typography>
+                            <StatusChip tone={partStatusTone(part.status)} label={PART_STATUS[part.status]} />
+                          </Stack>
+                        ))}
+                      </Stack>
+                    </Stack>
+                  ) : null}
+                </Stack>
+              </CardContent>
+            </Card>
+          </Grid>
         ) : null}
-      </div>
+      </Grid>
 
       <Card>
-        <CardHeader>
-          <CardTitle>处理记录</CardTitle>
-        </CardHeader>
-        <CardContent className="grid gap-4">
-          <ol className="grid gap-3">
-            {view.logs.map((entry) => (
-              <li key={entry.id} className="grid gap-0.5 border-l-2 pl-3 text-sm">
-                <div className="flex flex-wrap gap-x-2 text-xs text-muted-foreground">
-                  <span>{formatTime(entry.at)}</span>
-                  <span>{entry.actor}</span>
-                  <span>{LOG_KIND[entry.kind] || entry.kind}</span>
-                </div>
-                <p className={`whitespace-pre-wrap ${entry.kind === "comment" ? "" : "text-muted-foreground"}`}>{entry.text}</p>
-              </li>
-            ))}
-          </ol>
-          <form
-            className="grid gap-2"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (!comment.trim()) return;
-              void act(post(`/api/tickets/${id}/comments`, { text: comment })).then(() => setComment(""));
-            }}
-          >
-            <Textarea value={comment} onChange={(event) => setComment(event.target.value)} placeholder="写一条处理记录或评论" className="min-h-20" />
-            <div>
-              <Button type="submit" size="sm" disabled={!comment.trim()}>
-                发表
-              </Button>
-            </div>
-          </form>
+        <CardHeader title="处理记录" />
+        <CardContent>
+          <Stack spacing={2}>
+            <Stack component="ol" spacing={1.5} sx={{ m: 0, p: 0, listStyle: "none" }}>
+              {view.logs.map((entry) => (
+                <Box key={entry.id} component="li" sx={TIMELINE_ITEM}>
+                  <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap" }}>
+                    <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                      {formatTime(entry.at)}
+                    </Typography>
+                    <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                      {entry.actor}
+                    </Typography>
+                    <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                      {LOG_KIND[entry.kind] || entry.kind}
+                    </Typography>
+                  </Stack>
+                  <Typography variant="body2" sx={{ whiteSpace: "pre-wrap", color: entry.kind === "comment" ? "text.primary" : "text.secondary" }}>
+                    {entry.text}
+                  </Typography>
+                </Box>
+              ))}
+            </Stack>
+            <Stack
+              component="form"
+              spacing={1}
+              onSubmit={(event: React.FormEvent) => {
+                event.preventDefault();
+                if (!comment.trim()) return;
+                void act(post(`/api/tickets/${id}/comments`, { text: comment })).then(() => setComment(""));
+              }}
+            >
+              <TextField multiline minRows={3} fullWidth value={comment} onChange={(event) => setComment(event.target.value)} placeholder="写一条处理记录或评论" />
+              <Box>
+                <Button type="submit" variant="contained" disabled={!comment.trim()}>
+                  发表
+                </Button>
+              </Box>
+            </Stack>
+          </Stack>
         </CardContent>
       </Card>
-    </div>
+    </Stack>
   );
 }
 
 const HW_OF: Partial<Record<PartKind, HwKind>> = { cpu: "cpu", memory: "memory", disk: "disk", gpu: "gpu", nic: "nic", transceiver: "transceiver", psu: "psu", board: "board" };
+
+/** 带边框、左上角有小标题的一组输入。 */
+function Group({ legend, children }: { legend: string; children: React.ReactNode }) {
+  return (
+    <Box component="fieldset" sx={{ m: 0, border: 1, borderColor: "divider", borderRadius: 1, p: 1.5, minWidth: 0 }}>
+      <Typography component="legend" variant="caption" sx={{ px: 0.5, color: "text.secondary" }}>
+        {legend}
+      </Typography>
+      <Stack spacing={1.5}>{children}</Stack>
+    </Box>
+  );
+}
 
 /** 旧件从这台最近一次的采集里挑（或手填），新件从在库的同类备件里挑（或直接填序列号）。 */
 function ReplaceForm({ ticketId, assetId, onDone }: { ticketId: string; assetId: string; onDone: (error: string) => Promise<void> }) {
@@ -277,30 +328,30 @@ function ReplaceForm({ ticketId, assetId, onDone }: { ticketId: string; assetId:
     await onDone(failed);
   }
 
-  const field = (key: keyof typeof form) => ({ value: form[key], onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setForm({ ...form, [key]: event.target.value }) });
+  const field = (key: keyof typeof form) => ({ value: form[key], onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => setForm({ ...form, [key]: event.target.value }) });
 
   return (
-    <form onSubmit={submit} className="grid gap-3 text-sm">
-      <div className="grid gap-3 sm:grid-cols-2">
-        <label className="grid gap-1.5">
-          <span className="font-medium">部件类型</span>
-          <NativeSelect value={kind} onChange={(event) => setKind(event.target.value as PartKind)}>
+    <Stack component="form" spacing={2} onSubmit={submit}>
+      <Grid container spacing={2}>
+        <Grid size={{ xs: 12, sm: 6 }}>
+          <TextField label="部件类型" select slotProps={NATIVE} fullWidth value={kind} onChange={(event) => setKind(event.target.value as PartKind)}>
             {Object.entries(PART_KINDS).map(([value, label]) => (
               <option key={value} value={value}>
                 {label}
               </option>
             ))}
-          </NativeSelect>
-        </label>
-        <label className="grid gap-1.5">
-          <span className="font-medium">槽位</span>
-          <Input {...field("slot")} placeholder="例如 0000:1b:00.0、DIMM_P0_A0" />
-        </label>
-      </div>
-      <fieldset className="grid gap-2 rounded-md border p-3">
-        <legend className="px-1 text-xs text-muted-foreground">换下来的旧件</legend>
+          </TextField>
+        </Grid>
+        <Grid size={{ xs: 12, sm: 6 }}>
+          <TextField label="槽位" {...field("slot")} fullWidth placeholder="例如 0000:1b:00.0、DIMM_P0_A0" />
+        </Grid>
+      </Grid>
+      <Group legend="换下来的旧件">
         {installed.length ? (
-          <NativeSelect
+          <TextField
+            select
+            slotProps={NATIVE_PLAIN}
+            fullWidth
             value=""
             onChange={(event) => {
               const item = installed[Number(event.target.value)];
@@ -313,23 +364,30 @@ function ReplaceForm({ ticketId, assetId, onDone }: { ticketId: string; assetId:
                 {item.slot} · {item.model} · {item.sn || "无序列号"}
               </option>
             ))}
-          </NativeSelect>
+          </TextField>
         ) : (
-          <p className="text-xs text-muted-foreground">采集里没有这类部件，手填。</p>
+          <Typography variant="caption" sx={{ color: "text.secondary" }}>
+            采集里没有这类部件，手填。
+          </Typography>
         )}
-        <div className="grid gap-2 sm:grid-cols-3">
-          <Input {...field("oldSn")} placeholder="序列号" className="font-mono" />
-          <Input {...field("oldModel")} placeholder="型号" />
-          <NativeSelect {...field("oldStatus")}>
-            <option value="faulty">待返修</option>
-            <option value="removed">已拆下（没坏）</option>
-            <option value="scrapped">报废</option>
-          </NativeSelect>
-        </div>
-      </fieldset>
-      <fieldset className="grid gap-2 rounded-md border p-3">
-        <legend className="px-1 text-xs text-muted-foreground">装上去的新件</legend>
-        <NativeSelect {...field("newPartId")}>
+        <Grid container spacing={1}>
+          <Grid size={{ xs: 12, sm: 4 }}>
+            <TextField {...field("oldSn")} placeholder="序列号" fullWidth sx={{ "& input": { fontFamily: MONO } }} />
+          </Grid>
+          <Grid size={{ xs: 12, sm: 4 }}>
+            <TextField {...field("oldModel")} placeholder="型号" fullWidth />
+          </Grid>
+          <Grid size={{ xs: 12, sm: 4 }}>
+            <TextField select slotProps={NATIVE_PLAIN} fullWidth {...field("oldStatus")}>
+              <option value="faulty">待返修</option>
+              <option value="removed">已拆下（没坏）</option>
+              <option value="scrapped">报废</option>
+            </TextField>
+          </Grid>
+        </Grid>
+      </Group>
+      <Group legend="装上去的新件">
+        <TextField select slotProps={NATIVE_PLAIN} fullWidth {...field("newPartId")}>
           <option value="">{spares.length ? `从库里挑（${spares.length} 件可用）` : "库里没有这类备件，下面直接填"}</option>
           {spares.map((part) => (
             <option key={part.id} value={part.id}>
@@ -338,19 +396,23 @@ function ReplaceForm({ ticketId, assetId, onDone }: { ticketId: string; assetId:
               {part.status === "removed" ? "（已拆下）" : ""}
             </option>
           ))}
-        </NativeSelect>
+        </TextField>
         {!form.newPartId ? (
-          <div className="grid gap-2 sm:grid-cols-2">
-            <Input {...field("newSn")} placeholder="或者直接填序列号" className="font-mono" />
-            <Input {...field("newModel")} placeholder="型号（不填同旧件）" />
-          </div>
+          <Grid container spacing={1}>
+            <Grid size={{ xs: 12, sm: 6 }}>
+              <TextField {...field("newSn")} placeholder="或者直接填序列号" fullWidth sx={{ "& input": { fontFamily: MONO } }} />
+            </Grid>
+            <Grid size={{ xs: 12, sm: 6 }}>
+              <TextField {...field("newModel")} placeholder="型号（不填同旧件）" fullWidth />
+            </Grid>
+          </Grid>
         ) : null}
-      </fieldset>
-      <div>
-        <Button type="submit" size="sm" disabled={pending || (!form.oldSn && !form.oldModel && !form.newPartId && !form.newSn)}>
+      </Group>
+      <Box>
+        <Button type="submit" variant="contained" disabled={pending || (!form.oldSn && !form.oldModel && !form.newPartId && !form.newSn)}>
           {pending ? "正在登记" : "登记换件"}
         </Button>
-      </div>
-    </form>
+      </Box>
+    </Stack>
   );
 }

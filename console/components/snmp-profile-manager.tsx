@@ -2,10 +2,16 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { NativeSelect } from "@/components/ui/native-select";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
+import Grid from "@mui/material/Grid";
+import Paper from "@mui/material/Paper";
+import Stack from "@mui/material/Stack";
+import TextField from "@mui/material/TextField";
+import Typography from "@mui/material/Typography";
 import type { PublicSnmpProfile } from "@/lib/types";
+
+const NATIVE = { select: { native: true } } as const;
 
 const BLANK = { name: "", version: "v2c", community: "", username: "", authProto: "SHA", authPass: "", privProto: "AES", privPass: "" };
 
@@ -46,106 +52,110 @@ export function SnmpProfileManager({ profiles }: { profiles: PublicSnmpProfile[]
     router.refresh();
   }
 
-  const field = (key: keyof typeof BLANK) => ({ value: form[key], onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setForm({ ...form, [key]: event.target.value }) });
+  const field = (key: keyof typeof BLANK) => ({ value: form[key], onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setForm({ ...form, [key]: event.target.value }), fullWidth: true });
   const isNew = editing === "new";
 
+  const errorText = error ? (
+    <Typography variant="body2" color="error">
+      {error}
+    </Typography>
+  ) : null;
+
   return (
-    <div className="grid max-w-3xl gap-4">
-      <ul className="grid gap-2 text-sm">
+    <Stack spacing={2} sx={{ maxWidth: 768 }}>
+      <Stack component="ul" spacing={1} sx={{ m: 0, p: 0, listStyle: "none" }}>
         {profiles.map((profile) => (
-          <li key={profile.id} className="flex flex-wrap items-center gap-2">
-            <span className="font-medium">{profile.name}</span>
-            <span className="text-muted-foreground">
+          <Stack component="li" key={profile.id} direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center" }}>
+            <Typography variant="body2" sx={{ fontWeight: 500 }}>
+              {profile.name}
+            </Typography>
+            <Typography variant="body2" sx={{ color: "text.secondary" }}>
               {profile.version === "v2c" ? "v2c" : `v3 · ${profile.username} · ${profile.authProto || "不认证"} / ${profile.privProto || "不加密"}`}
-            </span>
-            <Button type="button" size="xs" variant="ghost" onClick={() => start(profile)}>
+            </Typography>
+            <Button type="button" onClick={() => start(profile)}>
               编辑
             </Button>
-            <Button type="button" size="xs" variant="ghost" onClick={() => void remove(profile)}>
+            <Button type="button" color="error" onClick={() => void remove(profile)}>
               删除
             </Button>
-          </li>
+          </Stack>
         ))}
-        {profiles.length === 0 ? <li className="text-muted-foreground">还没有凭据。交换机上开 SNMP（只读即可）后在这里建一套。</li> : null}
-      </ul>
+        {profiles.length === 0 ? (
+          <Typography component="li" variant="body2" sx={{ color: "text.secondary" }}>
+            还没有凭据。交换机上开 SNMP（只读即可）后在这里建一套。
+          </Typography>
+        ) : null}
+      </Stack>
       {editing ? (
-        <form onSubmit={save} className="grid gap-3 rounded-md border p-3">
-          <div className="grid gap-3 sm:grid-cols-3">
-            <label className="grid gap-1.5 text-sm">
-              <span className="font-medium">名称</span>
-              <Input {...field("name")} required placeholder="例如 机房只读 v3" />
-            </label>
-            <label className="grid gap-1.5 text-sm">
-              <span className="font-medium">版本</span>
-              <NativeSelect {...field("version")}>
-                <option value="v2c">v2c</option>
-                <option value="v3">v3</option>
-              </NativeSelect>
-            </label>
-            {form.version === "v2c" ? (
-              <label className="grid gap-1.5 text-sm">
-                <span className="font-medium">Community</span>
-                <Input {...field("community")} type="password" autoComplete="new-password" placeholder={isNew ? "" : "留空不改"} required={isNew} />
-              </label>
-            ) : (
-              <label className="grid gap-1.5 text-sm">
-                <span className="font-medium">用户名</span>
-                <Input {...field("username")} required />
-              </label>
-            )}
-          </div>
-          {form.version === "v3" ? (
-            <div className="grid gap-3 sm:grid-cols-4">
-              <label className="grid gap-1.5 text-sm">
-                <span className="font-medium">认证</span>
-                <NativeSelect {...field("authProto")}>
-                  <option value="">不认证</option>
-                  {["MD5", "SHA", "SHA-256", "SHA-512"].map((value) => (
-                    <option key={value} value={value}>
-                      {value}
-                    </option>
-                  ))}
-                </NativeSelect>
-              </label>
-              <label className="grid gap-1.5 text-sm">
-                <span className="font-medium">认证密码</span>
-                <Input {...field("authPass")} type="password" autoComplete="new-password" placeholder={isNew ? "至少 8 位" : "留空不改"} />
-              </label>
-              <label className="grid gap-1.5 text-sm">
-                <span className="font-medium">加密</span>
-                <NativeSelect {...field("privProto")}>
-                  <option value="">不加密</option>
-                  {["DES", "AES", "AES-256"].map((value) => (
-                    <option key={value} value={value}>
-                      {value}
-                    </option>
-                  ))}
-                </NativeSelect>
-              </label>
-              <label className="grid gap-1.5 text-sm">
-                <span className="font-medium">加密密码</span>
-                <Input {...field("privPass")} type="password" autoComplete="new-password" placeholder={isNew ? "至少 8 位" : "留空不改"} />
-              </label>
-            </div>
-          ) : null}
-          {error ? <p className="text-sm text-destructive">{error}</p> : null}
-          <div className="flex gap-2">
-            <Button type="submit" size="sm">
-              保存
-            </Button>
-            <Button type="button" size="sm" variant="ghost" onClick={() => setEditing(null)}>
-              取消
-            </Button>
-          </div>
-        </form>
+        <Paper variant="outlined" component="form" onSubmit={save} sx={{ p: 2 }}>
+          <Stack spacing={2}>
+            <Grid container spacing={2}>
+              <Grid size={{ xs: 12, sm: 4 }}>
+                <TextField label="名称" {...field("name")} required placeholder="例如 机房只读 v3" />
+              </Grid>
+              <Grid size={{ xs: 12, sm: 4 }}>
+                <TextField select slotProps={NATIVE} label="版本" {...field("version")}>
+                  <option value="v2c">v2c</option>
+                  <option value="v3">v3</option>
+                </TextField>
+              </Grid>
+              <Grid size={{ xs: 12, sm: 4 }}>
+                {form.version === "v2c" ? (
+                  <TextField label="Community" {...field("community")} type="password" autoComplete="new-password" placeholder={isNew ? "" : "留空不改"} required={isNew} />
+                ) : (
+                  <TextField label="用户名" {...field("username")} required />
+                )}
+              </Grid>
+            </Grid>
+            {form.version === "v3" ? (
+              <Grid container spacing={2}>
+                <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+                  <TextField select slotProps={NATIVE} label="认证" {...field("authProto")}>
+                    <option value="">不认证</option>
+                    {["MD5", "SHA", "SHA-256", "SHA-512"].map((value) => (
+                      <option key={value} value={value}>
+                        {value}
+                      </option>
+                    ))}
+                  </TextField>
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+                  <TextField label="认证密码" {...field("authPass")} type="password" autoComplete="new-password" placeholder={isNew ? "至少 8 位" : "留空不改"} />
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+                  <TextField select slotProps={NATIVE} label="加密" {...field("privProto")}>
+                    <option value="">不加密</option>
+                    {["DES", "AES", "AES-256"].map((value) => (
+                      <option key={value} value={value}>
+                        {value}
+                      </option>
+                    ))}
+                  </TextField>
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+                  <TextField label="加密密码" {...field("privPass")} type="password" autoComplete="new-password" placeholder={isNew ? "至少 8 位" : "留空不改"} />
+                </Grid>
+              </Grid>
+            ) : null}
+            {errorText}
+            <Stack direction="row" spacing={1}>
+              <Button type="submit" variant="contained">
+                保存
+              </Button>
+              <Button type="button" onClick={() => setEditing(null)}>
+                取消
+              </Button>
+            </Stack>
+          </Stack>
+        </Paper>
       ) : (
-        <div>
-          <Button type="button" size="sm" variant="outline" onClick={() => start(null)}>
+        <Box>
+          <Button type="button" variant="outlined" onClick={() => start(null)}>
             新建凭据
           </Button>
-          {error ? <p className="mt-2 text-sm text-destructive">{error}</p> : null}
-        </div>
+          {error ? <Box sx={{ mt: 1 }}>{errorText}</Box> : null}
+        </Box>
       )}
-    </div>
+    </Stack>
   );
 }

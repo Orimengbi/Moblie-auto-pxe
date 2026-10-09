@@ -1,7 +1,10 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { Button } from "@/components/ui/button";
+import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
+import Stack from "@mui/material/Stack";
+import Typography from "@mui/material/Typography";
 
 /**
  * 页面内的远程控制台：全屏浮层里嵌 BMC 的 H5Viewer（经 /__bmc/ 代理，和控制台同源）。
@@ -35,25 +38,43 @@ export function RemoteConsole({
     };
   }, [onClose]);
 
+  // 不用 MUI 的 Dialog：它会抢焦点、拦 Esc，键盘要原样给 KVM。
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-background" role="dialog" aria-label={`${row.sn} 远程控制台`}>
-      <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2">
-        <span className="font-medium">远程控制台</span>
-        <span className="font-mono text-sm">{row.sn}</span>
-        <span className="text-sm text-muted-foreground">BMC {row.bmcIp}</span>
-        <div className="ml-auto flex gap-2">
-          <Button size="sm" variant="outline" onClick={() => frame.current?.contentWindow?.location.reload()}>
+    <Box
+      role="dialog"
+      aria-label={`${row.sn} 远程控制台`}
+      sx={{ position: "fixed", inset: 0, zIndex: "modal", display: "flex", flexDirection: "column", bgcolor: "background.default" }}
+    >
+      <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center", borderBottom: 1, borderColor: "divider", px: 2, py: 1 }}>
+        <Typography variant="body1" sx={{ fontWeight: 500 }}>
+          远程控制台
+        </Typography>
+        <Typography variant="body2" sx={{ fontFamily: "var(--font-geist-mono), monospace" }}>
+          {row.sn}
+        </Typography>
+        <Typography variant="body2" color="text.secondary">
+          BMC {row.bmcIp}
+        </Typography>
+        <Stack direction="row" spacing={1} sx={{ ml: "auto" }}>
+          <Button variant="outlined" onClick={() => frame.current?.contentWindow?.location.reload()}>
             重新连接
           </Button>
-          <Button size="sm" variant="outline" onClick={() => void frame.current?.requestFullscreen?.()}>
+          <Button variant="outlined" onClick={() => void frame.current?.requestFullscreen?.()}>
             全屏
           </Button>
-          <Button size="sm" onClick={onClose}>
+          <Button variant="contained" onClick={onClose}>
             关闭
           </Button>
-        </div>
-      </div>
-      <iframe ref={frame} src={src} title={`${row.sn} 远程控制台`} className="w-full flex-1 border-0 bg-black" allow="fullscreen; clipboard-read; clipboard-write" />
-    </div>
+        </Stack>
+      </Stack>
+      <Box
+        component="iframe"
+        ref={frame}
+        src={src}
+        title={`${row.sn} 远程控制台`}
+        allow="fullscreen; clipboard-read; clipboard-write"
+        sx={{ width: "100%", flex: 1, border: 0, bgcolor: "common.black" }}
+      />
+    </Box>
   );
 }

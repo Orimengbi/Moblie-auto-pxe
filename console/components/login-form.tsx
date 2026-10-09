@@ -1,10 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import { cn } from "cn";
+import Alert from "@mui/material/Alert";
+import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
+import Paper from "@mui/material/Paper";
+import Stack from "@mui/material/Stack";
+import Tab from "@mui/material/Tab";
+import Tabs from "@mui/material/Tabs";
+import TextField from "@mui/material/TextField";
+import Typography from "@mui/material/Typography";
 
 type Method = "password" | "key" | "ssh";
 
@@ -77,26 +82,16 @@ export function LoginForm({ next }: { next: string }) {
   }
 
   return (
-    <form onSubmit={submit} className="grid gap-4 rounded-xl bg-card p-5 shadow-sm ring-1 ring-foreground/10">
-      <div className="flex gap-1 rounded-lg bg-muted p-1" role="tablist">
+    <Paper variant="outlined" component="form" onSubmit={submit} sx={{ borderRadius: 3, overflow: "hidden" }}>
+      <Tabs value={method} onChange={(_, value: Method) => choose(value)} variant="fullWidth" sx={{ borderBottom: 1, borderColor: "divider" }}>
         {TABS.map((tab) => (
-          <button
-            key={tab.id}
-            type="button"
-            role="tab"
-            aria-selected={method === tab.id}
-            onClick={() => choose(tab.id)}
-            className={cn("flex-1 rounded-md px-3 py-1.5 text-sm", method === tab.id ? "bg-background shadow-sm" : "text-muted-foreground")}
-          >
-            {tab.label}
-          </button>
+          <Tab key={tab.id} value={tab.id} label={tab.label} />
         ))}
-      </div>
-
-      {method !== "key" ? (
-        <label className="grid gap-1.5 text-sm">
-          <span className="font-medium">用户名</span>
-          <Input
+      </Tabs>
+      <Stack spacing={2.5} sx={{ p: 3 }}>
+        {method !== "key" ? (
+          <TextField
+            label="用户名"
             value={username}
             onChange={(event) => {
               setUsername(event.target.value);
@@ -105,49 +100,65 @@ export function LoginForm({ next }: { next: string }) {
             autoComplete="username"
             autoFocus
             required
+            fullWidth
+            size="medium"
           />
-        </label>
-      ) : null}
+        ) : null}
 
-      {method === "password" ? (
-        <label className="grid gap-1.5 text-sm">
-          <span className="font-medium">密码</span>
-          <Input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required />
-        </label>
-      ) : null}
+        {method === "password" ? (
+          <TextField label="密码" type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required fullWidth size="medium" />
+        ) : null}
 
-      {method === "key" ? (
-        <label className="grid gap-1.5 text-sm">
-          <span className="font-medium">访问密钥</span>
-          <Input value={key} onChange={(event) => setKey(event.target.value)} placeholder="pxe_..." autoComplete="off" autoFocus required />
-          <span className="text-muted-foreground">在「我的账号」里生成，或找管理员要。</span>
-        </label>
-      ) : null}
+        {method === "key" ? (
+          <TextField
+            label="访问密钥"
+            value={key}
+            onChange={(event) => setKey(event.target.value)}
+            placeholder="pxe_..."
+            autoComplete="off"
+            autoFocus
+            required
+            fullWidth
+            size="medium"
+            helperText="在「我的账号」里生成，或找管理员要。"
+          />
+        ) : null}
 
-      {method === "ssh" && challenge ? (
-        <div className="grid gap-3 text-sm">
-          <div className="grid gap-1.5">
-            <span className="font-medium">在自己电脑上执行，5 分钟内有效</span>
-            <pre className="overflow-x-auto rounded-lg bg-muted p-3 font-mono text-xs whitespace-pre-wrap break-all select-all">{challenge.command}</pre>
-            <span className="text-muted-foreground">私钥不是 ~/.ssh/id_ed25519 时改 -f 后面的路径。用 ssh-agent 时 -f 指向对应的 .pub 文件。</span>
-          </div>
-          <label className="grid gap-1.5">
-            <span className="font-medium">把输出的整段签名贴到这里</span>
-            <Textarea
+        {method === "ssh" && challenge ? (
+          <Stack spacing={2}>
+            <Box>
+              <Typography variant="subtitle2" sx={{ mb: 0.75 }}>
+                在自己电脑上执行，5 分钟内有效
+              </Typography>
+              <Box
+                component="pre"
+                sx={{ m: 0, p: 1.5, borderRadius: 2, bgcolor: "action.hover", fontFamily: "var(--font-geist-mono), monospace", fontSize: 12, whiteSpace: "pre-wrap", wordBreak: "break-all", userSelect: "all" }}
+              >
+                {challenge.command}
+              </Box>
+              <Typography variant="caption" sx={{ display: "block", mt: 0.75, color: "text.secondary" }}>
+                私钥不是 ~/.ssh/id_ed25519 时改 -f 后面的路径。用 ssh-agent 时 -f 指向对应的 .pub 文件。
+              </Typography>
+            </Box>
+            <TextField
+              label="把输出的整段签名贴到这里"
               value={signature}
               onChange={(event) => setSignature(event.target.value)}
               placeholder={"-----BEGIN SSH SIGNATURE-----\n...\n-----END SSH SIGNATURE-----"}
-              className="min-h-32 font-mono text-xs"
+              multiline
+              minRows={6}
               required
+              fullWidth
+              slotProps={{ htmlInput: { style: { fontFamily: "var(--font-geist-mono), monospace", fontSize: 12 } } }}
             />
-          </label>
-        </div>
-      ) : null}
+          </Stack>
+        ) : null}
 
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
-      <Button type="submit" disabled={pending}>
-        {pending ? "请稍候" : method === "ssh" && !challenge ? "获取挑战码" : "登录"}
-      </Button>
-    </form>
+        {error ? <Alert severity="error">{error}</Alert> : null}
+        <Button type="submit" variant="contained" size="large" disabled={pending} fullWidth>
+          {pending ? "请稍候" : method === "ssh" && !challenge ? "获取挑战码" : "登录"}
+        </Button>
+      </Stack>
+    </Paper>
   );
 }

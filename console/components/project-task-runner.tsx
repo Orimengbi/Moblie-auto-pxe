@@ -3,11 +3,21 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
+import Accordion from "@mui/material/Accordion";
+import AccordionDetails from "@mui/material/AccordionDetails";
+import AccordionSummary from "@mui/material/AccordionSummary";
+import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
+import Checkbox from "@mui/material/Checkbox";
+import MuiLink from "@mui/material/Link";
+import Paper from "@mui/material/Paper";
+import Stack from "@mui/material/Stack";
+import TextField from "@mui/material/TextField";
+import Typography from "@mui/material/Typography";
+import ExpandMoreOutlined from "@mui/icons-material/ExpandMoreOutlined";
+import UploadFileOutlined from "@mui/icons-material/UploadFileOutlined";
+import { StatusChip } from "@/components/mui/status-chip";
+import { taskTargetTone } from "@/lib/asset-labels";
 import type { RemoteFile, RemoteTask, TaskHostSource, TaskTargetStatus } from "@/lib/types";
 import { formatTime } from "@/lib/time";
 
@@ -69,6 +79,11 @@ function counts(task: RemoteTask): string {
   }
   return `${parts.join(" · ")} / 共 ${task.targets.length} 台`;
 }
+
+const MONO = "var(--font-geist-mono), monospace";
+
+/** 折叠块去掉 MUI 默认的分隔线，和上下的块之间留空。 */
+const FOLD_SX = { borderRadius: 2, "&::before": { display: "none" } } as const;
 
 function formatSize(bytes: number): string {
   if (bytes >= 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
@@ -188,149 +203,216 @@ export function ProjectTaskRunner({
   }
 
   return (
-    <div className="grid gap-6">
-      <form onSubmit={run} className="grid gap-4">
-        <p className="text-sm text-muted-foreground">
-          在上面的列表里勾选机器，用 SSH 以 root 执行同一段脚本。装机时已经把小主机的公钥写给 root。上传的文件先推到目标机，脚本里用 <code>$PXE_FILES</code> 访问，执行完就删掉。
-        </p>
+    <Stack spacing={3}>
+      <Stack component="form" onSubmit={run} spacing={2}>
+        <Typography variant="body2" sx={{ color: "text.secondary" }}>
+          在上面的列表里勾选机器，用 SSH 以 root 执行同一段脚本。装机时已经把小主机的公钥写给 root。上传的文件先推到目标机，脚本里用{" "}
+          <Box component="code" sx={{ fontFamily: MONO }}>
+            $PXE_FILES
+          </Box>{" "}
+          访问，执行完就删掉。
+        </Typography>
 
-        <div className="grid gap-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <Label>文件</Label>
-            <span className="text-xs text-muted-foreground">驱动包、rpm、deb、压缩包都可以，勾上的会推到每台机器。</span>
-          </div>
+        <Stack spacing={1}>
+          <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: "wrap", alignItems: "center" }}>
+            <Typography variant="subtitle2">文件</Typography>
+            <Typography variant="caption" sx={{ color: "text.secondary" }}>
+              驱动包、rpm、deb、压缩包都可以，勾上的会推到每台机器。
+            </Typography>
+          </Stack>
           {files.length ? (
-            <div className="grid gap-1">
+            <Stack spacing={0.25}>
               {files.map((file) => (
-                <div key={file.id} className="flex items-center gap-2 text-sm">
-                  <input type="checkbox" checked={fileIds.includes(file.id)} onChange={() => setFileIds((list) => toggle(list, file.id))} />
-                  <span className="font-mono text-xs">{file.name}</span>
-                  <span className="text-xs text-muted-foreground">{formatSize(file.size)}</span>
-                  <Button type="button" size="xs" variant="ghost" onClick={() => remove(file.id)}>
+                <Stack key={file.id} direction="row" spacing={1} sx={{ alignItems: "center", minWidth: 0 }}>
+                  <Checkbox checked={fileIds.includes(file.id)} onChange={() => setFileIds((list) => toggle(list, file.id))} slotProps={{ input: { "aria-label": `推送 ${file.name}` } }} sx={{ p: 0.5 }} />
+                  <Typography variant="caption" sx={{ fontFamily: MONO, minWidth: 0, wordBreak: "break-all" }}>
+                    {file.name}
+                  </Typography>
+                  <Typography variant="caption" sx={{ color: "text.secondary", flexShrink: 0 }}>
+                    {formatSize(file.size)}
+                  </Typography>
+                  <Button color="error" onClick={() => remove(file.id)} sx={{ flexShrink: 0 }}>
                     删除
                   </Button>
-                </div>
+                </Stack>
               ))}
-            </div>
+            </Stack>
           ) : null}
-          <Input type="file" onChange={upload} disabled={Boolean(uploading)} className="w-fit" />
-          {uploading ? <p className="text-xs text-muted-foreground">正在上传 {uploading}，大文件要等一会</p> : null}
-        </div>
+          <Box>
+            <Button component="label" variant="outlined" startIcon={<UploadFileOutlined />} disabled={Boolean(uploading)}>
+              上传文件
+              <input type="file" hidden onChange={upload} disabled={Boolean(uploading)} />
+            </Button>
+          </Box>
+          {uploading ? (
+            <Typography variant="caption" sx={{ color: "text.secondary" }}>
+              正在上传 {uploading}，大文件要等一会
+            </Typography>
+          ) : null}
+        </Stack>
 
-        <div className="grid gap-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <Label htmlFor="task-script">脚本</Label>
+        <Stack spacing={1}>
+          <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: "wrap", alignItems: "center" }}>
+            <Typography variant="subtitle2" component="label" htmlFor="task-script">
+              脚本
+            </Typography>
             {TEMPLATES.map((item) => (
-              <Button key={item.label} type="button" size="xs" variant="outline" onClick={() => setScript(item.body)}>
+              <Button key={item.label} variant="outlined" onClick={() => setScript(item.body)}>
                 {item.label}
               </Button>
             ))}
-          </div>
-          <Textarea id="task-script" className="min-h-40 font-mono text-xs" value={script} onChange={(event) => setScript(event.target.value)} placeholder="以 root 身份用 bash 执行，当前目录就是 $PXE_FILES" required />
-        </div>
+          </Stack>
+          <TextField
+            id="task-script"
+            multiline
+            minRows={8}
+            value={script}
+            onChange={(event) => setScript(event.target.value)}
+            placeholder="以 root 身份用 bash 执行，当前目录就是 $PXE_FILES"
+            required
+            fullWidth
+            slotProps={{ htmlInput: { style: { fontFamily: MONO, fontSize: 12 } } }}
+          />
+        </Stack>
 
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="grid gap-1">
-            <Label htmlFor="task-name">任务名称</Label>
-            <Input id="task-name" value={name} onChange={(event) => setName(event.target.value)} placeholder="不填就用脚本第一行" className="w-56" />
-          </div>
-          <div className="grid gap-1">
-            <Label htmlFor="task-concurrency">同时执行</Label>
-            <Input id="task-concurrency" type="number" min={1} max={50} value={concurrency} onChange={(event) => setConcurrency(event.target.value)} className="w-24" />
-          </div>
-          <div className="grid gap-1">
-            <Label htmlFor="task-timeout">单台超时（秒）</Label>
-            <Input id="task-timeout" type="number" min={10} max={7200} value={timeoutSec} onChange={(event) => setTimeoutSec(event.target.value)} className="w-28" />
-          </div>
-          <Button type="submit" disabled={pending || !picked.length}>
+        <Stack direction="row" spacing={1.5} useFlexGap sx={{ flexWrap: "wrap", alignItems: "flex-end" }}>
+          <TextField id="task-name" label="任务名称" value={name} onChange={(event) => setName(event.target.value)} placeholder="不填就用脚本第一行" sx={{ width: 224 }} />
+          <TextField
+            id="task-concurrency"
+            label="同时执行"
+            type="number"
+            value={concurrency}
+            onChange={(event) => setConcurrency(event.target.value)}
+            slotProps={{ htmlInput: { min: 1, max: 50 } }}
+            sx={{ width: 96 }}
+          />
+          <TextField
+            id="task-timeout"
+            label="单台超时（秒）"
+            type="number"
+            value={timeoutSec}
+            onChange={(event) => setTimeoutSec(event.target.value)}
+            slotProps={{ htmlInput: { min: 10, max: 7200 } }}
+            sx={{ width: 128 }}
+          />
+          <Button type="submit" variant="contained" disabled={pending || !picked.length}>
             {pending ? "正在创建" : picked.length ? `对选中的 ${picked.length} 台执行` : "先在列表里勾选机器"}
           </Button>
-        </div>
-        {error ? <p className="text-sm text-destructive">{error}</p> : null}
-      </form>
+        </Stack>
+        {error ? (
+          <Typography variant="body2" sx={{ color: "error.main" }}>
+            {error}
+          </Typography>
+        ) : null}
+      </Stack>
 
+      <Paper variant="outlined" sx={{ p: 1.5 }}>
+        <Stack spacing={1} sx={{ alignItems: "flex-start" }}>
+          <Typography variant="subtitle2">交付清理</Typography>
+          <Typography variant="body2" sx={{ color: "text.secondary" }}>
+            交付前从机器上撤掉小主机的公钥。上面选了机器就只撤选中的，没选就撤全部已安装的机器。撤完后这些机器不能再从这里管理。
+          </Typography>
+          <Button variant="contained" color="error" disabled={pending} onClick={revoke}>
+            撤掉控制台公钥
+          </Button>
+        </Stack>
+      </Paper>
 
-      <div className="grid gap-2 rounded-lg border p-3">
-        <p className="text-sm font-medium">交付清理</p>
-        <p className="text-sm text-muted-foreground">交付前从机器上撤掉小主机的公钥。上面选了机器就只撤选中的，没选就撤全部已安装的机器。撤完后这些机器不能再从这里管理。</p>
-        <Button type="button" variant="destructive" className="w-fit" disabled={pending} onClick={revoke}>
-          撤掉控制台公钥
-        </Button>
-      </div>
-
-      <div className="grid gap-3">
-        <p className="text-sm font-medium">最近的任务</p>
-        {tasks.length === 0 ? <p className="text-sm text-muted-foreground">还没有执行过任务。</p> : null}
+      <Stack spacing={1.5}>
+        <Typography variant="subtitle2">最近的任务</Typography>
+        {tasks.length === 0 ? (
+          <Typography variant="body2" sx={{ color: "text.secondary" }}>
+            还没有执行过任务。
+          </Typography>
+        ) : null}
         {shownTasks.map((task) => (
-          <details key={task.id} className="rounded-lg border p-3" open={task.status === "running"}>
-            <summary className="flex cursor-pointer flex-wrap items-center gap-2 text-sm">
-              <Badge variant={task.status === "running" ? "outline" : task.targets.every((target) => target.status === "ok") ? "default" : "destructive"}>
-                {task.status === "running" ? "执行中" : "已结束"}
-              </Badge>
-              <span className="font-medium">{task.name}</span>
-              <span className="text-xs text-muted-foreground">{counts(task)}</span>
-              <span className="text-xs text-muted-foreground">{formatTime(task.createdAt)}</span>
-              <Link href={`/tasks/${task.id}`} className="text-xs underline underline-offset-4">
-                详情
-              </Link>
-              {task.status === "done" ? (
-                <Button
-                  type="button"
-                  size="xs"
-                  variant="ghost"
-                  onClick={(event) => {
-                    event.preventDefault();
-                    if (task.kind === "script") {
-                      setScript(task.script);
-                      setName(task.name);
-                      setFileIds(task.fileIds.filter((id) => files.some((file) => file.id === id)));
-                    }
-                    onPick(task.targets.filter((target) => target.status !== "ok").map((target) => target.serverId));
-                  }}
-                >
-                  选中没成功的机器
-                </Button>
-              ) : null}
-            </summary>
-            <div className="mt-3 grid gap-2">
-              {task.targets.map((target) => (
-                <details key={target.serverId} className="rounded-md border px-2 py-1">
-                  <summary className="flex cursor-pointer flex-wrap items-center gap-2 text-sm">
-                    <Badge variant={target.status === "ok" ? "default" : target.status === "running" || target.status === "pending" ? "outline" : "destructive"}>{TARGET[target.status]}</Badge>
-                    <span className="font-mono text-xs">{target.sn}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {target.host || "无地址"}
-                      {target.hostSource ? `（${HOST_SOURCE[target.hostSource]}）` : ""}
-                      {target.exitCode !== null ? ` · 退出码 ${target.exitCode}` : ""}
-                    </span>
-                  </summary>
-                  <pre className="mt-2 max-h-80 overflow-auto rounded bg-muted p-2 text-xs whitespace-pre-wrap">{target.output || "（没有输出）"}</pre>
-                </details>
-              ))}
-            </div>
-          </details>
+          <Accordion key={task.id} variant="outlined" disableGutters defaultExpanded={task.status === "running"} slotProps={{ transition: { unmountOnExit: true } }} sx={FOLD_SX}>
+            <AccordionSummary expandIcon={<ExpandMoreOutlined />}>
+              <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: "wrap", alignItems: "center" }}>
+                <StatusChip
+                  tone={task.status === "running" ? "info" : task.targets.every((target) => target.status === "ok") ? "success" : "error"}
+                  label={task.status === "running" ? "执行中" : "已结束"}
+                />
+                <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                  {task.name}
+                </Typography>
+                <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                  {counts(task)}
+                </Typography>
+                <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                  {formatTime(task.createdAt)}
+                </Typography>
+                <MuiLink component={Link} href={`/tasks/${task.id}`} variant="caption" onClick={(event) => event.stopPropagation()}>
+                  详情
+                </MuiLink>
+                {task.status === "done" ? (
+                  <Button
+                    onClick={(event) => {
+                      // 别顺带把折叠块展开或收起。
+                      event.stopPropagation();
+                      if (task.kind === "script") {
+                        setScript(task.script);
+                        setName(task.name);
+                        setFileIds(task.fileIds.filter((id) => files.some((file) => file.id === id)));
+                      }
+                      onPick(task.targets.filter((target) => target.status !== "ok").map((target) => target.serverId));
+                    }}
+                  >
+                    选中没成功的机器
+                  </Button>
+                ) : null}
+              </Stack>
+            </AccordionSummary>
+            <AccordionDetails>
+              <Stack spacing={1}>
+                {task.targets.map((target) => (
+                  <Accordion key={target.serverId} variant="outlined" disableGutters slotProps={{ transition: { unmountOnExit: true } }} sx={FOLD_SX}>
+                    <AccordionSummary expandIcon={<ExpandMoreOutlined />} sx={{ minHeight: 40, "& .MuiAccordionSummary-content": { my: 0.75 } }}>
+                      <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: "wrap", alignItems: "center" }}>
+                        <StatusChip tone={taskTargetTone(target.status)} label={TARGET[target.status]} />
+                        <Typography variant="caption" sx={{ fontFamily: MONO }}>
+                          {target.sn}
+                        </Typography>
+                        <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                          {target.host || "无地址"}
+                          {target.hostSource ? `（${HOST_SOURCE[target.hostSource]}）` : ""}
+                          {target.exitCode !== null ? ` · 退出码 ${target.exitCode}` : ""}
+                        </Typography>
+                      </Stack>
+                    </AccordionSummary>
+                    <AccordionDetails sx={{ pt: 0 }}>
+                      <Box
+                        component="pre"
+                        sx={{ m: 0, maxHeight: 320, overflow: "auto", borderRadius: 1, bgcolor: "action.hover", p: 1, fontFamily: MONO, fontSize: 12, whiteSpace: "pre-wrap" }}
+                      >
+                        {target.output || "（没有输出）"}
+                      </Box>
+                    </AccordionDetails>
+                  </Accordion>
+                ))}
+              </Stack>
+            </AccordionDetails>
+          </Accordion>
         ))}
         {page ? (
-          <div className="flex flex-wrap items-center gap-2 text-sm">
-            <Button type="button" variant="outline" size="sm" disabled={page <= 1} onClick={() => setTaskPage(page - 1)}>
+          <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: "wrap", alignItems: "center" }}>
+            <Button variant="outlined" disabled={page <= 1} onClick={() => setTaskPage(page - 1)}>
               上一页
             </Button>
-            <span className="text-muted-foreground">
+            <Typography variant="body2" sx={{ color: "text.secondary" }}>
               第 {page} / {taskPages} 页，共 {tasks.length} 条
-            </span>
-            <Button type="button" variant="outline" size="sm" disabled={page >= taskPages} onClick={() => setTaskPage(page + 1)}>
+            </Typography>
+            <Button variant="outlined" disabled={page >= taskPages} onClick={() => setTaskPage(page + 1)}>
               下一页
             </Button>
-            <Button type="button" variant="ghost" size="sm" onClick={() => setTaskPage(0)}>
-              收起
-            </Button>
-          </div>
+            <Button onClick={() => setTaskPage(0)}>收起</Button>
+          </Stack>
         ) : tasks.length > shownTasks.length ? (
-          <Button type="button" variant="ghost" size="sm" className="w-fit" onClick={() => setTaskPage(1)}>
-            显示更多
-          </Button>
+          <Box>
+            <Button onClick={() => setTaskPage(1)}>显示更多</Button>
+          </Box>
         ) : null}
-      </div>
-    </div>
+      </Stack>
+    </Stack>
   );
 }

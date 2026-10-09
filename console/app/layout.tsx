@@ -1,16 +1,13 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { headers } from "next/headers";
-import { Server } from "lucide-react";
-import { Nav } from "@/components/nav";
-import { TaskCenter } from "@/components/task-center";
-import { ThemeProvider } from "@/components/theme-provider";
-import { ThemeToggle } from "@/components/theme-toggle";
+import InitColorSchemeScript from "@mui/material/InitColorSchemeScript";
+import { AppShell } from "@/components/mui/app-shell";
+import { Providers } from "@/components/mui/providers";
 import { UploadProvider } from "@/components/upload-provider";
 import { alertCounts } from "@/lib/alerts";
 import { authenticate } from "@/lib/auth";
 import { openTicketCount } from "@/lib/tickets";
-import "./globals.css";
 
 const geistSans = Geist({
   variable: "--font-sans",
@@ -33,40 +30,20 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
   // 没登录时 middleware 只放行登录页，这时不显示侧栏。
   const identity = authenticate(await headers());
   return (
-    <html lang="zh-CN" suppressHydrationWarning>
-      <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
-        <ThemeProvider>
+    <html lang="zh-CN" className={`${geistSans.variable} ${geistMono.variable}`} suppressHydrationWarning>
+      <body>
+        <InitColorSchemeScript attribute="class" defaultMode="light" />
+        <Providers>
           {identity ? (
             <UploadProvider>
-              <div className="min-h-screen md:grid md:grid-cols-[232px_1fr]">
-                <aside className="bg-sidebar text-sidebar-foreground md:sticky md:top-0 md:flex md:h-screen md:flex-col">
-                  <div className="flex items-center gap-2.5 px-5 pt-5 pb-4">
-                    <span className="flex size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground shadow-sm">
-                      <Server className="size-4" />
-                    </span>
-                    <span className="leading-tight">
-                      <span className="block text-[15px] font-semibold text-sidebar-accent-foreground">资产运维平台</span>
-                      <span className="block text-[11px] tracking-[0.14em] text-sidebar-foreground/55">资产 · 运维 · 装机</span>
-                    </span>
-                  </div>
-                  <Nav
-                    user={{ username: identity.user.username, role: identity.user.role }}
-                    counts={{ alerts: alertCounts(), tickets: openTicketCount() }}
-                  />
-                </aside>
-                <div className="min-w-0">
-                  <div className="sticky top-0 z-30 flex h-12 items-center justify-end gap-2 border-b bg-background/80 px-4 backdrop-blur md:px-8">
-                    <TaskCenter />
-                    <ThemeToggle />
-                  </div>
-                  <main className="mx-auto max-w-[1600px] px-4 py-6 md:px-8 md:py-7">{children}</main>
-                </div>
-              </div>
+              <AppShell user={{ username: identity.user.username, role: identity.user.role }} counts={{ alerts: alertCounts(), tickets: openTicketCount() }}>
+                {children}
+              </AppShell>
             </UploadProvider>
           ) : (
             children
           )}
-        </ThemeProvider>
+        </Providers>
       </body>
     </html>
   );

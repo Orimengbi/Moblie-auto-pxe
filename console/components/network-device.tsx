@@ -2,13 +2,30 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
+import Checkbox from "@mui/material/Checkbox";
+import FormControlLabel from "@mui/material/FormControlLabel";
+import MuiLink from "@mui/material/Link";
+import Paper from "@mui/material/Paper";
+import Stack from "@mui/material/Stack";
+import Table from "@mui/material/Table";
+import TableBody from "@mui/material/TableBody";
+import TableCell from "@mui/material/TableCell";
+import TableContainer from "@mui/material/TableContainer";
+import TableHead from "@mui/material/TableHead";
+import TableRow from "@mui/material/TableRow";
+import TextField from "@mui/material/TextField";
+import Typography from "@mui/material/Typography";
+import { StatusChip } from "@/components/mui/status-chip";
+import { FONT_SANS } from "@/components/mui/theme";
 import { KIND_LABEL } from "@/lib/inventory";
 import type { InventorySnapshot, MonitorState, NetPort } from "@/lib/types";
 import { formatTime } from "@/lib/time";
+
+const MONO = "var(--font-geist-mono), monospace";
+/** 单元格里的第二行小字。 */
+const SUB = { display: "block", color: "text.secondary" } as const;
 
 interface View {
   snapshot: InventorySnapshot | null;
@@ -70,131 +87,194 @@ export function NetworkDevice({ assetId }: { assetId: string }) {
   };
 
   return (
-    <section className="grid gap-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <h3 className="font-medium">端口和部件</h3>
-        <Button type="button" size="sm" className="ml-auto" disabled={Boolean(busy)} onClick={() => void post("", "采集")}>
+    <Stack component="section" spacing={2}>
+      <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center" }}>
+        <Typography variant="h3">端口和部件</Typography>
+        <Button type="button" variant="contained" sx={{ ml: "auto" }} disabled={Boolean(busy)} onClick={() => void post("", "采集")}>
           {busy === "采集" ? "采集中" : "SNMP 采集"}
         </Button>
-        <Button type="button" size="sm" variant="outline" disabled={Boolean(busy)} onClick={() => {
+        <Button
+          type="button"
+          variant="outlined"
+          disabled={Boolean(busy)}
+          onClick={() => {
             if (window.confirm("把现在没 up 的口都当作不用的口？之后它们不再报掉线。")) void post("/baseline", "重置基线");
-          }}>
+          }}
+        >
           重置端口基线
         </Button>
-      </div>
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
-      {!view ? <p className="text-sm text-muted-foreground">正在读取</p> : null}
-      {view && !snapshot ? <p className="text-sm text-muted-foreground">还没采集过。先在「概况 → 编辑资料」里填管理地址、选 SNMP 凭据，再点「SNMP 采集」。</p> : null}
+      </Stack>
+      {error ? (
+        <Typography variant="body2" color="error">
+          {error}
+        </Typography>
+      ) : null}
+      {!view ? (
+        <Typography variant="body2" color="text.secondary">
+          正在读取
+        </Typography>
+      ) : null}
+      {view && !snapshot ? (
+        <Typography variant="body2" color="text.secondary">
+          还没采集过。先在「概况 → 编辑资料」里填管理地址、选 SNMP 凭据，再点「SNMP 采集」。
+        </Typography>
+      ) : null}
 
       {snapshot ? (
         <>
-          <dl className="grid grid-cols-[6rem_1fr] gap-x-3 gap-y-1 text-sm">
-            <dt className="text-muted-foreground">设备名</dt>
-            <dd className="font-mono text-xs leading-5">{snapshot.system?.name || "—"}</dd>
-            <dt className="text-muted-foreground">系统</dt>
-            <dd className="text-xs whitespace-pre-wrap">{snapshot.system?.descr || "—"}</dd>
-            <dt className="text-muted-foreground">运行</dt>
-            <dd className="text-xs">{uptimeText(snapshot.system?.uptime) || "—"}</dd>
-            <dt className="text-muted-foreground">采集</dt>
-            <dd className="text-xs">
+          <Box component="dl" sx={{ display: "grid", gridTemplateColumns: "6rem 1fr", columnGap: 1.5, rowGap: 0.5, m: 0, typography: "body2", "& dt": { color: "text.secondary" }, "& dd": { m: 0, fontSize: 12, lineHeight: "20px" } }}>
+            <dt>设备名</dt>
+            <Box component="dd" sx={{ fontFamily: MONO }}>
+              {snapshot.system?.name || "—"}
+            </Box>
+            <dt>系统</dt>
+            <Box component="dd" sx={{ whiteSpace: "pre-wrap" }}>
+              {snapshot.system?.descr || "—"}
+            </Box>
+            <dt>运行</dt>
+            <dd>{uptimeText(snapshot.system?.uptime) || "—"}</dd>
+            <dt>采集</dt>
+            <dd>
               {formatTime(snapshot.at)}，{snapshot.host}，物理口 {physical.length} 个，up {physical.filter((port) => operOf(port) === "up").length} 个
             </dd>
-          </dl>
-          {snapshot.warnings.length ? <p className="text-xs text-muted-foreground">提示：{snapshot.warnings.join("；")}</p> : null}
+          </Box>
+          {snapshot.warnings.length ? (
+            <Typography variant="caption" color="text.secondary">
+              提示：{snapshot.warnings.join("；")}
+            </Typography>
+          ) : null}
 
-          <div className="flex flex-wrap items-center gap-2">
-            <Input className="h-8 w-56" placeholder="搜口名、描述、对端、光模块 SN" value={q} onChange={(event) => setQ(event.target.value)} />
-            <label className="flex items-center gap-1.5 text-sm">
-              <input type="checkbox" checked={onlyPhysical} onChange={(event) => setOnlyPhysical(event.target.checked)} />
-              只看物理口
-            </label>
-          </div>
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
+          <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center" }}>
+            <TextField placeholder="搜口名、描述、对端、光模块 SN" value={q} onChange={(event) => setQ(event.target.value)} sx={{ width: 224, maxWidth: "100%" }} />
+            <FormControlLabel
+              control={<Checkbox checked={onlyPhysical} onChange={(event) => setOnlyPhysical(event.target.checked)} />}
+              label={<Typography variant="body2">只看物理口</Typography>}
+            />
+          </Stack>
+          <TableContainer component={Paper} variant="outlined">
+            <Table size="small" sx={{ "& td": { fontSize: 12 } }}>
+              <TableHead>
                 <TableRow>
-                  <TableHead>端口</TableHead>
-                  <TableHead>状态</TableHead>
-                  <TableHead>速率</TableHead>
-                  <TableHead>对端</TableHead>
-                  <TableHead>光模块</TableHead>
-                  <TableHead>错包</TableHead>
+                  <TableCell>端口</TableCell>
+                  <TableCell>状态</TableCell>
+                  <TableCell>速率</TableCell>
+                  <TableCell>对端</TableCell>
+                  <TableCell>光模块</TableCell>
+                  <TableCell>错包</TableCell>
                 </TableRow>
-              </TableHeader>
+              </TableHead>
               <TableBody>
                 {ports.map((port) => {
                   const oper = operOf(port);
                   const shouldBeUp = live.get(port.name)?.oper === "was-up";
                   return (
                     <TableRow key={port.index}>
-                      <TableCell className="font-mono text-xs">
+                      <TableCell sx={{ fontFamily: MONO }}>
                         {port.name}
-                        {port.alias ? <span className="block font-sans text-muted-foreground">{port.alias}</span> : null}
+                        {port.alias ? (
+                          <Box component="span" sx={{ ...SUB, fontFamily: FONT_SANS }}>
+                            {port.alias}
+                          </Box>
+                        ) : null}
                       </TableCell>
                       <TableCell>
                         {port.admin === "down" ? (
-                          <span className="text-xs text-muted-foreground">已关闭</span>
+                          <Typography variant="caption" color="text.secondary">
+                            已关闭
+                          </Typography>
                         ) : (
-                          <Badge variant={oper === "up" ? "default" : shouldBeUp ? "destructive" : "outline"}>{oper || "?"}</Badge>
+                          <StatusChip tone={oper === "up" ? "success" : shouldBeUp ? "error" : "neutral"} label={oper || "?"} />
                         )}
                       </TableCell>
-                      <TableCell className="text-xs">{oper === "up" ? speedText(port.speed) : ""}</TableCell>
-                      <TableCell className="text-xs">
+                      <TableCell>{oper === "up" ? speedText(port.speed) : ""}</TableCell>
+                      <TableCell>
                         {port.neighbor ? (
                           <>
                             {port.neighbor.assetId ? (
-                              <Link href={`/assets?open=${port.neighbor.assetId}`} className="font-mono underline underline-offset-4">
+                              <MuiLink component={Link} href={`/assets?open=${port.neighbor.assetId}`} sx={{ fontFamily: MONO }}>
                                 {port.neighbor.assetTag}
-                              </Link>
+                              </MuiLink>
                             ) : (
-                              <span className="font-mono">{port.neighbor.sysName || port.neighbor.chassisId}</span>
+                              <Box component="span" sx={{ fontFamily: MONO }}>
+                                {port.neighbor.sysName || port.neighbor.chassisId}
+                              </Box>
                             )}
-                            <span className="block text-muted-foreground">{port.neighbor.portDesc || port.neighbor.portId}</span>
+                            <Box component="span" sx={SUB}>
+                              {port.neighbor.portDesc || port.neighbor.portId}
+                            </Box>
                           </>
                         ) : (
-                          <span className="text-muted-foreground">—</span>
+                          <Box component="span" sx={{ color: "text.secondary" }}>
+                            —
+                          </Box>
                         )}
                       </TableCell>
-                      <TableCell className="text-xs">
+                      <TableCell>
                         {port.transceiver ? (
                           <>
                             {port.transceiver.model}
-                            <span className="block font-mono text-muted-foreground">{port.transceiver.sn}</span>
+                            <Box component="span" sx={{ ...SUB, fontFamily: MONO }}>
+                              {port.transceiver.sn}
+                            </Box>
                           </>
                         ) : (
-                          <span className="text-muted-foreground">—</span>
+                          <Box component="span" sx={{ color: "text.secondary" }}>
+                            —
+                          </Box>
                         )}
                       </TableCell>
-                      <TableCell className="text-xs tabular-nums">
-                        {port.inErrors || port.outErrors ? `收 ${port.inErrors ?? "?"} / 发 ${port.outErrors ?? "?"}` : <span className="text-muted-foreground">0</span>}
+                      <TableCell sx={{ fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>
+                        {port.inErrors || port.outErrors ? (
+                          `收 ${port.inErrors ?? "?"} / 发 ${port.outErrors ?? "?"}`
+                        ) : (
+                          <Box component="span" sx={{ color: "text.secondary" }}>
+                            0
+                          </Box>
+                        )}
                       </TableCell>
                     </TableRow>
                   );
                 })}
               </TableBody>
             </Table>
-          </div>
+          </TableContainer>
 
-          <section className="grid gap-1.5">
-            <h4 className="text-sm font-medium">部件（ENTITY-MIB）</h4>
+          <Stack component="section" spacing={0.75}>
+            <Typography variant="subtitle2">部件（ENTITY-MIB）</Typography>
             {snapshot.components.length ? (
-              <ul className="grid gap-0.5 text-xs">
-                {snapshot.components.map((item, index) => (
-                  <li key={`${item.slot}-${index}`} className="grid grid-cols-[4rem_10rem_1fr_10rem] gap-2">
-                    <span className="text-muted-foreground">{KIND_LABEL[item.kind]}</span>
-                    <span className="truncate font-mono">{item.slot}</span>
-                    <span className="truncate">{[item.vendor, item.model].filter(Boolean).join(" ")}</span>
-                    <span className="truncate font-mono">{item.sn || "—"}</span>
-                  </li>
-                ))}
-              </ul>
+              <Box sx={{ overflowX: "auto" }}>
+                <Stack component="ul" spacing={0.25} sx={{ m: 0, p: 0, listStyle: "none", minWidth: 480, typography: "caption" }}>
+                  {snapshot.components.map((item, index) => (
+                    <Box
+                      key={`${item.slot}-${index}`}
+                      component="li"
+                      sx={{ display: "grid", gridTemplateColumns: "4rem 10rem 1fr 10rem", gap: 1, "& > span": { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }}
+                    >
+                      <Box component="span" sx={{ color: "text.secondary" }}>
+                        {KIND_LABEL[item.kind]}
+                      </Box>
+                      <Box component="span" sx={{ fontFamily: MONO }}>
+                        {item.slot}
+                      </Box>
+                      <span>{[item.vendor, item.model].filter(Boolean).join(" ")}</span>
+                      <Box component="span" sx={{ fontFamily: MONO }}>
+                        {item.sn || "—"}
+                      </Box>
+                    </Box>
+                  ))}
+                </Stack>
+              </Box>
             ) : (
-              <p className="text-sm text-muted-foreground">设备没有提供 ENTITY-MIB。</p>
+              <Typography variant="body2" color="text.secondary">
+                设备没有提供 ENTITY-MIB。
+              </Typography>
             )}
-            <p className="text-xs text-muted-foreground">历史采集 {view?.history} 份，部件、光模块、对端变了才存新的一份；变化在「变更记录」里。</p>
-          </section>
+            <Typography variant="caption" color="text.secondary">
+              历史采集 {view?.history} 份，部件、光模块、对端变了才存新的一份；变化在「变更记录」里。
+            </Typography>
+          </Stack>
         </>
       ) : null}
-    </section>
+    </Stack>
   );
 }
