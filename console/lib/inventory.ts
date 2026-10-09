@@ -67,6 +67,8 @@ export const ATTR_LABEL: Record<string, string> = {
   length: "距离",
   cable: "线缆",
   rdma: "RDMA",
+  portCount: "口数",
+  portNames: "网口",
   version: "版本",
   releaseDate: "日期",
 };
@@ -119,6 +121,7 @@ have nvidia-smi && timeout 60 nvidia-smi --query-gpu=index,name,serial,uuid,pci.
 sec net
 for n in /sys/class/net/*; do
   [ -e "$n/device" ] || continue
+  [ -e "$n/device/physfn" ] && continue
   i=$(basename "$n")
   echo "--- $i"
   echo "mac: $(cat "$n/address" 2>/dev/null)"
@@ -129,7 +132,7 @@ for n in /sys/class/net/*; do
 done
 sec vpd
 if have lspci; then
-  for bus in $(for n in /sys/class/net/*; do [ -e "$n/device" ] && pci_of "$n"; done | sort -u); do
+  for bus in $(for n in /sys/class/net/*; do [ -e "$n/device" ] && [ ! -e "$n/device/physfn" ] && pci_of "$n"; done | sort -u); do
     echo "--- $bus"
     lspci -s "$bus" 2>/dev/null | head -n 1
     lspci -vvv -s "$bus" 2>/dev/null | sed -n '/Vital Product Data/,/End$/p'
@@ -410,12 +413,14 @@ export function parseOsInventory(text: string): { components: HwComponent[]; war
     }
     vpd.set(item.name, { desc, fields });
   }
+  // 每个网口一条，拓扑和网口页按口用；部件清单里再按物理卡合并。
+  const netPorts: HwComponent[] = [];
   for (const item of splitDashed(sections.get("net") || "")) {
     const fields = colonFields(item.body);
     const pci = fields.pci || "";
     if (!PCI_ADDRESS.test(pci)) continue; // USB 网卡（比如 BMC 的虚拟网口）不算
     const card = vpd.get(pci);
-    components.push(
+    netPorts.push(
       component("nic", item.name, {
         model: clean(card?.fields.product) || clean(card?.desc),
         sn: clean(card?.fields.SN),
@@ -432,8 +437,58 @@ export function parseOsInventory(text: string): { components: HwComponent[]; war
     );
   }
 
+  components.push(...nicCards(netPorts));
   components.push(...opticsComponents(parseOptics(sections.get("optics") || "")));
-  return { components, warnings, topology: buildTopology(sections, components), ports: parseOsPorts(sections, components, parseDmidecode) };
+  const detail = [...components.filter((item) => item.kind !== "nic"), ...netPorts];
+  return { components, warnings, topology: buildTopology(sections, detail), ports: parseOsPorts(sections, detail, parseDmidecode) };
+}
+
+/**
+ * 系统里一块卡的每个 PCI function 都是一个网口（双口 CX8 两个、CX7 mezz 四个），硬件清单只要卡本身：
+ * 同一 PCI 设备（去掉 function 号）合成一条，槽位用第一个口的名字，链路状态、协商速率这类口上的信息去掉（网口页里有）。
+ * 旧的采集记录也按这个合并，免得和新记录比出一堆拆除。没有 PCI 地址的（BMC 采的）原样保留。
+ */
+export function nicCards(components: HwComponent[]): HwComponent[] {
+  const out: HwComponent[] = [];
+  const cards = new Map<string, HwComponent[]>();
+  for (const item of components) {
+    const pci = String(item.attrs.pci || "").toLowerCase();
+    if (item.kind !== "nic" || !PCI_ADDRESS.test(pci)) {
+      out.push(item);
+      continue;
+    }
+    const key = pci.slice(0, -2);
+    if (!cards.has(key)) out.push(item); // 占位，保持原来的顺序
+    cards.set(key, [...(cards.get(key) || []), item]);
+  }
+  return out.map((item) => {
+    const ports = item.kind === "nic" ? cards.get(String(item.attrs.pci || "").toLowerCase().slice(0, -2)) : undefined;
+    if (!ports) return item;
+    if (ports.length === 1) {
+      // 单口卡或已经合并过的，只去掉口上的状态。
+      const rest = { ...item.attrs };
+      delete rest.link;
+      delete rest.speedMbps;
+      return { ...item, attrs: rest };
+    }
+    ports.sort((a, b) => String(a.attrs.pci).localeCompare(String(b.attrs.pci)));
+    const [first] = ports;
+    const pick = (key: string) => ports.map((port) => port.attrs[key]).find((value) => value !== undefined && value !== "");
+    return {
+      ...first,
+      model: ports.map((port) => port.model).find(Boolean) || "",
+      sn: ports.map((port) => port.sn).find(Boolean) || "",
+      firmware: ports.map((port) => port.firmware).find(Boolean) || "",
+      attrs: attrs({
+        mac: first.attrs.mac,
+        pci: first.attrs.pci,
+        driver: pick("driver"),
+        partNumber: pick("partNumber"),
+        portCount: ports.length > 1 ? ports.length : undefined,
+        portNames: ports.length > 1 ? ports.map((port) => port.slot).join(", ") : undefined,
+      }),
+    };
+  });
 }
 
 function rfStr(doc: RedfishDoc | undefined, key: string): string {
@@ -596,8 +651,8 @@ function changedFields(before: HwComponent, after: HwComponent): string[] {
  * 最后按槽位（同一个位置换了部件，算 replaced）；剩下的是新增或拆掉的。
  */
 export function diffComponents(before: HwComponent[], after: HwComponent[]): HwChange[] {
-  const left = [...before];
-  const right = [...after];
+  const left = nicCards(before);
+  const right = nicCards(after);
   const pairs: [HwComponent, HwComponent][] = [];
   const take = (match: (a: HwComponent, b: HwComponent) => boolean) => {
     for (let i = 0; i < right.length; ) {
