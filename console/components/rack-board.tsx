@@ -13,7 +13,8 @@ import { Textarea } from "@/components/ui/textarea";
 import type { AssetRow } from "@/lib/asset-view";
 import { ASSET_STATUS } from "@/lib/asset-labels";
 import type { RackImportRow } from "@/lib/racks";
-import type { AlertSeverity, AssetStatus, FloorItem, Rack, Site } from "@/lib/types";
+import type { AlertSeverity, AssetStatus, Datacenter, FloorItem, Rack, Site } from "@/lib/types";
+import { SiteOptions } from "@/components/site-options";
 import { Labeled } from "@/components/ui/labeled";
 import { api } from "@/lib/client-api";
 
@@ -26,14 +27,16 @@ function tone(status: AssetStatus): string {
   return "bg-secondary text-secondary-foreground border-border";
 }
 
-/** 机房页：选一个机房，它的机柜并排显示，U1 在最下面。点设备看资产，点空 U 位放一台进去。 */
+/** 机房页：先选数据中心，再选里面的机房，机房的机柜并排显示，U1 在最下面。点设备看资产，点空 U 位放一台进去。 */
 export function RackBoard({
+  datacenters,
   sites,
   racks,
   obstacles,
   assets,
   alerts,
 }: {
+  datacenters: Datacenter[];
   sites: Site[];
   racks: Rack[];
   obstacles: FloorItem[];
@@ -42,9 +45,11 @@ export function RackBoard({
 }) {
   const router = useRouter();
   const search = useSearchParams();
+  const [dcId, setDcId] = useState("");
   const [siteId, setSiteId] = useState("");
   const [sideId, setSideId] = useState<string | null>(null);
   const [siteForm, setSiteForm] = useState<Site | "new" | null>(null);
+  const [dcForm, setDcForm] = useState<Datacenter | "new" | null>(null);
   const [rackForm, setRackForm] = useState<Rack | "new" | null>(null);
   const [placing, setPlacing] = useState<{ rack: Rack; u: number } | null>(null);
   const [importing, setImporting] = useState(false);
@@ -78,29 +83,53 @@ export function RackBoard({
   }, [focusRack, view]);
   const [error, setError] = useState("");
 
+  // 网址里的 ?site= / ?dc= 优先，其次是这个浏览器上次看的机房或数据中心，再不然第一个数据中心的第一个机房。
   useEffect(() => {
-    const wanted = search.get("site");
-    let saved = "";
+    let saved = { site: "", dc: "" };
     try {
-      saved = localStorage.getItem("pxe-rack-site") || "";
+      saved = { site: localStorage.getItem("pxe-rack-site") || "", dc: localStorage.getItem("pxe-rack-dc") || "" };
     } catch {
-      // 读不到就用第一个机房。
+      // 读不到就用第一个。
     }
-    const pick = [wanted, saved].find((id) => id && sites.some((site) => site.id === id)) || sites[0]?.id || "";
-    setSiteId(pick);
-  }, [search, sites]);
+    const wantedDc = search.get("dc");
+    const knownSite = (id: string | null) => Boolean(id && sites.some((site) => site.id === id));
+    const knownDc = (id: string | null) => Boolean(id && datacenters.some((item) => item.id === id));
+    const pickSite = [search.get("site"), wantedDc ? "" : saved.site].find(knownSite) || "";
+    const dc = sites.find((site) => site.id === pickSite)?.datacenterId || [wantedDc, saved.dc].find(knownDc) || datacenters[0]?.id || "";
+    setDcId(dc);
+    setSiteId(pickSite || sites.find((site) => site.datacenterId === dc)?.id || "");
+  }, [search, sites, datacenters]);
 
-  function chooseSite(id: string) {
-    setSiteId(id);
+  function remember(key: string, value: string) {
     try {
-      localStorage.setItem("pxe-rack-site", id);
+      localStorage.setItem(key, value);
     } catch {
       // 存不了也能用。
     }
   }
 
-  const site = sites.find((item) => item.id === siteId) || null;
-  const siteRacks = racks.filter((rack) => rack.siteId === siteId);
+  function chooseSite(id: string) {
+    setSiteId(id);
+    remember("pxe-rack-site", id);
+    const dc = sites.find((item) => item.id === id)?.datacenterId;
+    if (dc) {
+      setDcId(dc);
+      remember("pxe-rack-dc", dc);
+    }
+  }
+
+  function chooseDatacenter(id: string) {
+    setDcId(id);
+    remember("pxe-rack-dc", id);
+    const first = sites.find((item) => item.datacenterId === id);
+    setSiteId(first?.id || "");
+    remember("pxe-rack-site", first?.id || "");
+  }
+
+  const datacenter = datacenters.find((item) => item.id === dcId) || null;
+  const dcSites = sites.filter((item) => item.datacenterId === dcId);
+  const site = dcSites.find((item) => item.id === siteId) || null;
+  const siteRacks = racks.filter((rack) => rack.siteId === site?.id);
   const byRack = useMemo(() => {
     const map = new Map<string, AssetRow[]>();
     for (const asset of assets) if (asset.rackId) map.set(asset.rackId, [...(map.get(asset.rackId) || []), asset]);
@@ -109,11 +138,22 @@ export function RackBoard({
   const usedU = (rack: Rack) => (byRack.get(rack.id) || []).filter((asset) => asset.uStart && asset.uHeight > 0).reduce((sum, asset) => sum + asset.uHeight, 0);
   const siteTotal = siteRacks.reduce((sum, rack) => sum + rack.heightU, 0);
   const siteUsed = siteRacks.reduce((sum, rack) => sum + usedU(rack), 0);
+  const dcRacks = racks.filter((rack) => dcSites.some((item) => item.id === rack.siteId));
+  const dcTotal = dcRacks.reduce((sum, rack) => sum + rack.heightU, 0);
+  const dcUsed = dcRacks.reduce((sum, rack) => sum + usedU(rack), 0);
+  const percent = (used: number, total: number) => (total ? `（${Math.round((used / total) * 100)}%）` : "");
   const sideRow = assets.find((asset) => asset.id === sideId) || null;
 
   async function removeRack(rack: Rack) {
     if (!window.confirm(`删除机柜 ${rack.name}？`)) return;
     const result = await api(`/api/racks/${rack.id}`, "DELETE");
+    setError(result.ok ? "" : result.error);
+    router.refresh();
+  }
+
+  async function removeDatacenter(target: Datacenter) {
+    if (!window.confirm(`删除数据中心「${target.name}」？`)) return;
+    const result = await api(`/api/datacenters/${target.id}`, "DELETE");
     setError(result.ok ? "" : result.error);
     router.refresh();
   }
@@ -128,26 +168,53 @@ export function RackBoard({
   return (
     <div className="grid gap-4">
       <div className="flex flex-wrap items-center gap-2">
-        {sites.map((item) => (
-          <Button key={item.id} type="button" size="sm" variant={item.id === siteId ? "default" : "outline"} onClick={() => chooseSite(item.id)}>
+        <span className="w-14 text-sm text-muted-foreground">数据中心</span>
+        {datacenters.map((item) => (
+          <Button key={item.id} type="button" size="sm" variant={item.id === dcId ? "default" : "outline"} onClick={() => chooseDatacenter(item.id)}>
             {item.code} · {item.name}
           </Button>
         ))}
-        <Button type="button" size="sm" variant="ghost" onClick={() => setSiteForm("new")}>
-          新建机房
+        <Button type="button" size="sm" variant="ghost" onClick={() => setDcForm("new")}>
+          新建数据中心
         </Button>
       </div>
+      {datacenter ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="w-14 text-sm text-muted-foreground">机房</span>
+          {dcSites.map((item) => (
+            <Button key={item.id} type="button" size="sm" variant={item.id === site?.id ? "default" : "outline"} onClick={() => chooseSite(item.id)}>
+              {item.code} · {item.name}
+            </Button>
+          ))}
+          <Button type="button" size="sm" variant="ghost" onClick={() => setSiteForm("new")}>
+            新建机房
+          </Button>
+          <span className="ml-auto flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+            {datacenter.address ? `${datacenter.address} · ` : ""}
+            {dcSites.length} 个机房，{dcRacks.length} 个机柜，U 位用了 {dcUsed} / {dcTotal}
+            {percent(dcUsed, dcTotal)}
+            <Button type="button" size="xs" variant="outline" onClick={() => setDcForm(datacenter)}>
+              编辑数据中心
+            </Button>
+            <Button type="button" size="xs" variant="ghost" onClick={() => void removeDatacenter(datacenter)}>
+              删除数据中心
+            </Button>
+          </span>
+        </div>
+      ) : null}
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
 
-      {!site ? (
-        <p className="text-sm text-muted-foreground">还没有机房。先新建一个机房，再在里面建机柜，然后把资产放进机柜的 U 位。</p>
+      {!datacenter ? (
+        <p className="text-sm text-muted-foreground">还没有数据中心。从大到小依次建：数据中心 → 机房 → 机柜，然后把资产放进机柜的 U 位。</p>
+      ) : !site ? (
+        <p className="text-sm text-muted-foreground">「{datacenter.name}」里还没有机房。点「新建机房」建一个，再在里面建机柜。</p>
       ) : (
         <>
           <div className="flex flex-wrap items-center gap-3 text-sm">
             <span className="text-muted-foreground">
               {site.address ? `${site.address} · ` : ""}
               {siteRacks.length} 个机柜，U 位用了 {siteUsed} / {siteTotal}
-              {siteTotal ? `（${Math.round((siteUsed / siteTotal) * 100)}%）` : ""}
+              {percent(siteUsed, siteTotal)}
             </span>
             <Button type="button" size="xs" variant="outline" onClick={() => setSiteForm(site)}>
               编辑机房
@@ -174,10 +241,10 @@ export function RackBoard({
             <p className="text-sm text-muted-foreground">这个机房还没有机柜。点「新建机柜」，可以一次建一排，例如 A01 到 A20。</p>
           ) : view === "floor" ? (
             <RackFloor
-              key={siteId}
-              siteId={siteId}
+              key={site.id}
+              siteId={site.id}
               racks={siteRacks}
-              obstacles={obstacles.filter((item) => item.siteId === siteId)}
+              obstacles={obstacles.filter((item) => item.siteId === site.id)}
               assets={assets}
               alerts={alerts}
               onOpenRack={(rackId) => {
@@ -207,12 +274,26 @@ export function RackBoard({
         </>
       )}
 
-      <SiteDialog site={siteForm} onClose={() => setSiteForm(null)} onSaved={(id) => {
+      <DatacenterDialog
+        datacenter={dcForm}
+        onClose={() => setDcForm(null)}
+        onSaved={(id) => {
+          chooseDatacenter(id);
+          router.refresh();
+        }}
+      />
+      <SiteDialog
+        site={siteForm}
+        datacenters={datacenters}
+        datacenterId={dcId}
+        onClose={() => setSiteForm(null)}
+        onSaved={(id) => {
           chooseSite(id);
           router.refresh();
-        }} />
-      <RackDialog rack={rackForm} sites={sites} siteId={siteId} onClose={() => setRackForm(null)} onSaved={() => router.refresh()} />
-      <RackImportDialog open={importing} siteId={siteId} siteCode={site?.code || ""} onClose={() => setImporting(false)} onDone={() => router.refresh()} />
+        }}
+      />
+      <RackDialog rack={rackForm} sites={sites} datacenters={datacenters} siteId={site?.id || ""} onClose={() => setRackForm(null)} onSaved={() => router.refresh()} />
+      <RackImportDialog open={importing} siteId={site?.id || ""} siteCode={site?.code || ""} onClose={() => setImporting(false)} onDone={() => router.refresh()} />
       <PlaceDialog target={placing} assets={assets} occupied={placing ? byRack.get(placing.rack.id) || [] : []} onClose={() => setPlacing(null)} onSaved={() => router.refresh()} />
       <ServerSidebar
         row={sideRow ? { id: sideRow.id, sn: sideRow.sn, tag: sideRow.tag, type: sideRow.type, description: [sideRow.tag, ASSET_STATUS[sideRow.status], sideRow.place, [sideRow.vendor, sideRow.model].filter(Boolean).join(" ")].filter(Boolean).join(" · ") } : null}
@@ -325,15 +406,88 @@ function RackColumn({
 }
 
 
-function SiteDialog({ site, onClose, onSaved }: { site: Site | "new" | null; onClose: () => void; onSaved: (id: string) => void }) {
-  const editing = site && site !== "new" ? site : null;
+/** 数据中心：代码、名称、地址。 */
+function DatacenterDialog({ datacenter, onClose, onSaved }: { datacenter: Datacenter | "new" | null; onClose: () => void; onSaved: (id: string) => void }) {
+  const editing = datacenter && datacenter !== "new" ? datacenter : null;
   const [form, setForm] = useState({ code: "", name: "", address: "", note: "" });
   const [error, setError] = useState("");
   useEffect(() => {
-    if (!site) return;
+    if (!datacenter) return;
     setForm(editing ? { code: editing.code, name: editing.name, address: editing.address, note: editing.note } : { code: "", name: "", address: "", note: "" });
     setError("");
-  }, [site, editing]);
+  }, [datacenter, editing]);
+
+  async function save(event: React.FormEvent) {
+    event.preventDefault();
+    const result = await api(editing ? `/api/datacenters/${editing.id}` : "/api/datacenters", editing ? "PATCH" : "POST", form);
+    if (!result.ok) {
+      setError(result.error);
+      return;
+    }
+    onSaved(String(result.data.id));
+    onClose();
+  }
+
+  return (
+    <Dialog open={Boolean(datacenter)} onOpenChange={(open) => (open ? undefined : onClose())}>
+      <DialogContent className="sm:max-w-lg">
+        <form onSubmit={save} className="grid gap-4">
+          <DialogHeader>
+            <DialogTitle>{editing ? `编辑 ${editing.name}` : "新建数据中心"}</DialogTitle>
+            <DialogDescription>数据中心是最大的一层，下面是机房、机柜和设备。代码是简称，例如 KIX13。</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3 sm:grid-cols-[8rem_1fr]">
+            <Labeled label="代码">
+              <Input value={form.code} onChange={(event) => setForm({ ...form, code: event.target.value })} required className="font-mono uppercase" placeholder="KIX13" />
+            </Labeled>
+            <Labeled label="名称">
+              <Input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required placeholder="大阪 KIX13" />
+            </Labeled>
+          </div>
+          <Labeled label="地址">
+            <Input value={form.address} onChange={(event) => setForm({ ...form, address: event.target.value })} />
+          </Labeled>
+          <Labeled label="备注">
+            <Textarea value={form.note} onChange={(event) => setForm({ ...form, note: event.target.value })} className="min-h-16" />
+          </Labeled>
+          {error ? <p className="text-sm text-destructive">{error}</p> : null}
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="ghost" onClick={onClose}>
+              取消
+            </Button>
+            <Button type="submit">保存</Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function SiteDialog({
+  site,
+  datacenters,
+  datacenterId,
+  onClose,
+  onSaved,
+}: {
+  site: Site | "new" | null;
+  datacenters: Datacenter[];
+  datacenterId: string;
+  onClose: () => void;
+  onSaved: (id: string) => void;
+}) {
+  const editing = site && site !== "new" ? site : null;
+  const [form, setForm] = useState({ datacenterId: "", code: "", name: "", address: "", note: "" });
+  const [error, setError] = useState("");
+  useEffect(() => {
+    if (!site) return;
+    setForm(
+      editing
+        ? { datacenterId: editing.datacenterId, code: editing.code, name: editing.name, address: editing.address, note: editing.note }
+        : { datacenterId, code: "", name: "", address: "", note: "" },
+    );
+    setError("");
+  }, [site, editing, datacenterId]);
 
   async function save(event: React.FormEvent) {
     event.preventDefault();
@@ -352,18 +506,27 @@ function SiteDialog({ site, onClose, onSaved }: { site: Site | "new" | null; onC
         <form onSubmit={save} className="grid gap-4">
           <DialogHeader>
             <DialogTitle>{editing ? `编辑 ${editing.name}` : "新建机房"}</DialogTitle>
-            <DialogDescription>代码是简称，显示在资产位置里，例如 SZ1 / A01 / U10。</DialogDescription>
+            <DialogDescription>代码是简称，在所有数据中心里不能重复，显示在资产位置里，例如 S110 / A01 / U10。</DialogDescription>
           </DialogHeader>
+          <Labeled label="数据中心">
+            <NativeSelect value={form.datacenterId} onChange={(event) => setForm({ ...form, datacenterId: event.target.value })} required>
+              {datacenters.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.code} · {item.name}
+                </option>
+              ))}
+            </NativeSelect>
+          </Labeled>
           <div className="grid gap-3 sm:grid-cols-[8rem_1fr]">
             <Labeled label="代码">
-              <Input value={form.code} onChange={(event) => setForm({ ...form, code: event.target.value })} required className="font-mono uppercase" placeholder="SZ1" />
+              <Input value={form.code} onChange={(event) => setForm({ ...form, code: event.target.value })} required className="font-mono uppercase" placeholder="S110" />
             </Labeled>
             <Labeled label="名称">
-              <Input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required placeholder="深圳一号机房" />
+              <Input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required placeholder="S110 机房" />
             </Labeled>
           </div>
-          <Labeled label="地址">
-            <Input value={form.address} onChange={(event) => setForm({ ...form, address: event.target.value })} />
+          <Labeled label="位置">
+            <Input value={form.address} onChange={(event) => setForm({ ...form, address: event.target.value })} placeholder="例如 3 楼" />
           </Labeled>
           <Labeled label="备注">
             <Textarea value={form.note} onChange={(event) => setForm({ ...form, note: event.target.value })} className="min-h-16" />
@@ -406,7 +569,21 @@ function batchPreview(rows: string[], from: number, to: number, pad: number): { 
   return { lines, total: rows.length * (to - from + 1) };
 }
 
-function RackDialog({ rack, sites, siteId, onClose, onSaved }: { rack: Rack | "new" | null; sites: Site[]; siteId: string; onClose: () => void; onSaved: () => void }) {
+function RackDialog({
+  rack,
+  sites,
+  datacenters,
+  siteId,
+  onClose,
+  onSaved,
+}: {
+  rack: Rack | "new" | null;
+  sites: Site[];
+  datacenters: Datacenter[];
+  siteId: string;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
   const editing = rack && rack !== "new" ? rack : null;
   const [batch, setBatch] = useState(true);
   const [form, setForm] = useState({ siteId: "", name: "", rowLabel: "", heightU: "42", powerKw: "", note: "", rowFrom: "A", rowTo: "A", from: "1", to: "10", pad: "2" });
@@ -471,11 +648,7 @@ function RackDialog({ rack, sites, siteId, onClose, onSaved }: { rack: Rack | "n
           <div className="grid gap-3 sm:grid-cols-2">
             <Labeled label="机房">
               <NativeSelect {...field("siteId")}>
-                {sites.map((site) => (
-                  <option key={site.id} value={site.id}>
-                    {site.code} · {site.name}
-                  </option>
-                ))}
+                <SiteOptions sites={sites} datacenters={datacenters} />
               </NativeSelect>
             </Labeled>
             {batch ? (

@@ -267,6 +267,24 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX floor_items_site ON floor_items(site_id);
   `,
+  // 机房上面加一层数据中心。已经有机房的，建一个默认数据中心把它们都放进去，之后在页面上改名。
+  `
+  CREATE TABLE datacenters (
+    id TEXT PRIMARY KEY,
+    code TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    address TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  ALTER TABLE sites ADD COLUMN datacenter_id TEXT REFERENCES datacenters(id);
+  CREATE INDEX sites_datacenter ON sites(datacenter_id);
+  INSERT INTO datacenters (id, code, name, note, created_at, updated_at)
+    SELECT lower(hex(randomblob(16))), 'DC1', '默认数据中心', '升级时自动建的，原来的机房都放在这里，改成实际的代码和名称', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE EXISTS (SELECT 1 FROM sites);
+  UPDATE sites SET datacenter_id = (SELECT id FROM datacenters LIMIT 1) WHERE datacenter_id IS NULL;
+  `,
 ];
 
 let opened: { file: string; db: Database } | null = null;

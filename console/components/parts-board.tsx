@@ -10,7 +10,8 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { PART_KINDS, PART_STATUS, partStatusVariant } from "@/lib/asset-labels";
-import type { Part, PartEvent, PartKind, PartStatus, Site } from "@/lib/types";
+import type { Datacenter, Part, PartEvent, PartKind, PartStatus, Site } from "@/lib/types";
+import { SiteOptions } from "@/components/site-options";
 import { formatTime } from "@/lib/time";
 import { Labeled } from "@/components/ui/labeled";
 import { api } from "@/lib/client-api";
@@ -19,7 +20,19 @@ type AssetRef = { id: string; tag: string };
 
 
 /** 备件库：上面按类型和型号汇总在库数量，下面是每一件。 */
-export function PartsBoard({ parts, summary, sites, assets }: { parts: Part[]; summary: { kind: PartKind; model: string; count: number }[]; sites: Site[]; assets: AssetRef[] }) {
+export function PartsBoard({
+  parts,
+  summary,
+  sites,
+  datacenters,
+  assets,
+}: {
+  parts: Part[];
+  summary: { kind: PartKind; model: string; count: number }[];
+  sites: Site[];
+  datacenters: Datacenter[];
+  assets: AssetRef[];
+}) {
   const router = useRouter();
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("");
@@ -176,14 +189,14 @@ export function PartsBoard({ parts, summary, sites, assets }: { parts: Part[]; s
         {shown.length > 1000 ? <p className="mt-2 text-xs text-muted-foreground">只显示前 1000 件，用筛选缩小范围。</p> : null}
       </div>
 
-      <ReceiveDialog open={receiving} sites={sites} onClose={() => setReceiving(false)} onDone={() => router.refresh()} />
-      <PartDialog part={detail} sites={sites} onClose={() => setDetail(null)} onChanged={() => router.refresh()} />
+      <ReceiveDialog open={receiving} sites={sites} datacenters={datacenters} onClose={() => setReceiving(false)} onDone={() => router.refresh()} />
+      <PartDialog part={detail} sites={sites} datacenters={datacenters} onClose={() => setDetail(null)} onChanged={() => router.refresh()} />
     </div>
   );
 }
 
 
-function ReceiveDialog({ open, sites, onClose, onDone }: { open: boolean; sites: Site[]; onClose: () => void; onDone: () => void }) {
+function ReceiveDialog({ open, sites, datacenters, onClose, onDone }: { open: boolean; sites: Site[]; datacenters: Datacenter[]; onClose: () => void; onDone: () => void }) {
   const blank = { kind: "gpu", model: "", vendor: "", siteId: "", bin: "", supplier: "", purchaseOrder: "", warrantyEnd: "", note: "", sns: "", quantity: "1" };
   const [form, setForm] = useState(blank);
   const [error, setError] = useState("");
@@ -233,11 +246,7 @@ function ReceiveDialog({ open, sites, onClose, onDone }: { open: boolean; sites:
             <Labeled label="存放机房">
               <NativeSelect {...field("siteId")}>
                 <option value="">不指定</option>
-                {sites.map((site) => (
-                  <option key={site.id} value={site.id}>
-                    {site.code} · {site.name}
-                  </option>
-                ))}
+                <SiteOptions sites={sites} datacenters={datacenters} />
               </NativeSelect>
             </Labeled>
             <Labeled label="库位">
@@ -280,7 +289,7 @@ function ReceiveDialog({ open, sites, onClose, onDone }: { open: boolean; sites:
 }
 
 /** 一件备件的资料和流转记录，可以改资料、挪库位。 */
-function PartDialog({ part, sites, onClose, onChanged }: { part: Part | null; sites: Site[]; onClose: () => void; onChanged: () => void }) {
+function PartDialog({ part, sites, datacenters, onClose, onChanged }: { part: Part | null; sites: Site[]; datacenters: Datacenter[]; onClose: () => void; onChanged: () => void }) {
   const [events, setEvents] = useState<PartEvent[]>([]);
   const [asset, setAsset] = useState<{ id: string; tag: string } | null>(null);
   const [form, setForm] = useState({ model: "", vendor: "", sn: "", siteId: "", bin: "", supplier: "", purchaseOrder: "", warrantyEnd: "", note: "" });
@@ -345,11 +354,7 @@ function PartDialog({ part, sites, onClose, onChanged }: { part: Part | null; si
               <Labeled label="存放机房">
                 <NativeSelect {...field("siteId")}>
                   <option value="">不指定</option>
-                  {sites.map((site) => (
-                    <option key={site.id} value={site.id}>
-                      {site.code} · {site.name}
-                    </option>
-                  ))}
+                  <SiteOptions sites={sites} datacenters={datacenters} />
                 </NativeSelect>
               </Labeled>
               <Labeled label="库位">

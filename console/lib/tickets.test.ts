@@ -12,8 +12,13 @@ const parts = await import("./parts.ts");
 const tickets = await import("./tickets.ts");
 const racks = await import("./racks.ts");
 
+/** 测试里的机房都放在同一个数据中心。 */
+function testDatacenter(racks: typeof import("./racks.ts")): string {
+  return racks.listDatacenters()[0]?.id || racks.createDatacenter({ code: "T1", name: "测试数据中心" }).id;
+}
+
 test("parts are received, moved and summarised", () => {
-  const site = racks.createSite({ code: "WH", name: "备件库" });
+  const site = racks.createSite({ datacenterId: testDatacenter(racks), code: "WH", name: "备件库" });
   const gpus = parts.receiveParts({ kind: "gpu", model: "NVIDIA B300", sns: "GPU-A\nGPU-B, GPU-C", siteId: site.id, bin: "架 1" }, "alice");
   assert.equal(gpus.length, 3);
   assert.throws(() => parts.receiveParts({ kind: "gpu", model: "NVIDIA B300", sns: ["gpu-a"] }, "alice"), /已经在备件库里/, "序列号不分大小写");

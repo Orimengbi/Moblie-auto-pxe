@@ -540,7 +540,7 @@ export function importAssets(records: { row: number; cells: SheetCells }[], acto
         if (first) throw new Error(`和第 ${first} 行是同一个序列号`);
         seen.set(sn, record.row);
         const input: AssetInput = {};
-        if (cells.site && !cells.rack) throw new Error("填了机房就要填机柜");
+        if ((cells.site || cells.datacenter) && !cells.rack) throw new Error(`填了${cells.site ? "机房" : "数据中心"}就要填机柜`);
         for (const [field, value] of Object.entries(cells) as [keyof SheetCells, string][]) {
           if (field === "sn" || !value) continue;
           if (field === "type") {
@@ -551,16 +551,17 @@ export function importAssets(records: { row: number; cells: SheetCells }[], acto
             const status = parseStatus(value);
             if (!status) throw new Error(`状态「${value}」认不出，写 ${Object.values(ASSET_STATUS).join("、")} 之一`);
             input.status = status;
-          } else if (field === "site") {
+          } else if (field === "site" || field === "datacenter") {
             continue;
           } else if (field === "rack") {
             if (["无", "-", "none"].includes(value.trim().toLowerCase())) {
               input.rackId = null;
               continue;
             }
-            const rack = rackFinder(cells.site || "", value);
+            const rack = rackFinder(cells.site || "", value, cells.datacenter || "");
             if (rack === "ambiguous") throw new Error(`好几个机房都有机柜 ${value}，在「机房」列写明是哪个`);
-            if (!rack) throw new Error(`${cells.site ? `机房「${cells.site}」里` : ""}没有机柜 ${value}，先在机房页建好`);
+            const where = [cells.datacenter ? `数据中心「${cells.datacenter}」` : "", cells.site ? `机房「${cells.site}」` : ""].filter(Boolean).join("的");
+            if (!rack) throw new Error(`${where ? `${where}里` : ""}没有机柜 ${value}，先在机房页建好`);
             input.rackId = rack.id;
           } else if (field === "snmpProfile") {
             if (["无", "-", "none"].includes(value.trim().toLowerCase())) {

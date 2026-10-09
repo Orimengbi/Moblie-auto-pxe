@@ -1,14 +1,30 @@
 import { assertCodeFree, countWhere, db, runOrPreview, transaction, type SqlValue } from "./db.ts";
 import { cleanCode, cleanName, cleanText } from "./validate.ts";
-import type { FloorItem, FloorItemKind, Rack, RackFacing, Site } from "./types.ts";
+import type { Datacenter, FloorItem, FloorItemKind, Rack, RackFacing, Site } from "./types.ts";
 
-/** 机房和机柜。资产放在哪个机柜、哪几个 U 记在资产上（rack_id、u_start、u_height），这里只管机房和机柜本身。 */
+/**
+ * 数据中心、机房和机柜，从大到小：数据中心 → 机房 → 机柜 → 设备。
+ * 资产放在哪个机柜、哪几个 U 记在资产上（rack_id、u_start、u_height），这里只管数据中心、机房和机柜本身。
+ */
 
 export const MAX_RACK_U = 60;
+
+function toDatacenter(row: Record<string, SqlValue>): Datacenter {
+  return {
+    id: String(row.id),
+    code: String(row.code),
+    name: String(row.name),
+    address: String(row.address),
+    note: String(row.note),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
 
 function toSite(row: Record<string, SqlValue>): Site {
   return {
     id: String(row.id),
+    datacenterId: String(row.datacenter_id ?? ""),
     code: String(row.code),
     name: String(row.name),
     address: String(row.address),
@@ -36,6 +52,53 @@ function toRack(row: Record<string, SqlValue>): Rack {
   };
 }
 
+export function listDatacenters(): Datacenter[] {
+  return db().prepare("SELECT * FROM datacenters ORDER BY code").all().map(toDatacenter);
+}
+
+export function getDatacenter(id: string): Datacenter | null {
+  const row = db().prepare("SELECT * FROM datacenters WHERE id = ?").get(id);
+  return row ? toDatacenter(row) : null;
+}
+
+export interface DatacenterInput {
+  code?: string;
+  name?: string;
+  address?: string;
+  note?: string;
+}
+
+function cleanDatacenter(input: DatacenterInput, id: string | null): Pick<Datacenter, "code" | "name" | "address" | "note"> {
+  const code = cleanCode(input.code, "数据中心代码");
+  const name = cleanName(input.name, "数据中心名称");
+  assertCodeFree("datacenters", code, id, "数据中心代码");
+  return { code, name, address: cleanText(input.address, 200), note: cleanText(input.note, 1000) };
+}
+
+export function createDatacenter(input: DatacenterInput): Datacenter {
+  const clean = cleanDatacenter(input, null);
+  const now = new Date().toISOString();
+  const id = crypto.randomUUID();
+  db().prepare("INSERT INTO datacenters (id, code, name, address, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(id, clean.code, clean.name, clean.address, clean.note, now, now);
+  return getDatacenter(id)!;
+}
+
+export function updateDatacenter(id: string, input: DatacenterInput): Datacenter {
+  if (!getDatacenter(id)) throw new Error("数据中心不存在");
+  const clean = cleanDatacenter(input, id);
+  db().prepare("UPDATE datacenters SET code = ?, name = ?, address = ?, note = ?, updated_at = ? WHERE id = ?").run(clean.code, clean.name, clean.address, clean.note, new Date().toISOString(), id);
+  return getDatacenter(id)!;
+}
+
+export function deleteDatacenter(id: string): Datacenter {
+  const datacenter = getDatacenter(id);
+  if (!datacenter) throw new Error("数据中心不存在");
+  const sites = countWhere("sites", "datacenter_id", id);
+  if (sites) throw new Error(`「${datacenter.name}」里还有 ${sites} 个机房，先删掉或挪走机房`);
+  db().prepare("DELETE FROM datacenters WHERE id = ?").run(id);
+  return datacenter;
+}
+
 export function listSites(): Site[] {
   return db().prepare("SELECT * FROM sites ORDER BY code").all().map(toSite);
 }
@@ -59,31 +122,41 @@ export function getRack(id: string): Rack | null {
 }
 
 export interface SiteInput {
+  datacenterId?: string;
   code?: string;
   name?: string;
   address?: string;
   note?: string;
 }
 
-function cleanSite(input: SiteInput, id: string | null): Pick<Site, "code" | "name" | "address" | "note"> {
+/** 机房代码在所有数据中心里唯一，资产位置「机房代码 / 机柜号 / U 位」和 Excel 里只写机房代码就能认出是哪个机房。 */
+function cleanSite(input: SiteInput, id: string | null): Pick<Site, "datacenterId" | "code" | "name" | "address" | "note"> {
+  const datacenter = getDatacenter(String(input.datacenterId ?? ""));
+  if (!datacenter) throw new Error("选的数据中心不存在");
   const code = cleanCode(input.code, "机房代码");
   const name = cleanName(input.name, "机房名称");
   assertCodeFree("sites", code, id, "机房代码");
-  return { code, name, address: cleanText(input.address, 200), note: cleanText(input.note, 1000) };
+  return { datacenterId: datacenter.id, code, name, address: cleanText(input.address, 200), note: cleanText(input.note, 1000) };
 }
 
 export function createSite(input: SiteInput): Site {
   const clean = cleanSite(input, null);
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
-  db().prepare("INSERT INTO sites (id, code, name, address, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(id, clean.code, clean.name, clean.address, clean.note, now, now);
+  db()
+    .prepare("INSERT INTO sites (id, datacenter_id, code, name, address, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+    .run(id, clean.datacenterId, clean.code, clean.name, clean.address, clean.note, now, now);
   return getSite(id)!;
 }
 
+/** 改 datacenterId 就是把整个机房（连同机柜和设备）挪到另一个数据中心。 */
 export function updateSite(id: string, input: SiteInput): Site {
-  if (!getSite(id)) throw new Error("机房不存在");
-  const clean = cleanSite(input, id);
-  db().prepare("UPDATE sites SET code = ?, name = ?, address = ?, note = ?, updated_at = ? WHERE id = ?").run(clean.code, clean.name, clean.address, clean.note, new Date().toISOString(), id);
+  const current = getSite(id);
+  if (!current) throw new Error("机房不存在");
+  const clean = cleanSite({ ...input, datacenterId: input.datacenterId ?? current.datacenterId }, id);
+  db()
+    .prepare("UPDATE sites SET datacenter_id = ?, code = ?, name = ?, address = ?, note = ?, updated_at = ? WHERE id = ?")
+    .run(clean.datacenterId, clean.code, clean.name, clean.address, clean.note, new Date().toISOString(), id);
   return getSite(id)!;
 }
 
@@ -208,9 +281,16 @@ export function createRacks(input: RackInput & { prefix?: string; from?: number 
   });
 }
 
-export const RACK_SHEET_HEADERS = ["机房", "机柜号", "列/排", "高度U", "额定功率", "备注"];
+export const RACK_SHEET_HEADERS = ["机房", "机柜号", "列/排", "高度U", "额定功率", "朝向", "不可用", "备注"];
 
-const RACK_HEADER: Record<string, "site" | "name" | "rowLabel" | "heightU" | "powerKw" | "note"> = {
+type RackSheetField = "site" | "name" | "rowLabel" | "heightU" | "powerKw" | "facing" | "disabled" | "note";
+
+const RACK_HEADER: Record<string, RackSheetField> = {
+  朝向: "facing",
+  正面朝向: "facing",
+  不可用: "disabled",
+  是否不可用: "disabled",
+  状态: "disabled",
   机房: "site",
   机房代码: "site",
   机柜: "name",
@@ -226,6 +306,23 @@ const RACK_HEADER: Record<string, "site" | "name" | "rowLabel" | "heightU" | "po
   功率: "powerKw",
   备注: "note",
 };
+
+/** Excel 里的朝向：上、朝上、up、北 → up；下、朝下、down、南 → down；不设、无、- → 空。 */
+function parseFacing(value: string): RackFacing {
+  const key = value.trim().toLowerCase();
+  if (["上", "朝上", "up", "u", "北", "前"].includes(key)) return "up";
+  if (["下", "朝下", "down", "d", "南", "后"].includes(key)) return "down";
+  if (["", "不设", "无", "-", "none"].includes(key)) return "";
+  throw new Error(`朝向「${value}」认不出，写「上」或「下」`);
+}
+
+/** 是、不可用、y、1、true → true；否、可用、n、0、false → false。 */
+function parseYes(value: string): boolean {
+  const key = value.trim().toLowerCase();
+  if (["是", "不可用", "y", "yes", "1", "true", "√"].includes(key)) return true;
+  if (["否", "可用", "n", "no", "0", "false", ""].includes(key)) return false;
+  throw new Error(`「不可用」列写「是」或「否」，不认「${value}」`);
+}
 
 export interface RackImportRow {
   row: number;
@@ -250,7 +347,7 @@ export function importRacks(rows: unknown[][], defaultSiteId: string | null, opt
     for (let i = headerAt + 1; i < rows.length; i++) {
       const raw = rows[i] || [];
       if (!raw.some((cell) => String(cell ?? "").trim())) continue;
-      const cells: Partial<Record<"site" | "name" | "rowLabel" | "heightU" | "powerKw" | "note", string>> = {};
+      const cells: Partial<Record<RackSheetField, string>> = {};
       fields.forEach((field, column) => {
         const value = String(raw[column] ?? "").trim();
         if (field && value) cells[field] = value;
@@ -261,10 +358,13 @@ export function importRacks(rows: unknown[][], defaultSiteId: string | null, opt
         if (!site) throw new Error(cells.site ? `没有机房「${cells.site}」，先建好` : "没写机房");
         entry.site = site.code;
         if (!cells.name) throw new Error("没写机柜号");
+        const facing = cells.facing !== undefined ? parseFacing(cells.facing) : undefined;
+        const disabled = cells.disabled !== undefined ? parseYes(cells.disabled) : undefined;
         transaction(db(), () => {
           const existing = listRacks(site.id).find((rack) => rack.name === cells.name);
           if (!existing) {
-            createRack({ siteId: site.id, name: cells.name, rowLabel: cells.rowLabel, heightU: cells.heightU ?? 42, powerKw: cells.powerKw, note: cells.note });
+            const made = createRack({ siteId: site.id, name: cells.name, rowLabel: cells.rowLabel, heightU: cells.heightU ?? 42, powerKw: cells.powerKw, note: cells.note, disabled });
+            if (facing) db().prepare("UPDATE racks SET facing = ? WHERE id = ?").run(facing, made.id);
             entry.action = "create";
             result.created++;
             return;
@@ -274,12 +374,21 @@ export function importRacks(rows: unknown[][], defaultSiteId: string | null, opt
             heightU: cells.heightU !== undefined ? Number(cells.heightU) : existing.heightU,
             powerKw: cells.powerKw ?? existing.powerKw,
             note: cells.note ?? existing.note,
+            disabled: disabled ?? existing.disabled,
+            facing: facing ?? existing.facing,
           };
-          const changed = (["rowLabel", "heightU", "powerKw", "note"] as const).filter((field) => wanted[field] !== existing[field]);
+          const changed = (["rowLabel", "heightU", "powerKw", "note", "disabled", "facing"] as const).filter((field) => wanted[field] !== existing[field]);
           // 没变的不写，免得白白改更新时间。
-          const next = changed.length ? updateRack(existing.id, { siteId: site.id, name: existing.name, ...wanted, heightU: cells.heightU ?? existing.heightU }) : existing;
+          let next = existing;
+          if (changed.length) {
+            next = updateRack(existing.id, { siteId: site.id, name: existing.name, ...wanted, heightU: cells.heightU ?? existing.heightU });
+            if (wanted.facing !== existing.facing) db().prepare("UPDATE racks SET facing = ? WHERE id = ?").run(wanted.facing, existing.id);
+            next = { ...next, facing: wanted.facing };
+          }
+          const show = (field: (typeof changed)[number], value: unknown) =>
+            field === "disabled" ? (value ? "不可用" : "可用") : field === "facing" ? ({ "": "不设", up: "朝上", down: "朝下" } as Record<string, string>)[String(value)] : String(value || "空");
           entry.action = changed.length ? "update" : "same";
-          entry.message = changed.map((field) => `${{ rowLabel: "列/排", heightU: "高度", powerKw: "功率", note: "备注" }[field]}：${existing[field] || "空"} → ${next[field] || "空"}`).join("，");
+          entry.message = changed.map((field) => `${{ rowLabel: "列/排", heightU: "高度", powerKw: "功率", note: "备注", disabled: "状态", facing: "朝向" }[field]}：${show(field, existing[field])} → ${show(field, next[field])}`).join("，");
           if (changed.length) result.updated++;
         });
       } catch (error) {
@@ -322,18 +431,24 @@ export function placeLabel(asset: { rackId: string | null; uStart: number | null
 }
 
 /**
- * 按机房代码或名称、机柜号找机柜（Excel 导入用）。只给机柜号时要在所有机房里唯一。
- * 返回的函数里机房和机柜表只读一次，整个导入复用。机房名不分大小写。
+ * 按数据中心、机房（代码或名称）和机柜号找机柜（Excel 导入用）。数据中心和机房都可以不写，但找到的机柜要唯一。
+ * 返回的函数里这几张表只读一次，整个导入复用。代码和名称不分大小写。
  */
-export function cachedRackFinder(): (siteText: string, rackName: string) => Rack | null | "ambiguous" {
+export function cachedRackFinder(): (siteText: string, rackName: string, datacenterText?: string) => Rack | null | "ambiguous" {
+  const datacenters = listDatacenters();
   const sites = listSites();
   const racks = listRacks();
-  return (siteText, rackName) => {
+  const same = (item: { code: string; name: string }, key: string) => item.code.toLowerCase() === key || item.name.toLowerCase() === key;
+  return (siteText, rackName, datacenterText = "") => {
+    const dcKey = datacenterText.trim().toLowerCase();
+    const datacenter = dcKey ? datacenters.find((item) => same(item, dcKey)) : null;
+    if (dcKey && !datacenter) return null;
     const key = siteText.trim().toLowerCase();
-    const site = key ? sites.find((item) => item.code.toLowerCase() === key || item.name.toLowerCase() === key) : null;
+    const site = key ? sites.find((item) => (!datacenter || item.datacenterId === datacenter.id) && same(item, key)) : null;
     if (key && !site) return null;
+    const inDatacenter = new Set(sites.filter((item) => !datacenter || item.datacenterId === datacenter.id).map((item) => item.id));
     const name = rackName.trim().toLowerCase();
-    const matches = racks.filter((rack) => (!site || rack.siteId === site.id) && rack.name.toLowerCase() === name);
+    const matches = racks.filter((rack) => (site ? rack.siteId === site.id : inDatacenter.has(rack.siteId)) && rack.name.toLowerCase() === name);
     if (matches.length > 1) return "ambiguous";
     return matches[0] || null;
   };
@@ -347,6 +462,8 @@ export interface LayoutItem {
   x: number | null;
   y: number | null;
   facing?: RackFacing;
+  /** 不给就不改。 */
+  disabled?: boolean;
 }
 
 const FLOOR_KINDS: FloorItemKind[] = ["pillar", "ac", "power", "blocked", "other"];
@@ -376,11 +493,26 @@ export function floorItemCells(item: Pick<FloorItem, "x" | "y" | "w" | "h">): st
  * 保存一个机房的俯视图布局。racks 只改给了的机柜；obstacles 给了就整体替换这个机房的障碍物（柱子等）。
  * 机柜和机柜、机柜和障碍物、障碍物和障碍物都不能占同一格。没摆过位置（自动排布）的机柜在页面上已经避开障碍物，这里不查。
  */
-export function saveLayout(siteId: string, items: LayoutItem[], obstacles?: Omit<FloorItem, "id" | "siteId">[]): { racks: Rack[]; obstacles: FloorItem[] } {
+export function saveLayout(
+  siteId: string,
+  items: LayoutItem[],
+  obstacles?: Omit<FloorItem, "id" | "siteId">[],
+  /** 要删掉的机柜（批量改成柱子等障碍物时用，障碍物本身在 obstacles 里）。必须是空柜。 */
+  remove: string[] = [],
+): { racks: Rack[]; obstacles: FloorItem[] } {
   if (!getSite(siteId)) throw new Error("机房不存在");
   return transaction(db(), () => {
     const racks = new Map(listRacks(siteId).map((rack) => [rack.id, rack]));
     const now = new Date().toISOString();
+    for (const id of remove) {
+      const rack = racks.get(id);
+      if (!rack) throw new Error("要删的机柜不在这个机房里，刷新页面再改");
+      const used = countWhere("assets", "rack_id", id);
+      if (used) throw new Error(`机柜 ${rack.name} 里还有 ${used} 台设备，不能改成障碍物`);
+      db().prepare("DELETE FROM racks WHERE id = ?").run(id);
+      racks.delete(id);
+    }
+    items = items.filter((item) => !remove.includes(item.id));
     for (const item of items) {
       const rack = racks.get(item.id);
       if (!rack) throw new Error("布局里有不属于这个机房的机柜，刷新页面再改");
@@ -388,8 +520,15 @@ export function saveLayout(siteId: string, items: LayoutItem[], obstacles?: Omit
       if (placed && (![item.x, item.y].every((value) => Number.isInteger(value) && value! >= 0 && value! < MAX_FLOOR))) throw new Error(`机柜 ${rack.name} 的位置不对`);
       const facing = item.facing ?? rack.facing;
       if (!["", "up", "down"].includes(facing)) throw new Error("朝向只能是上、下或不设");
-      racks.set(rack.id, { ...rack, posX: placed ? item.x : null, posY: placed ? item.y : null, facing });
-      db().prepare("UPDATE racks SET pos_x = ?, pos_y = ?, facing = ?, updated_at = ? WHERE id = ?").run(placed ? item.x : null, placed ? item.y : null, facing, now, rack.id);
+      const disabled = item.disabled ?? rack.disabled;
+      if (disabled && !rack.disabled) {
+        const used = countWhere("assets", "rack_id", rack.id);
+        if (used) throw new Error(`机柜 ${rack.name} 里还有 ${used} 台设备，先挪走再设成不可用`);
+      }
+      racks.set(rack.id, { ...rack, posX: placed ? item.x : null, posY: placed ? item.y : null, facing, disabled });
+      db()
+        .prepare("UPDATE racks SET pos_x = ?, pos_y = ?, facing = ?, disabled = ?, updated_at = ? WHERE id = ?")
+        .run(placed ? item.x : null, placed ? item.y : null, facing, disabled ? 1 : 0, now, rack.id);
     }
     if (obstacles) {
       if (obstacles.length > 1000) throw new Error("障碍物太多了");

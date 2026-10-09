@@ -1,5 +1,5 @@
 import { ASSET_STATUS, ASSET_TYPES } from "./asset-labels.ts";
-import type { Asset, AssetStatus, AssetType, Customer, Rack, Site } from "./types.ts";
+import type { Asset, AssetStatus, AssetType, Customer, Datacenter, Rack, Site } from "./types.ts";
 
 /**
  * 资产的 Excel：模板、导出和导入用同一套列。导入时按序列号对上已有资产，只改填了的格子；
@@ -15,6 +15,7 @@ export type SheetField =
   | "customer"
   | "owner"
   | "location"
+  | "datacenter"
   | "site"
   | "rack"
   | "uStart"
@@ -50,7 +51,8 @@ export const SHEET_COLUMNS: { field: SheetField; header: string; aliases: string
   { field: "model", header: "型号", aliases: ["model", "机型"] },
   { field: "customer", header: "归属客户", aliases: ["客户", "归属", "客户代码"] },
   { field: "owner", header: "负责人", aliases: [] },
-  { field: "site", header: "机房", aliases: ["机房代码", "idc", "数据中心"] },
+  { field: "datacenter", header: "数据中心", aliases: ["数据中心代码", "idc", "dc"] },
+  { field: "site", header: "机房", aliases: ["机房代码"] },
   { field: "rack", header: "机柜", aliases: ["机柜号", "rack"] },
   { field: "uStart", header: "起始U", aliases: ["u位", "起始u位", "ustart"] },
   { field: "uHeight", header: "占用U", aliases: ["高度u", "u数", "uheight"] },
@@ -155,7 +157,15 @@ export function parseStatus(value: string): AssetStatus | null {
 }
 
 /** 导出：表头一行，一台一行，最前面加「编号」列给人看。不带密码。 */
-export function assetsToRows(assets: Asset[], customers: Customer[], racks: Rack[] = [], sites: Site[] = [], snmpProfiles: { id: string; name: string }[] = []): string[][] {
+export function assetsToRows(
+  assets: Asset[],
+  customers: Customer[],
+  racks: Rack[] = [],
+  sites: Site[] = [],
+  snmpProfiles: { id: string; name: string }[] = [],
+  datacenters: Datacenter[] = [],
+): string[][] {
+  const datacenterById = new Map(datacenters.map((item) => [item.id, item]));
   const profileById = new Map(snmpProfiles.map((item) => [item.id, item.name]));
   const byId = new Map(customers.map((item) => [item.id, item]));
   const rackById = new Map(racks.map((item) => [item.id, item]));
@@ -171,6 +181,7 @@ export function assetsToRows(assets: Asset[], customers: Customer[], racks: Rack
         if (column.field === "customer") return asset.customerId ? byId.get(asset.customerId)?.code || "" : "";
         const rack = asset.rackId ? rackById.get(asset.rackId) : undefined;
         if (column.field === "site") return rack ? siteById.get(rack.siteId)?.code || "" : "";
+        if (column.field === "datacenter") return rack ? datacenterById.get(siteById.get(rack.siteId)?.datacenterId || "")?.code || "" : "";
         if (column.field === "rack") return rack?.name || "";
         if (column.field === "uStart") return asset.uStart ? String(asset.uStart) : "";
         if (column.field === "uHeight") return String(asset.uHeight);
@@ -188,6 +199,7 @@ export const TEMPLATE_EXAMPLE: Partial<Record<SheetField, string>> = {
   vendor: "Gigabyte",
   model: "G894-SD3",
   customer: "示例：客户代码或名称，留空不改，写「自有」清空",
+  datacenter: "数据中心代码，可以不写",
   site: "机房代码",
   rack: "A01",
   uStart: "10",

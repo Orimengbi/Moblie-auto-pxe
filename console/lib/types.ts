@@ -741,11 +741,24 @@ export interface TagSettings {
   typeCodes: Record<AssetType, string>;
 }
 
-/** 机房。 */
-export interface Site {
+/** 数据中心：最上面一层，下面是机房、机柜、设备。 */
+export interface Datacenter {
   id: string;
   code: string;
   name: string;
+  address: string;
+  note: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** 机房：数据中心里的一个房间（模块）。代码在所有数据中心里唯一。 */
+export interface Site {
+  id: string;
+  datacenterId: string;
+  code: string;
+  name: string;
+  /** 在数据中心里的位置，例如 3 楼。 */
   address: string;
   note: string;
   createdAt: string;
