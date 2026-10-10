@@ -102,6 +102,8 @@ export function AssetList({
   const [sideId, setSideId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [importing, setImporting] = useState(false);
+  // 从右上角任务列表点开的后台导入。
+  const [importJob, setImportJob] = useState<string | null>(null);
   const [powerTargets, setPowerTargets] = useState<AssetRow[]>([]);
   const [consoleRow, setConsoleRow] = useState<AssetRow | null>(null);
   const [bulkStatus, setBulkStatus] = useState("");
@@ -128,6 +130,13 @@ export function AssetList({
     }
     const open = search.get("open");
     if (open) setSideId(open);
+    const job = search.get("import");
+    if (job) {
+      setImportJob(job);
+      setImporting(true);
+      // 只认一次，关掉窗口后刷新页面不再弹出来。
+      window.history.replaceState(null, "", window.location.pathname);
+    }
   }, [search]);
 
   // 拖过的列宽记在这个浏览器里，键名和格式沿用以前的表格（列 key → 像素）。
@@ -474,7 +483,15 @@ export function AssetList({
           setSideId(asset.id);
         }}
       />
-      <AssetImportDialog open={importing} onClose={() => setImporting(false)} onDone={() => router.refresh()} />
+      <AssetImportDialog
+        open={importing}
+        jobId={importJob}
+        onClose={() => {
+          setImporting(false);
+          setImportJob(null);
+        }}
+        onDone={() => router.refresh()}
+      />
       <ServerPowerDialog targets={powerTargets} onClose={() => setPowerTargets([])} />
       {consoleRow ? <RemoteConsole row={consoleRow} port={bmcPort} onClose={() => setConsoleRow(null)} /> : null}
       <ServerSidebar
