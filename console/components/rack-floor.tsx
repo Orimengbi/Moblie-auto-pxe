@@ -3,10 +3,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
+import Checkbox from "@mui/material/Checkbox";
 import Dialog from "@mui/material/Dialog";
 import DialogActions from "@mui/material/DialogActions";
 import DialogContent from "@mui/material/DialogContent";
 import DialogTitle from "@mui/material/DialogTitle";
+import FormControlLabel from "@mui/material/FormControlLabel";
 import Paper from "@mui/material/Paper";
 import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
@@ -31,7 +33,7 @@ import PowerSettingsNewOutlined from "@mui/icons-material/PowerSettingsNewOutlin
 import { FLOOR_ITEM_KINDS, RACK_FACING } from "@/lib/asset-labels";
 import type { AssetRow } from "@/lib/asset-view";
 import { api } from "@/lib/client-api";
-import { floorPositions, moveKeys, paintCells, planProblem, shiftRow, type Plan } from "@/lib/floor";
+import { fillCells, floorPositions, moveKeys, paintCells, planProblem, shiftRow, takenCells, type Plan } from "@/lib/floor";
 import type { AlertSeverity, FloorItem, FloorItemKind, FloorWall, Rack, RackFacing } from "@/lib/types";
 
 const CELL_W = 64;
@@ -173,7 +175,9 @@ export function RackFloor({
   const [tool, setTool] = useState<FloorItemKind | "">("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
-  const [drag, setDrag] = useState<{ type: "move" | "box" | "paint"; x0: number; y0: number; x1: number; y1: number; merge?: boolean } | null>(null);
+  const [drag, setDrag] = useState<{ type: "move" | "box" | "paint"; x0: number; y0: number; x1: number; y1: number; merge?: boolean; add?: boolean } | null>(null);
+  /** 选中的空格子放东西时合成一整块。 */
+  const [mergeFill, setMergeFill] = useState(false);
   /** Ctrl+C 复制的东西，Ctrl+V 粘到鼠标所在的格子。 */
   const [clipboard, setClipboard] = useState<Obstacle[]>([]);
   const hover = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -252,8 +256,9 @@ export function RackFloor({
 
   /** 把选中的东西整体挪 dx、dy 格。墙上的只沿着墙挪。 */
   function moveSelection(dx: number, dy: number) {
-    if (!plan || (!dx && !dy) || !selected.size) return;
-    tryCommit(moveKeys(plan, selected, dx, dy));
+    const keys = [...selected].filter((key) => !key.startsWith("c:"));
+    if (!plan || (!dx && !dy) || !keys.length) return;
+    if (tryCommit(moveKeys(plan, keys, dx, dy))) setSelected(new Set(keys));
   }
 
   function newItem(kind: FloorItemKind, x: number, y: number, side: FloorWall = ""): Obstacle {
@@ -342,7 +347,7 @@ export function RackFloor({
     if (!plan) return;
     const ids = [...selected].filter((key) => key.startsWith("i:")).map((key) => key.slice(2));
     if (!ids.length) {
-      setError("要删机柜，点上面的「删除机柜」");
+      if (selRacks.length) setError("要删机柜，点上面的「删除机柜」");
       return;
     }
     commit({ ...plan, items: plan.items.filter((item) => !ids.includes(item.id)) });
@@ -362,6 +367,15 @@ export function RackFloor({
     commit({ ...plan, removed: [...new Set([...plan.removed, ...empty])] });
     setSelected(new Set(busy.map((id) => `r:${id}`)));
     if (busy.length) setError(`${busy.map(rackName).join("、")} 里放着设备，没删；其他 ${empty.length} 个保存时删掉`);
+  }
+
+  /** 在选中的空格子上放 kind；mergeFill 时合成一整块。 */
+  function fillSelected(kind: FloorItemKind) {
+    if (!plan || !selCells.length) return;
+    let n = 0;
+    const made = fillCells(plan, kind, selCells, mergeFill, () => `new-${Date.now()}-${n++}`);
+    if (!made.length) return setError(mergeFill ? "选的格子要正好拼成一个长方形才能合成一块，最大 20×20" : "选的格子都有东西了");
+    if (tryCommit({ ...plan, items: [...plan.items, ...made] })) setSelected(new Set(made.map((item) => `i:${item.id}`)));
   }
 
   function selectAll() {
@@ -472,9 +486,9 @@ export function RackFloor({
       return;
     }
     if (key && !selected.has(key)) setSelected(new Set([key]));
-    if (!key && !additive) setSelected(new Set());
+    // 空白处不在按下时清空选择：清空会让上面的工具栏变高变矮，画布跟着跳，框就选歪了。松开时再换。
     event.currentTarget.setPointerCapture(event.pointerId);
-    setDrag({ type: key ? "move" : "box", x0: px, y0: py, x1: px, y1: py });
+    setDrag({ type: key ? "move" : "box", x0: px, y0: py, x1: px, y1: py, add: additive });
   }
 
   function onPointerMove(event: React.PointerEvent<HTMLDivElement>) {
@@ -497,6 +511,20 @@ export function RackFloor({
     if (cx >= 0 && cy >= 0) addItem(kind, cx, cy);
   }
 
+  /** 框（像素）碰到的机柜、障碍物，withCells 时还有框里的空格子，加到 base 上。 */
+  function boxKeys(target: Plan, base: Set<Key>, left: number, right: number, top: number, bottom: number, withCells: boolean): Set<Key> {
+    const hit = (box: { left: number; top: number; width: number; height: number }) => box.left < right && box.left + box.width > left && box.top < bottom && box.top + box.height > top;
+    const keys = new Set(base);
+    for (const cell of cells) if (hit({ left: cell.x * CELL_W, top: cell.y * CELL_H, width: CELL_W, height: CELL_H })) keys.add(`r:${cell.rack.id}`);
+    for (const item of target.items) if (hit(itemBox(item, target.room))) keys.add(`i:${item.id}`);
+    if (withCells) {
+      const taken = takenCells(target);
+      for (let y = Math.max(0, Math.floor(top / CELL_H)); y < Math.min(height, Math.ceil(bottom / CELL_H)); y++)
+        for (let x = Math.max(0, Math.floor(left / CELL_W)); x < Math.min(width, Math.ceil(right / CELL_W)); x++) if (!taken.has(`${x},${y}`)) keys.add(`c:${x},${y}`);
+    }
+    return keys;
+  }
+
   const dragCells = drag?.type === "move" ? { dx: Math.round((drag.x1 - drag.x0) / CELL_W), dy: Math.round((drag.y1 - drag.y0) / CELL_H) } : { dx: 0, dy: 0 };
 
   function onPointerUp() {
@@ -507,7 +535,13 @@ export function RackFloor({
       if (c0 === c1 && r0 === r1) return placeOne(tool, c0, r0);
       let n = 0;
       const made = paintCells(plan, tool, c0, r0, c1, r1, Boolean(drag.merge), () => `new-${Date.now()}-${n++}`);
-      if (!made.length) return setError(drag.merge ? "合成一块要整块都空着，最大 20×20" : "这块里没有空格子");
+      if (!made.length && drag.merge) return setError("合成一块要整块都空着，最大 20×20");
+      if (!made.length) {
+        // 拖过的这片都有东西了，多半是想选它们：退出放置，把这片里的东西选上。
+        setTool("");
+        setSelected(boxKeys(plan, new Set(), Math.min(drag.x0, drag.x1), Math.max(drag.x0, drag.x1) + 1, Math.min(drag.y0, drag.y1), Math.max(drag.y0, drag.y1) + 1, false));
+        return setError("这片都已经有东西了，已经帮你选上，可以在上面一起改");
+      }
       if (tryCommit({ ...plan, items: [...plan.items, ...made] })) setSelected(new Set(made.map((item) => `i:${item.id}`)));
       return;
     }
@@ -515,12 +549,17 @@ export function RackFloor({
     else {
       const [left, right] = [Math.min(drag.x0, drag.x1), Math.max(drag.x0, drag.x1)];
       const [top, bottom] = [Math.min(drag.y0, drag.y1), Math.max(drag.y0, drag.y1)];
-      if (right - left > 4 || bottom - top > 4) {
-        const hit = (box: { left: number; top: number; width: number; height: number }) => box.left < right && box.left + box.width > left && box.top < bottom && box.top + box.height > top;
-        const keys = new Set(selected);
-        for (const cell of cells) if (hit({ left: cell.x * CELL_W, top: cell.y * CELL_H, width: CELL_W, height: CELL_H })) keys.add(`r:${cell.rack.id}`);
-        for (const item of plan.items) if (hit(itemBox(item, plan.room))) keys.add(`i:${item.id}`);
-        setSelected(keys);
+      if (right - left > 4 || bottom - top > 4) setSelected(boxKeys(plan, drag.add ? selected : new Set(), left, right, top, bottom, true));
+      else {
+        // 点一下空格子：选上这格，Shift/Ctrl 点是加选或取消。
+        const [cx, cy] = [Math.floor(drag.x0 / CELL_W), Math.floor(drag.y0 / CELL_H)];
+        if (cx >= 0 && cy >= 0 && cx < width && cy < height && !occupant(plan, cx, cy)) {
+          const key = `c:${cx},${cy}`;
+          const next = new Set(drag.add ? selected : []);
+          if (drag.add && next.has(key)) next.delete(key);
+          else next.add(key);
+          setSelected(next);
+        } else if (!drag.add) setSelected(new Set());
       }
     }
     setDrag(null);
@@ -565,6 +604,11 @@ export function RackFloor({
   // ---------- 画 ----------
 
   const selRacks = [...selected].filter((key) => key.startsWith("r:")).map((key) => key.slice(2));
+  // 选中的空格子；之后放了东西的格子不算。
+  const takenNow = takenCells(view);
+  const selCells = [...selected]
+    .filter((key) => key.startsWith("c:") && !takenNow.has(key.slice(2)))
+    .map((key) => key.slice(2).split(",").map(Number) as [number, number]);
   const selItems = view.items.filter((item) => selected.has(`i:${item.id}`));
   const single = selItems.length === 1 && selected.size === 1 ? selItems[0] : null;
   const commonFacing = selRacks.length && selRacks.every((id) => view.racks[id]?.facing === view.racks[selRacks[0]]?.facing) ? view.racks[selRacks[0]]?.facing : null;
@@ -622,6 +666,8 @@ export function RackFloor({
                 size="small"
                 value={tool}
                 onChange={(_, next: FloorItemKind | "" | null) => {
+                  // 先选了空格子再点类型：直接放到这些格子上。
+                  if (next && selCells.length) return fillSelected(next);
                   setTool(next ?? "");
                   setSelected(new Set());
                 }}
@@ -677,8 +723,28 @@ export function RackFloor({
             ) : selected.size ? (
               <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center" }}>
                 <Typography variant="caption">
-                  选了 {selected.size} 个{selRacks.length ? `（机柜 ${selRacks.length}）` : ""}
+                  选了{[selRacks.length ? ` ${selRacks.length} 个机柜` : "", selItems.length ? ` ${selItems.length} 个柱子空调等` : "", selCells.length ? ` ${selCells.length} 个空格子` : ""].filter(Boolean).join("、")}
                 </Typography>
+                {selCells.length ? (
+                  <>
+                    <TextField
+                      select
+                      size="small"
+                      slotProps={{ select: { native: true }, htmlInput: { "aria-label": "在选中的空格子放" } }}
+                      value=""
+                      onChange={(event) => event.target.value && fillSelected(event.target.value as FloorItemKind)}
+                      sx={{ bgcolor: "background.paper" }}
+                    >
+                      <option value="">空格子放…</option>
+                      {(Object.keys(FLOOR_ITEM_KINDS) as FloorItemKind[]).map((kind) => (
+                        <option key={kind} value={kind}>
+                          {FLOOR_ITEM_KINDS[kind]}
+                        </option>
+                      ))}
+                    </TextField>
+                    <FormControlLabel control={<Checkbox size="small" checked={mergeFill} onChange={(event) => setMergeFill(event.target.checked)} />} label={<Typography variant="caption">合成一整块</Typography>} sx={{ mr: 0 }} />
+                  </>
+                ) : null}
                 {selRacks.length ? (
                   <>
                     <Typography variant="caption" sx={{ color: "text.secondary" }}>
@@ -786,7 +852,7 @@ export function RackFloor({
             ) : (
               <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center" }}>
                 <Typography variant="caption" sx={{ color: "text.secondary" }}>
-                  点选，Shift/Ctrl 加选，在空白处拖框多选；拖动或按方向键整体挪；选了机柜后能一起改朝向、设不可用、选同一排、删除；选了几个柱子空调等能一起改类型和名字；Ctrl+C / Ctrl+V 复制到鼠标所在的格子；Delete 删除；Ctrl+Z 撤销。
+                  先选后改：点格子或在空白处拖框选（空格子也能选），Shift/Ctrl 继续加选，选完再点上面的「柱子」等放到选中的空格子上；拖动或按方向键整体挪；选了机柜后能一起改朝向、设不可用、选同一排、删除；选了几个柱子空调等能一起改类型和名字；Ctrl+C / Ctrl+V 复制到鼠标所在的格子；Delete 删除；Ctrl+Z 撤销。
                 </Typography>
                 <Button type="button" size="small" onClick={selectAll}>
                   全选
@@ -852,6 +918,22 @@ export function RackFloor({
               ))
             : null}
 
+          {selCells.map(([x, y]) => (
+            <Box
+              key={`c:${x},${y}`}
+              sx={(theme) => ({
+                position: "absolute",
+                left: pad + x * CELL_W + 1,
+                top: pad + y * CELL_H + 1,
+                width: CELL_W - 2,
+                height: CELL_H - 2,
+                border: "2px dashed",
+                borderColor: "primary.main",
+                bgcolor: theme.alpha((theme.vars || theme).palette.primary.main, 0.12),
+                pointerEvents: "none",
+              })}
+            />
+          ))}
           {view.items.map((item) => {
             const key = `i:${item.id}`;
             const box = itemBox(item, view.room);

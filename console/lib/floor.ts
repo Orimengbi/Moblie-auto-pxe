@@ -110,23 +110,52 @@ export function moveKeys(plan: Plan, keys: Iterable<string>, dx: number, dy: num
 }
 
 /**
- * 拖出一块区域放东西：(x0,y0) 到 (x1,y1) 这块里空着的格子每格放一个；merge 时整块放一个大的（要整块都空着）。
- * 机柜和已有的东西占着的格子跳过。返回新放的东西，没地方放时是空数组。
+ * 在选中的格子上放东西：空着的格子每格放一个；merge 时放一个大的盖住全部（这些格子要正好拼成一个都空着的矩形，最大 20×20）。
+ * 机柜和已有的东西占着的、出了机房墙的格子跳过。返回新放的东西，没地方放时是空数组。
  */
-export function paintCells(plan: Plan, kind: FloorItem["kind"], x0: number, y0: number, x1: number, y1: number, merge: boolean, makeId: () => string): Plan["items"] {
-  const [left, right, top, bottom] = [Math.max(0, Math.min(x0, x1)), Math.max(x0, x1), Math.max(0, Math.min(y0, y1)), Math.max(y0, y1)];
-  const taken = new Set<string>();
-  for (const [id, pos] of Object.entries(plan.racks)) if (!plan.removed.includes(id)) taken.add(`${pos.x},${pos.y}`);
-  for (const item of plan.items) if (!item.side) for (let dx = 0; dx < item.w; dx++) for (let dy = 0; dy < item.h; dy++) taken.add(`${item.x + dx},${item.y + dy}`);
+export function fillCells(plan: Plan, kind: FloorItem["kind"], cells: Iterable<readonly [number, number]>, merge: boolean, makeId: () => string): Plan["items"] {
+  const taken = takenCells(plan);
+  const inside = (x: number, y: number) => x >= 0 && y >= 0 && (!plan.room.w || (x < plan.room.w && y < plan.room.h));
+  const seen = new Set<string>();
   const free: [number, number][] = [];
-  for (let y = top; y <= bottom; y++) for (let x = left; x <= right; x++) if (!taken.has(`${x},${y}`)) free.push([x, y]);
+  for (const [x, y] of cells) {
+    const key = `${x},${y}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (inside(x, y) && !taken.has(key)) free.push([x, y]);
+  }
+  free.sort((a, b) => a[1] - b[1] || a[0] - b[0]);
   if (merge) {
-    const w = right - left + 1;
-    const h = bottom - top + 1;
+    if (!free.length || free.length !== seen.size) return [];
+    const xs = free.map(([x]) => x);
+    const ys = free.map(([, y]) => y);
+    const [left, top] = [Math.min(...xs), Math.min(...ys)];
+    const w = Math.max(...xs) - left + 1;
+    const h = Math.max(...ys) - top + 1;
     if (free.length !== w * h || w > 20 || h > 20) return [];
     return [{ id: makeId(), kind, label: "", x: left, y: top, w, h, side: "" }];
   }
   return free.map(([x, y]) => ({ id: makeId(), kind, label: "", x, y, w: 1, h: 1, side: "" }));
+}
+
+/** 机房里被机柜和障碍物占着的格子，"x,y"。 */
+export function takenCells(plan: Plan): Set<string> {
+  const taken = new Set<string>();
+  for (const [id, pos] of Object.entries(plan.racks)) if (!plan.removed.includes(id)) taken.add(`${pos.x},${pos.y}`);
+  for (const item of plan.items) if (!item.side) for (let dx = 0; dx < item.w; dx++) for (let dy = 0; dy < item.h; dy++) taken.add(`${item.x + dx},${item.y + dy}`);
+  return taken;
+}
+
+/** (x0,y0) 到 (x1,y1) 这块矩形里的格子。 */
+export function rectCells(x0: number, y0: number, x1: number, y1: number): [number, number][] {
+  const out: [number, number][] = [];
+  for (let y = Math.min(y0, y1); y <= Math.max(y0, y1); y++) for (let x = Math.min(x0, x1); x <= Math.max(x0, x1); x++) out.push([x, y]);
+  return out;
+}
+
+/** 拖出一块区域放东西，见 fillCells。 */
+export function paintCells(plan: Plan, kind: FloorItem["kind"], x0: number, y0: number, x1: number, y1: number, merge: boolean, makeId: () => string): Plan["items"] {
+  return fillCells(plan, kind, rectCells(Math.max(0, Math.min(x0, x1)), Math.max(0, Math.min(y0, y1)), Math.max(x0, x1), Math.max(y0, y1)), merge, makeId);
 }
 
 /** 第 y 排从 x 起往右的机柜和一格深的障碍物都往右挪一格，空出 (x, y)。 */
