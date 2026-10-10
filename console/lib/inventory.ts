@@ -760,6 +760,21 @@ export function checkBaseline(rules: BaselineRule[], components: HwComponent[]):
   return issues;
 }
 
+/**
+ * 从固件列表里挑出主机的 BIOS 和 BMC 版本，显示在侧边栏标题旁边。
+ * 系统内采集叫 BIOS、BMC；Redfish 采集 AMI 叫 BIOS、BMCImage1/2（双镜像，版本不同时都列出来）。
+ * HGX_ 开头的是 GPU 底板自己的 BMC 和固件，不算。
+ */
+export function headlineFirmware(components: HwComponent[]): { bios: string; bmc: string } {
+  const firmware = components.filter((item) => item.kind === "firmware" && item.firmware && !/^HGX_/i.test(item.slot));
+  const named = (pattern: RegExp) => firmware.filter((item) => pattern.test(item.slot) || pattern.test(item.model));
+  const bios = named(/^BIOS$/i)[0] || named(/\bBIOS\b/i)[0];
+  const bmc = named(/^BMC$/i);
+  const images = named(/^BMC\s*Image\s*\d$/i);
+  const bmcVersions = [...new Set((bmc.length ? bmc : images.length ? images : named(/^BMC/i).slice(0, 1)).map((item) => item.firmware))];
+  return { bios: bios?.firmware || "", bmc: bmcVersions.join(" / ") };
+}
+
 /** 任务输出里的一段摘要，每类一行。 */
 export function summarizeComponents(components: HwComponent[]): string[] {
   const lines: string[] = [];
