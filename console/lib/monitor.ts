@@ -21,6 +21,7 @@ export const DEFAULT_MONITOR: MonitorSettings = {
   gpuTempWarn: 85,
   ignoreSensors: "",
   bmcFailuresToAlert: 2,
+  redfishEvents: true,
 };
 
 export function getMonitorSettings(): MonitorSettings {
@@ -46,6 +47,7 @@ export function saveMonitorSettings(input: Partial<MonitorSettings>): MonitorSet
     gpuTempWarn: int(input.gpuTempWarn, current.gpuTempWarn, 40, 120, "GPU 温度告警线"),
     ignoreSensors: String(input.ignoreSensors ?? current.ignoreSensors).slice(0, 2000),
     bmcFailuresToAlert: int(input.bmcFailuresToAlert, current.bmcFailuresToAlert, 1, 20, "BMC 连不上几次报警"),
+    redfishEvents: input.redfishEvents === undefined ? current.redfishEvents : Boolean(input.redfishEvents),
   };
   putSetting("monitor", next);
   return next;

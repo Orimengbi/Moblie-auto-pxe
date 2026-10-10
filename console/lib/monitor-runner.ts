@@ -1,6 +1,7 @@
 import { getAsset, listAssets } from "./assets.ts";
 import { checkBmc, checkOs, getMonitorSettings, getMonitorState, monitored, saveMonitorState } from "./monitor.ts";
 import { checkNetwork, collectNetwork } from "./network.ts";
+import { syncEventStreams } from "./redfish-events.ts";
 import { hostContext, resolveAssetHost, runSsh } from "./remote.ts";
 import { latestInventory } from "./store.ts";
 import type { Asset, MonitorSettings, MonitorState } from "./types.ts";
@@ -65,6 +66,11 @@ let ticking = false;
 
 async function tick(): Promise<void> {
   if (ticking) return;
+  try {
+    syncEventStreams();
+  } catch (error) {
+    console.error("[events]", error);
+  }
   const settings = getMonitorSettings();
   if (!settings.enabled) return;
   ticking = true;
@@ -99,6 +105,14 @@ declare global {
 
 export function startMonitor(): void {
   if (globalThis.pxeMonitorTimer) return;
+  // 实时事件流不等第一轮的 30 秒。
+  setTimeout(() => {
+    try {
+      syncEventStreams();
+    } catch (error) {
+      console.error("[events]", error);
+    }
+  }, 5_000);
   globalThis.pxeMonitorTimer = setInterval(() => void tick().catch((error) => console.error("[monitor]", error)), 30_000);
   console.log("[monitor] 监控已启动，每 30 秒看一次哪些资产到了检查时间");
 }
