@@ -3,7 +3,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { parseLeases, renderBootIpxe, renderDnsmasq } from "./dnsmasq.ts";
-import { assetBmcAccounts, findAssetBySn, getAsset, syncAssetFromRow } from "./assets.ts";
+import { assetBmcAccounts, deleteAsset, findAssetBySn, getAsset, syncAssetFromRow } from "./assets.ts";
 import { refreshBootScript } from "./disk-image.ts";
 import { recordHardwareChanges } from "./parts.ts";
 import { checkBaseline, diffComponents, generateBaseline, KIND_LABEL, nicCards } from "./inventory.ts";
@@ -77,6 +77,7 @@ import {
   tftpDir,
 } from "./paths.ts";
 import {
+  type Asset,
   DEFAULT_STATE,
   type ApplianceState,
   type Baseline,
@@ -1737,6 +1738,19 @@ export function removeAssetFiles(assetId: string): void {
   fs.rmSync(inventoryDir(assetId), { recursive: true, force: true });
   fs.rmSync(opticsPath(assetId), { force: true });
   fs.rmSync(path.join(dataDir(), "monitor", `${assetId}.sdr`), { force: true });
+  fs.rmSync(path.join(dataDir(), "redfish", "assets", assetId), { recursive: true, force: true });
+}
+
+/**
+ * 删一台资产：还在装机批次里的不让删（批次里的行一写盘或控制台重启，资产会按那一行自动重建）；
+ * 删掉数据库里的资产和记录（告警、监控状态、BMC 事件跟着删，备件退回库里，工单保留但不再关联），再删磁盘上的采集文件。
+ */
+export function removeAsset(assetId: string): Asset {
+  const batches = [...new Set(serversOfAsset(assetId).map((row) => getProject(row.projectId)?.name || row.projectId))];
+  if (batches.length) throw new Error(`这台还在装机批次「${batches.join("」「")}」里，先在批次里删掉这一行再删资产，不然会被自动重建`);
+  const asset = deleteAsset(assetId);
+  removeAssetFiles(assetId);
+  return asset;
 }
 
 export interface ServerControl {

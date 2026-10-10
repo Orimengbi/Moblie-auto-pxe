@@ -1,9 +1,9 @@
 import { auditRequest, jsonError, readJson, userOrResponse } from "@/lib/api";
 import { assetRows } from "@/lib/asset-view";
-import { deleteAsset, getAsset, updateAsset, type AssetInput } from "@/lib/assets";
+import { getAsset, updateAsset, type AssetInput } from "@/lib/assets";
 import { requireAdmin } from "@/lib/auth";
 import { uplinksOf } from "@/lib/network";
-import { removeAssetFiles } from "@/lib/store";
+import { removeAsset } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
@@ -30,13 +30,12 @@ export async function PATCH(request: Request, context: Context) {
   }
 }
 
-/** 只有管理员能删。连同硬件采集记录一起删，装机批次里的行留着。 */
+/** 只有管理员能删。还在装机批次里的不让删，见 store.removeAsset。 */
 export async function DELETE(request: Request, context: Context) {
   try {
     const { id } = await context.params;
     const identity = requireAdmin(request);
-    const asset = deleteAsset(id);
-    removeAssetFiles(id);
+    const asset = removeAsset(id);
     auditRequest(request, identity, { action: "删除资产", targetType: "asset", targetId: id, targetLabel: `${asset.tag} ${asset.sn}` });
     return Response.json({ ok: true });
   } catch (error) {
