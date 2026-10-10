@@ -15,6 +15,7 @@ import { AssetEditDialog } from "@/components/asset-edit-dialog";
 import { AssetImportDialog } from "@/components/asset-import-dialog";
 import { StatusChip } from "@/components/mui/status-chip";
 import { FONT_SANS } from "@/components/mui/theme";
+import { InventoryCollectDialog, type CollectTarget } from "@/components/inventory-collect-dialog";
 import { HOST_SOURCE, ProjectTaskRunner } from "@/components/project-task-runner";
 import { RemoteConsole } from "@/components/remote-console";
 import { ServerPowerDialog } from "@/components/server-power-dialog";
@@ -79,7 +80,7 @@ function Dash() {
 
 const tagCompare = (a: string, b: string) => a.localeCompare(b, "zh-CN", { numeric: true });
 
-/** 资产列表：筛选、勾选后批量改状态或归属、电源、批量任务；点一行打开侧边栏。 */
+/** 资产列表：筛选、勾选后批量改状态或归属、电源、采集硬件配置、批量任务；点一行打开侧边栏。 */
 export function AssetList({
   rows,
   customers,
@@ -105,6 +106,7 @@ export function AssetList({
   // 从右上角任务列表点开的后台导入。
   const [importJob, setImportJob] = useState<string | null>(null);
   const [powerTargets, setPowerTargets] = useState<AssetRow[]>([]);
+  const [collectTargets, setCollectTargets] = useState<CollectTarget[]>([]);
   const [consoleRow, setConsoleRow] = useState<AssetRow | null>(null);
   const [bulkStatus, setBulkStatus] = useState("");
   const [bulkCustomer, setBulkCustomer] = useState("");
@@ -426,6 +428,9 @@ export function AssetList({
             <Button variant="outlined" onClick={() => setPowerTargets(pickedRows.filter((row) => row.bmcIp))}>
               电源和引导
             </Button>
+            <Button variant="outlined" onClick={() => setCollectTargets(pickedRows.map((row) => ({ id: row.id, sn: row.sn, type: row.type, bmcIp: row.bmcIp })))}>
+              采集硬件配置
+            </Button>
             <Button onClick={() => setPicked([])}>取消选择</Button>
           </>
         ) : null}
@@ -493,6 +498,7 @@ export function AssetList({
         onDone={() => router.refresh()}
       />
       <ServerPowerDialog targets={powerTargets} onClose={() => setPowerTargets([])} />
+      <InventoryCollectDialog targets={collectTargets} onClose={() => setCollectTargets([])} />
       {consoleRow ? <RemoteConsole row={consoleRow} port={bmcPort} onClose={() => setConsoleRow(null)} /> : null}
       <ServerSidebar
         row={sideRow ? { id: sideRow.id, sn: sideRow.sn, tag: sideRow.tag, type: sideRow.type, description: [sideRow.tag, ASSET_STATUS[sideRow.status], sideRow.place, sideRow.customerName, [sideRow.vendor, sideRow.model].filter(Boolean).join(" ")].filter(Boolean).join(" · ") } : null}

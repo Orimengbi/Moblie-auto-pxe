@@ -25,6 +25,7 @@ import { HOST_SOURCE, ProjectTaskRunner } from "@/components/project-task-runner
 import { ServerEditDialog } from "@/components/server-edit-dialog";
 import { ServerSidebar } from "@/components/server-sidebar";
 import { RemoteConsole } from "@/components/remote-console";
+import { InventoryCollectDialog, type CollectTarget } from "@/components/inventory-collect-dialog";
 import { ServerPowerDialog } from "@/components/server-power-dialog";
 import type { Tone } from "@/lib/asset-labels";
 import type { InstallState, InventoryStatus, IpmiLink, IpSource, PowerState, RemoteFile, RemoteTask, ServerImportReport, ServerRow, ServerStage, TaskHostSource } from "@/lib/types";
@@ -250,6 +251,7 @@ export function ProjectServerList({
   const [editing, setEditing] = useState<ServerListRow | null>(null);
   const [adding, setAdding] = useState(false);
   const [powerTargets, setPowerTargets] = useState<ServerListRow[]>([]);
+  const [collectTargets, setCollectTargets] = useState<CollectTarget[]>([]);
   const [consoleRow, setConsoleRow] = useState<ServerListRow | null>(null);
   const [sideId, setSideId] = useState<string | null>(null);
   // 按 id 找，列表刷新后侧边栏里显示的状态也跟着更新。
@@ -544,6 +546,11 @@ export function ProjectServerList({
                   电源和引导（{picked.length}）
                 </Button>
               ) : null}
+              {picked.length ? (
+                <Button variant="outlined" onClick={() => setCollectTargets(rows.filter((row) => picked.includes(row.id)).map((row) => ({ id: row.assetId, sn: row.sn, bmcIp: row.bmcIp || "" })))}>
+                  采集硬件配置（{picked.length}）
+                </Button>
+              ) : null}
               {picked.length ? <Button onClick={() => setPicked([])}>取消选择（{picked.length}）</Button> : null}
               {/* 以前双击表头分隔线恢复默认列宽，表格组件里双击是按内容自动调宽，恢复放到这里。 */}
               {widths ? <Button onClick={() => saveWidths(null)}>恢复默认列宽</Button> : null}
@@ -628,6 +635,7 @@ export function ProjectServerList({
         }}
       />
       <ServerPowerDialog targets={powerTargets.map((row) => ({ id: row.assetId, sn: row.sn, bmcIp: row.bmcIp }))} onClose={() => setPowerTargets([])} />
+      <InventoryCollectDialog targets={collectTargets} projectId={projectId} onClose={() => setCollectTargets([])} />
       {consoleRow ? <RemoteConsole row={{ id: consoleRow.assetId, sn: consoleRow.sn, bmcIp: consoleRow.bmcIp }} port={bmcPort} onClose={() => setConsoleRow(null)} /> : null}
       <ServerSidebar
         projectId={projectId}
