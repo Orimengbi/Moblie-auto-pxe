@@ -21,7 +21,7 @@ import { ServerPowerDialog } from "@/components/server-power-dialog";
 import { ServerSidebar } from "@/components/server-sidebar";
 import type { AssetRow } from "@/lib/asset-view";
 import { ASSET_STATUS, ASSET_STATUS_TONE, ASSET_TYPES, WARRANTY_LABEL } from "@/lib/asset-labels";
-import type { AssetStatus, Customer, Datacenter, RemoteFile, RemoteTask, Site } from "@/lib/types";
+import type { AssetStatus, Customer, Datacenter, RemoteFile, Site } from "@/lib/types";
 import { SiteOptions } from "@/components/site-options";
 import { formatTime } from "@/lib/time";
 
@@ -86,7 +86,6 @@ export function AssetList({
   sites,
   datacenters,
   files,
-  tasks,
   bmcPort,
 }: {
   rows: AssetRow[];
@@ -94,7 +93,6 @@ export function AssetList({
   sites: Site[];
   datacenters: Datacenter[];
   files: RemoteFile[];
-  tasks: RemoteTask[];
   bmcPort: string;
 }) {
   const router = useRouter();
@@ -489,7 +487,7 @@ export function AssetList({
         <Typography variant="body2" sx={{ color: "text.secondary" }}>
           在上面的列表里勾选机器。控制台用自己的 SSH 密钥登录系统地址执行，装机时会写入这把公钥；不是这里装的机器要自己把公钥放进 root 的 authorized_keys。
         </Typography>
-        <ProjectTaskRunner picked={picked} installed={installed} onPick={setPicked} files={files} tasks={tasks} />
+        <ProjectTaskRunner picked={picked} installed={installed} onPick={setPicked} files={files} revoke={false} />
       </Stack>
     </Stack>
   );

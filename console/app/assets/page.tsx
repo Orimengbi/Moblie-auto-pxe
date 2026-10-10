@@ -4,7 +4,7 @@ import { PageHeader } from "@/components/page-header";
 import { assetRows } from "@/lib/asset-view";
 import { listCustomers } from "@/lib/assets";
 import { listDatacenters, listSites } from "@/lib/racks";
-import { listAllTasks, listFiles } from "@/lib/store";
+import { listFiles } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
@@ -22,9 +22,6 @@ export default function AssetsPage() {
           sites={listSites()}
           datacenters={listDatacenters()}
           files={listFiles()}
-          tasks={listAllTasks()
-            .filter((task) => !task.projectId)
-            .slice(0, 30)}
           bmcPort={process.env.PXE_BMC_PORT || ""}
         />
       </Suspense>
