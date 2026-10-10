@@ -3,7 +3,7 @@ import path from "node:path";
 import { assetBmcAccounts, getAsset } from "./assets.ts";
 import { dataDir } from "./paths.ts";
 import { link, members, RedfishAuthError, redfishError, redfishRequester, type RedfishDoc, type RedfishRequest, type RedfishResponse } from "./redfish.ts";
-import type { Asset } from "./types.ts";
+import type { Asset, BmcSettingKind } from "./types.ts";
 
 /**
  * 经 BMC 的 Redfish 管这台机器：引导、资产编号、定位灯、虚拟介质、BIOS 设置、BMC 日志、功耗、固件升级。
@@ -128,7 +128,7 @@ export async function assetSession(assetId: string): Promise<{ asset: Asset; ses
 // ---------- 上次读到的结果 ----------
 
 /** 概况和 BIOS 不在每次打开页面时读 BMC，存一份上次手动读到的，页面先显示它。 */
-export type SnapshotKind = "overview" | "bios";
+export type SnapshotKind = BmcSettingKind;
 
 function snapshotFile(assetId: string, kind: SnapshotKind): string {
   return path.join(dataDir(), "redfish", "assets", assetId.replace(/[^\w-]/g, "_"), `${kind}.json`);
@@ -607,6 +607,73 @@ export async function readBios(session: BmcSession): Promise<BiosView> {
     };
   });
   return { biosVersion: str(system.BiosVersion), attributes, pendingCount: Object.keys(pending).length, canReset: Boolean(action(bios, "#Bios.ResetBios")), warning };
+}
+
+function shown(value: unknown): string {
+  return value === undefined ? "（没有）" : value === "" ? "（空）" : str(value);
+}
+
+/** 和上次存的 BIOS 设置比，列出值变了、新出现、不见了的项。 */
+export function biosChanges(previous: BiosView, current: BiosView): string[] {
+  const before = new Map(previous.attributes.map((item) => [item.name, item]));
+  const lines: string[] = [];
+  if (previous.biosVersion !== current.biosVersion) lines.push(`BIOS 版本：${previous.biosVersion || "（空）"} → ${current.biosVersion || "（空）"}`);
+  for (const item of current.attributes) {
+    const old = before.get(item.name);
+    before.delete(item.name);
+    if (!old || JSON.stringify(old.value) !== JSON.stringify(item.value)) lines.push(`${item.label}（${item.name}）：${shown(old?.value)} → ${shown(item.value)}`);
+  }
+  for (const old of before.values()) lines.push(`${old.label}（${old.name}）：${shown(old.value)} → （没有）`);
+  return lines;
+}
+
+/**
+ * 批量采集硬件时顺带读 BMC 设置和 BIOS 设置，和在侧边栏点「从 BMC 读取」一样存下来。
+ * 返回写进任务输出的几行；tried 是要读的项数，ok 是读到的项数。
+ */
+export async function collectSettings(asset: Asset, kinds: BmcSettingKind[]): Promise<{ ok: number; tried: number; lines: string[] }> {
+  const label = kinds.map((kind) => (kind === "overview" ? "BMC 设置" : "BIOS 设置")).join("、");
+  if (!kinds.length) return { ok: 0, tried: 0, lines: [] };
+  if (!asset.bmcIp) return { ok: 0, tried: 0, lines: [`${label}：还没有 BMC 地址，跳过`] };
+  let session: BmcSession;
+  try {
+    session = await openSession(asset);
+  } catch (error) {
+    return { ok: 0, tried: kinds.length, lines: [`${label}（${asset.bmcIp}）：${error instanceof Error ? error.message : "连不上"}`] };
+  }
+  const lines: string[] = [];
+  let ok = 0;
+  if (kinds.includes("overview")) {
+    try {
+      const view = saveSnapshot(asset.id, "overview", await bmcOverview(session)).data;
+      const boot = [view.boot.target, view.boot.enabled, view.boot.mode].filter(Boolean).join(" / ");
+      lines.push(
+        `BMC 设置（${asset.bmcIp}）：电源 ${view.powerState || "未知"}，BMC 固件 ${view.bmcVersion || "未知"}，BIOS ${view.biosVersion || "未知"}，引导 ${boot || "未知"}，定位灯 ${view.led || "不支持"}，资产编号 ${view.assetTag || "（空）"}`,
+        ...(view.media.rmedia ? [`  远程介质 ${view.media.rmedia}`] : []),
+        ...(view.boot.pendingOrder.length ? ["  有改过还没生效的启动顺序"] : []),
+        ...view.errors.map((line) => `  提示：${line}`),
+      );
+      ok++;
+    } catch (error) {
+      lines.push(`BMC 设置（${asset.bmcIp}）：${error instanceof Error ? error.message : "读取失败"}`);
+    }
+  }
+  if (kinds.includes("bios")) {
+    try {
+      const previous = loadSnapshot<BiosView>(asset.id, "bios");
+      const view = saveSnapshot(asset.id, "bios", await readBios(session)).data;
+      lines.push(`BIOS 设置（版本 ${view.biosVersion || "未知"}）：${view.attributes.length} 项${view.pendingCount ? `，${view.pendingCount} 项待生效（下次开机）` : ""}`);
+      if (previous) {
+        const changes = biosChanges(previous.data, view);
+        lines.push(changes.length ? `  和上次读的比变了 ${changes.length} 项：` : "  和上次读的比没有变化", ...changes.slice(0, 30).map((line) => `    ${line}`), ...(changes.length > 30 ? [`    等，共 ${changes.length} 项`] : []));
+      }
+      if (view.warning) lines.push(`  提示：${view.warning}`);
+      ok++;
+    } catch (error) {
+      lines.push(`BIOS 设置（${asset.bmcIp}）：${error instanceof Error ? error.message : "读取失败"}`);
+    }
+  }
+  return { ok, tried: kinds.length, lines };
 }
 
 /** 校验并写进待生效设置，下次开机 BIOS 才应用。返回改了几项。 */

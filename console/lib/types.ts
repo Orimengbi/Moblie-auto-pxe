@@ -359,6 +359,8 @@ export interface RemoteTask {
   targets: TaskTarget[];
   /** 采集硬件任务读哪几边。旧任务没有这一项。 */
   inventorySources?: InventorySource[];
+  /** 采集硬件任务顺带读的 BMC 设置（overview）和 BIOS 设置，存成侧边栏 BMC、BIOS 页的「上次读到的」。 */
+  inventorySettings?: BmcSettingKind[];
   createdAt: string;
   finishedAt?: string;
 }
@@ -368,6 +370,9 @@ export type HwKind = "system" | "board" | "cpu" | "memory" | "disk" | "gpu" | "n
 
 /** os：SSH 进系统里用 dmidecode 等工具读；bmc：从 BMC 的 Redfish 读；snmp：网络设备用 SNMP 读。各来源的槽位名不一样，不互相比。 */
 export type InventorySource = "os" | "bmc" | "snmp";
+
+/** 经 Redfish 读、存一份上次结果的 BMC 设置：overview 是引导、定位灯、虚拟介质这些概况，bios 是全部 BIOS 设置项。 */
+export type BmcSettingKind = "overview" | "bios";
 
 /** 一个部件。slot 在同一台机器、同一来源里是稳定的位置名，比如 DIMM_P0_A0、P0、nvme0n1、GPU 的 PCI 地址。 */
 export interface HwComponent {

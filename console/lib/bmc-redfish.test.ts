@@ -209,6 +209,32 @@ test("the last read is kept per asset so pages do not hit the BMC on open", () =
   assert.equal(bmc.loadSnapshot("asset-2", "bios"), null);
 });
 
+test("bulk collect saves the BMC and BIOS settings and lists BIOS changes since the last read", async () => {
+  const bmcs = setup();
+  const target = { ...asset, id: "asset-collect" } as import("./types.ts").Asset;
+  const first = await bmc.collectSettings(target, ["overview", "bios"]);
+  assert.equal(first.ok, 2);
+  assert.equal(first.tried, 2);
+  assert.match(first.lines[0], /^BMC 设置（10\.0\.0\.9）：电源 On，.*引导 Pxe \/ Once \/ UEFI，定位灯 Off，资产编号 01234567890/);
+  assert.ok(first.lines.includes("BIOS 设置（版本 R05）：4 项"));
+  assert.ok(!first.lines.some((line) => line.includes("和上次读的比")));
+  assert.equal(bmc.loadSnapshot<{ assetTag: string }>("asset-collect", "overview")?.data.assetTag, "01234567890");
+  assert.equal(bmc.loadSnapshot<{ attributes: unknown[] }>("asset-collect", "bios")?.data.attributes.length, 4);
+
+  assert.ok((await bmc.collectSettings(target, ["bios"])).lines.includes("  和上次读的比没有变化"));
+  const biosDoc = bmcs.get("10.0.0.9")!.docs.get("/redfish/v1/Systems/Self/Bios")!;
+  biosDoc.Attributes = { PCIS003: "Disabled", CPU005: "Enabled", MEM001: 100, NEW001: "x" };
+  const second = await bmc.collectSettings(target, ["bios"]);
+  assert.deepEqual(second.lines.slice(1), ["  和上次读的比变了 3 项：", "    SR-IOV Support（PCIS003）：Enabled → Disabled", "    NEW001（NEW001）：（没有） → x", "    Admin Password（SETUP001）：（空） → （没有）"]);
+
+  assert.deepEqual(await bmc.collectSettings({ ...target, bmcIp: "" }, ["overview"]), { ok: 0, tried: 0, lines: ["BMC 设置：还没有 BMC 地址，跳过"] });
+  bmc.setRequesterFactory(() => () => Promise.reject(new RedfishAuthError("denied")));
+  const denied = await bmc.collectSettings(target, ["overview", "bios"]);
+  assert.equal(denied.ok, 0);
+  assert.equal(denied.tried, 2);
+  assert.match(denied.lines[0], /^BMC 设置、BIOS 设置（10\.0\.0\.9）：.*不接受资产里的账号密码/);
+});
+
 test("crawl uses $expand pages (re-adding it to AMI's next links) and falls back when members come back as links", async () => {
   const { crawlRedfish } = await import("./redfish.ts");
   const chassis = Array.from({ length: 3 }, (_, index) => ({ "@odata.id": `/redfish/v1/Chassis/C${index}`, Id: `C${index}` }));
