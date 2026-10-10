@@ -115,13 +115,14 @@ export function parseAssetTable(rows: unknown[][]): { records: { row: number; ce
   let fields: (SheetField | undefined)[] = [];
   for (let i = 0; i < Math.min(rows.length, 8); i++) {
     const mapped = (rows[i] || []).map((cell) => HEADER_MAP.get(headerKey(cell)));
-    if (mapped.includes("sn")) {
+    // 序列号可以不填（只填 BMC 地址和账号密码，导入时从 BMC 读），表头有其中一个就行。
+    if (mapped.includes("sn") || mapped.includes("bmcIp")) {
       headerAt = i;
       fields = mapped;
       break;
     }
   }
-  if (headerAt < 0) return { records: [], ignored: [], error: "没有找到表头。表头那一行要有「序列号」，可以先下载模板对照。" };
+  if (headerAt < 0) return { records: [], ignored: [], error: "没有找到表头。表头那一行要有「序列号」或「BMC 地址」，可以先下载模板对照。" };
   const ignored = (rows[headerAt] || [])
     .map((cell, index) => (fields[index] ? "" : String(cell ?? "").trim()))
     .filter((name) => name && name !== "编号");

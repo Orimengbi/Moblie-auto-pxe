@@ -1,10 +1,11 @@
 import { auditRequest, jsonError, readSheetUpload, userOrResponse } from "@/lib/api";
 import { parseAssetTable } from "@/lib/asset-sheet";
 import { importAssets } from "@/lib/assets";
+import { enrichRecords } from "@/lib/bmc-identify";
 
 export const dynamic = "force-dynamic";
 
-/** Excel 批量导入资产。dryRun=1 只预览，不写入。 */
+/** Excel 批量导入资产。dryRun=1 只预览，不写入。序列号可以不填，有 BMC 地址和账号密码就从 BMC 读。 */
 export async function POST(request: Request) {
   const identity = userOrResponse(request);
   if (identity instanceof Response) return identity;
@@ -15,7 +16,21 @@ export async function POST(request: Request) {
     const parsed = parseAssetTable(rows);
     if (parsed.error) throw new Error(parsed.error);
     if (parsed.records.length > 5000) throw new Error("一次最多导入 5000 行");
-    const result = importAssets(parsed.records, identity.user.username, { dryRun });
+    // 只填了 BMC 地址和账号密码的行：连 BMC 读序列号、厂商、型号、BMC MAC，补进空格子。读不到又没序列号的算出错。
+    const enriched = await enrichRecords(parsed.records);
+    const usable = parsed.records.filter((record) => !enriched.get(record.row)?.error).map((record) => ({ ...record, cells: enriched.get(record.row)?.cells || record.cells }));
+    const result = importAssets(usable, identity.user.username, { dryRun });
+    for (const record of parsed.records) {
+      const extra = enriched.get(record.row);
+      if (extra?.error) {
+        result.errors++;
+        result.rows.push({ row: record.row, sn: "", action: "error", message: extra.error });
+      } else if (extra?.note) {
+        const row = result.rows.find((item) => item.row === record.row);
+        if (row) row.message = [extra.note, row.message].filter(Boolean).join("\n");
+      }
+    }
+    result.rows.sort((a, b) => a.row - b.row);
     if (!dryRun) {
       auditRequest(request, identity, {
         action: "Excel 导入资产",

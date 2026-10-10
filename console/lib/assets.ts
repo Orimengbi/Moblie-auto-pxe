@@ -252,6 +252,12 @@ export function getAsset(id: string): Asset | null {
   return row ? withTags([toAsset(row)])[0] : null;
 }
 
+/** 按 BMC 地址找资产；有两台以上用同一个地址（换过机器没清）时不算找到。 */
+export function findAssetByBmcIp(ip: string): Asset | null {
+  const rows = db().prepare("SELECT * FROM assets WHERE bmc_ip = ? LIMIT 2").all(ip.trim());
+  return rows.length === 1 ? withTags([toAsset(rows[0])])[0] : null;
+}
+
 export function findAssetBySn(sn: string): Asset | null {
   const row = db().prepare("SELECT * FROM assets WHERE sn = ?").get(sn);
   return row ? withTags([toAsset(row)])[0] : null;
