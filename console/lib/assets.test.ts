@@ -582,4 +582,10 @@ test("floor plan painting fills empty cells in a dragged area, or one merged blo
   assert.deepEqual(many.map((item) => `${item.x},${item.y}`), ["0,0", "2,0", "0,1", "1,1"]);
   assert.deepEqual(paintCells(plan, "ac", 4, 3, 5, 0, true, id).map((item) => [item.x, item.y, item.w, item.h]), [[4, 0, 2, 4]], "拖反方向也行，合成一块");
   assert.deepEqual(paintCells(plan, "ac", 0, 0, 2, 1, true, id), [], "有东西挡着不能合成一块");
+  assert.deepEqual(paintCells(plan, "pillar", 5, 3, 7, 3, false, id).map((item) => `${item.x},${item.y}`), ["5,3"], "出了墙的格子跳过");
+  const { fillCells } = await import("./floor.ts");
+  const picked = [[0, 2], [1, 2], [0, 3], [1, 3], [0, 2]] as const;
+  assert.deepEqual(fillCells(plan, "ac", picked, true, id).map((item) => [item.x, item.y, item.w, item.h]), [[0, 2, 2, 2]], "分几次选的格子拼成矩形能合成一块");
+  assert.deepEqual(fillCells(plan, "ac", [[0, 2], [2, 2]], true, id), [], "不连成矩形不能合成一块");
+  assert.equal(fillCells(plan, "ac", [[0, 2], [2, 2], [1, 0]], false, id).length, 2, "一格一格放，机柜那格跳过");
 });
