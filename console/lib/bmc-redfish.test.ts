@@ -208,3 +208,26 @@ test("the last read is kept per asset so pages do not hit the BMC on open", () =
   assert.equal(bmc.loadSnapshot("asset-1", "overview"), null);
   assert.equal(bmc.loadSnapshot("asset-2", "bios"), null);
 });
+
+test("crawl uses $expand pages (re-adding it to AMI's next links) and falls back when members come back as links", async () => {
+  const { crawlRedfish } = await import("./redfish.ts");
+  const chassis = Array.from({ length: 3 }, (_, index) => ({ "@odata.id": `/redfish/v1/Chassis/C${index}`, Id: `C${index}` }));
+  const seen: string[] = [];
+  const get = async (target: string) => {
+    seen.push(target);
+    if (target === "/redfish/v1/") return { Chassis: { "@odata.id": "/redfish/v1/Chassis" } };
+    if (target === "/redfish/v1/Chassis?$expand=.($levels=1)") return { Members: chassis.slice(0, 2), "Members@odata.nextLink": "/redfish/v1/Chassis?$skip=2" };
+    if (target === "/redfish/v1/Chassis?$skip=2&$expand=.($levels=1)") return { Members: chassis.slice(2) };
+    // 系统集合：$expand 只给链接，要一个个读。
+    if (target === "/redfish/v1/Systems?$expand=.($levels=1)") return { Members: [{ "@odata.id": "/redfish/v1/Systems/Self" }] };
+    if (target === "/redfish/v1/Systems") return { Members: [{ "@odata.id": "/redfish/v1/Systems/Self" }] };
+    if (target === "/redfish/v1/Systems/Self") return { "@odata.id": "/redfish/v1/Systems/Self", Id: "Self" };
+    return null;
+  };
+  const raw = await crawlRedfish(get);
+  assert.deepEqual(raw.chassis.map((item) => item.Id), ["C0", "C1", "C2"]);
+  assert.ok(!seen.some((item) => /^\/redfish\/v1\/Chassis\/C\d$/.test(item)), "chassis were not fetched one by one");
+  assert.deepEqual(raw.systems.map((item) => item.Id), ["Self"]);
+  const plain = await crawlRedfish(get, { expand: false });
+  assert.deepEqual(plain.systems.map((item) => item.Id), ["Self"]);
+});
