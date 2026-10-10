@@ -10,6 +10,7 @@ import Switch from "@mui/material/Switch";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import { DataGrid, type GridColDef } from "@mui/x-data-grid";
+import { ReadBar } from "@/components/server-bmc";
 import type { BiosAttribute, BiosView } from "@/lib/bmc-redfish";
 import { api } from "@/lib/client-api";
 
@@ -34,11 +35,27 @@ export function ServerBios({ assetId }: { assetId: string }) {
   const [onlyChanged, setOnlyChanged] = useState(false);
   const [draft, setDraft] = useState<Record<string, unknown>>({});
 
-  const load = useCallback(async () => {
-    const result = await api<BiosView>(`/api/assets/${assetId}/redfish/bios`);
-    if (result.ok) setView(result.data);
-    setError(result.error);
-  }, [assetId]);
+  const [readAt, setReadAt] = useState("");
+  const [loaded, setLoaded] = useState(false);
+  const [reading, setReading] = useState(false);
+
+  /** refresh 为 true 才去 BMC 读，否则只拿控制台存的上一次结果。 */
+  const load = useCallback(
+    async (refresh = false) => {
+      if (refresh) setReading(true);
+      const result = await api<{ readAt: string; bios: BiosView | null }>(`/api/assets/${assetId}/redfish/bios${refresh ? "?refresh=1" : ""}`);
+      if (refresh) setReading(false);
+      setLoaded(true);
+      if (result.ok) {
+        setView(result.data.bios);
+        setReadAt(result.data.readAt);
+        // 重新读到的值可能变了，没保存的修改作废。
+        if (refresh) setDraft({});
+      }
+      setError(result.error);
+    },
+    [assetId],
+  );
 
   useEffect(() => {
     void load();
@@ -60,7 +77,7 @@ export function ServerBios({ assetId }: { assetId: string }) {
     if (confirmText && !window.confirm(confirmText)) return;
     setBusy(true);
     setMessage("");
-    const result = await api<{ message?: string; bios?: BiosView }>(`/api/assets/${assetId}/redfish/bios`, method, body);
+    const result = await api<{ message?: string; bios?: BiosView; readAt?: string }>(`/api/assets/${assetId}/redfish/bios`, method, body);
     setBusy(false);
     if (!result.ok) {
       setError(result.error);
@@ -69,8 +86,10 @@ export function ServerBios({ assetId }: { assetId: string }) {
     setError("");
     setMessage(result.data.message || "已完成");
     setDraft({});
-    if (result.data.bios) setView(result.data.bios);
-    else await load();
+    if (result.data.bios) {
+      setView(result.data.bios);
+      setReadAt(result.data.readAt || "");
+    } else await load(true);
   }
 
   const columns: GridColDef<BiosAttribute>[] = [
@@ -153,16 +172,21 @@ export function ServerBios({ assetId }: { assetId: string }) {
     },
   ];
 
+  const bar = <ReadBar readAt={readAt} reading={reading} onRead={() => void load(true)} hint="正在读 BIOS 设置，第一次要读属性说明，十几秒" />;
   if (!view)
     return (
-      <Typography variant="body2" sx={{ color: error ? "error.main" : "text.secondary" }}>
-        {error || "正在读 BIOS 设置（第一次要读属性说明，十几秒）"}
-      </Typography>
+      <Stack spacing={1.5}>
+        {loaded ? bar : null}
+        <Typography variant="body2" sx={{ color: error ? "error.main" : "text.secondary" }}>
+          {error || (loaded ? "" : "正在读取")}
+        </Typography>
+      </Stack>
     );
 
   const drafts = Object.keys(draft);
   return (
     <Stack spacing={1.5} sx={{ minHeight: 0 }}>
+      {bar}
       <Stack direction="row" useFlexGap spacing={1.5} sx={{ flexWrap: "wrap", alignItems: "center" }}>
         <TextField size="small" label="找设置项" placeholder="名字、代码或说明，例如 SR-IOV、PCIS003" value={query} onChange={(event) => setQuery(event.target.value)} sx={{ minWidth: 260, flex: 1 }} />
         <TextField select size="small" label="菜单" value={menu} onChange={(event) => setMenu(event.target.value)} sx={{ minWidth: 140 }}>
