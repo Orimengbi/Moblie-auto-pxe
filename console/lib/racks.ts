@@ -163,13 +163,23 @@ export function updateSite(id: string, input: SiteInput): Site {
   return getSite(id)!;
 }
 
-export function deleteSite(id: string): Site {
+/**
+ * 删机房。withRacks 时连里面的机柜一起删（平面图上的门、柱子等跟着删），但机柜里还放着设备就不让删，
+ * 免得资产悄悄丢了位置；不带 withRacks 时有机柜就不让删。返回删掉了几个机柜。
+ */
+export function deleteSite(id: string, withRacks = false): { site: Site; racks: number } {
   const site = getSite(id);
   if (!site) throw new Error("机房不存在");
   const racks = countWhere("racks", "site_id", id);
-  if (racks) throw new Error(`「${site.name}」里还有 ${racks} 个机柜，先删掉机柜`);
-  db().prepare("DELETE FROM sites WHERE id = ?").run(id);
-  return site;
+  if (racks && !withRacks) throw new Error(`「${site.name}」里还有 ${racks} 个机柜，先删掉机柜，或者连机柜一起删`);
+  const placed = Number(db().prepare("SELECT COUNT(*) AS n FROM assets WHERE rack_id IN (SELECT id FROM racks WHERE site_id = ?)").get(id)?.n ?? 0);
+  if (placed) throw new Error(`「${site.name}」的机柜里还放着 ${placed} 台设备，先把它们挪走或从机柜里移出`);
+  transaction(db(), () => {
+    db().prepare("DELETE FROM floor_items WHERE site_id = ?").run(id);
+    db().prepare("DELETE FROM racks WHERE site_id = ?").run(id);
+    db().prepare("DELETE FROM sites WHERE id = ?").run(id);
+  });
+  return { site, racks };
 }
 
 export interface RackInput {

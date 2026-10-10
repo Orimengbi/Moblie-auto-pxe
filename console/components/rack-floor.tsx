@@ -300,15 +300,36 @@ export function RackFloor({
     tryCommit({ ...plan, items: plan.items.map((item) => (item.id === id ? { ...item, ...patch } : item)) });
   }
 
+  /** 删选中的柱子、门这类东西；机柜要用「删除机柜」，免得按 Delete 误删。 */
   function deleteSelectedItems() {
     if (!plan) return;
     const ids = [...selected].filter((key) => key.startsWith("i:")).map((key) => key.slice(2));
     if (!ids.length) {
-      setError("机柜在正视图里删；这里能删柱子、门这类东西");
+      setError("要删机柜，点上面的「删除机柜」");
       return;
     }
     commit({ ...plan, items: plan.items.filter((item) => !ids.includes(item.id)) });
     setSelected(new Set());
+  }
+
+  /** 选中的空机柜标成要删，保存时才删；放着设备的跳过。 */
+  function deleteSelectedRacks() {
+    if (!plan) return;
+    const ids = [...selected].filter((key) => key.startsWith("r:")).map((key) => key.slice(2));
+    const busy = ids.filter((id) => (infos.get(id)?.devices || 0) > 0);
+    const empty = ids.filter((id) => !busy.includes(id));
+    if (!empty.length) {
+      setError(`选中的机柜里都放着设备，不能删`);
+      return;
+    }
+    commit({ ...plan, removed: [...new Set([...plan.removed, ...empty])] });
+    setSelected(new Set(busy.map((id) => `r:${id}`)));
+    if (busy.length) setError(`${busy.map(rackName).join("、")} 里放着设备，没删；其他 ${empty.length} 个保存时删掉`);
+  }
+
+  function selectAll() {
+    setTool("");
+    setSelected(new Set([...cells.map((cell) => `r:${cell.rack.id}`), ...(plan?.items || []).map((item) => `i:${item.id}`)]));
   }
 
   /** 机房大小按现在摆的东西算，右边和下边各留一格。 */
@@ -350,7 +371,7 @@ export function RackFloor({
     if (!plan.room.w !== !plan.room.h) return setError("机房的宽和深要一起填，或者都清空");
     const issue = planProblem(plan, rackName);
     if (issue) return setError(issue);
-    if (plan.removed.length && !window.confirm(`保存时会删掉 ${plan.removed.map(rackName).join("、")} 这 ${plan.removed.length} 个机柜（换成了柱子等），确定？`)) return;
+    if (plan.removed.length && !window.confirm(`保存时会删掉 ${plan.removed.length} 个机柜${plan.removed.length <= 12 ? `（${plan.removed.map(rackName).join("、")}）` : ""}，不能恢复，确定？`)) return;
     setSaving(true);
     const result = await api(`/api/sites/${siteId}/layout`, "PUT", {
       items: cells.map((cell) => ({ id: cell.rack.id, x: cell.x, y: cell.y, facing: cell.facing })),
@@ -475,7 +496,7 @@ export function RackFloor({
         undo();
       } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
         event.preventDefault();
-        setSelected(new Set([...cells.map((cell) => `r:${cell.rack.id}`), ...(plan?.items || []).map((item) => `i:${item.id}`)]));
+        selectAll();
       }
     };
     window.addEventListener("keydown", onKey);
@@ -611,6 +632,9 @@ export function RackFloor({
                         </ToggleButton>
                       ))}
                     </ToggleButtonGroup>
+                    <Button type="button" size="small" color="error" onClick={deleteSelectedRacks}>
+                      删除机柜（{selRacks.length}）
+                    </Button>
                     <Button
                       type="button"
                       size="small"
@@ -662,15 +686,28 @@ export function RackFloor({
                 ) : null}
                 {selItems.length ? (
                   <Button type="button" size="small" color="error" onClick={deleteSelectedItems}>
-                    删除
+                    删除{selRacks.length ? "柱子门等" : ""}
                   </Button>
                 ) : null}
+                <Button type="button" size="small" onClick={selectAll}>
+                  全选
+                </Button>
               </Stack>
             ) : (
-              <Typography variant="caption" sx={{ color: "text.secondary" }}>
-                点选，Shift/Ctrl 加选，在空白处拖框多选；拖动或按方向键整体挪；选了机柜后能一起改朝向、选同一排；Delete 删柱子门这类东西；Ctrl+Z 撤销。
-              </Typography>
+              <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center" }}>
+                <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                  点选，Shift/Ctrl 加选，在空白处拖框多选；拖动或按方向键整体挪；选了机柜后能一起改朝向、选同一排、删除；Delete 删柱子门这类东西；Ctrl+Z 撤销。
+                </Typography>
+                <Button type="button" size="small" onClick={selectAll}>
+                  全选
+                </Button>
+              </Stack>
             )}
+            {plan.removed.length ? (
+              <Typography variant="caption" sx={{ color: "warning.main" }}>
+                保存时会删掉 {plan.removed.length} 个机柜{plan.removed.length <= 12 ? `：${plan.removed.map(rackName).join("、")}` : ""}。不想删就点「撤销」。
+              </Typography>
+            ) : null}
           </Stack>
         </Paper>
       ) : null}

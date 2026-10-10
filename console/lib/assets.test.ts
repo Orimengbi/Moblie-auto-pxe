@@ -237,6 +237,7 @@ test("racks hold assets in U slots without overlap and moving in marks them rack
   assert.equal(racks.updateRack(a01.id, { siteId: site.id, name: "A01", heightU: 20 }).heightU, 20);
   assert.throws(() => racks.deleteRack(a01.id), /还有 2 台/);
   assert.throws(() => racks.deleteSite(site.id), /还有 4 个机柜/);
+  assert.throws(() => racks.deleteSite(site.id, true), /还放着 3 台设备/, "连机柜一起删也不能丢掉设备的位置（侧挂的 PDU 也算）");
 
   // Excel：按机房和机柜号放，导出的位置能原样导回来。
   const { parseAssetTable, assetsToRows } = await import("./asset-sheet.ts");
@@ -536,4 +537,16 @@ test("floor plan editing helpers: shift a row right, move a group, check walls a
   assert.match(planProblem(moveKeys(plan, ["r:b1"], 1, -2)), /重叠/);
   // 换掉的机柜不算占格子。
   assert.equal(planProblem({ ...moveKeys(plan, ["r:b1"], 1, -2), removed: ["a2"] }), "");
+});
+
+test("a room can be deleted together with its empty racks and floor items", async () => {
+  const racks = await import("./racks.ts");
+  const site = racks.createSite({ datacenterId: testDatacenter(racks), code: "DEL1", name: "要重建的机房" });
+  racks.createRacks({ siteId: site.id, prefix: "A,B", from: 1, to: 20, pad: 2 });
+  racks.saveLayout(site.id, [], [{ kind: "pillar", label: "", x: 30, y: 0, w: 1, h: 1 }]);
+  assert.throws(() => racks.deleteSite(site.id), /还有 40 个机柜/);
+  assert.equal(racks.deleteSite(site.id, true).racks, 40);
+  assert.equal(racks.getSite(site.id), null);
+  assert.equal(racks.listRacks(site.id).length, 0);
+  assert.equal(racks.listFloorItems(site.id).length, 0);
 });
