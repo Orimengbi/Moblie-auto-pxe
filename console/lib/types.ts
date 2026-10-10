@@ -761,6 +761,9 @@ export interface Site {
   /** 在数据中心里的位置，例如 3 楼。 */
   address: string;
   note: string;
+  /** 平面图的宽、深（格子数，一格一个机柜位）。0 是没设，不画外墙。 */
+  floorW: number;
+  floorH: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -787,10 +790,13 @@ export interface Rack {
   updatedAt: string;
 }
 
-export type RackFacing = "" | "up" | "down";
+export type RackFacing = "" | "up" | "down" | "left" | "right";
 
 /** 机房平面上不是机柜的东西：柱子、空调、配电柜、预留空位等。 */
-export type FloorItemKind = "pillar" | "ac" | "power" | "blocked" | "other";
+export type FloorItemKind = "door" | "pillar" | "ac" | "power" | "switch" | "ups" | "fire" | "blocked" | "other";
+
+/** 开在哪面外墙上（门、墙上的开关）；空是放在机房里面占格子。 */
+export type FloorWall = "" | "top" | "bottom" | "left" | "right";
 
 export interface FloorItem {
   id: string;
@@ -800,9 +806,11 @@ export interface FloorItem {
   label: string;
   x: number;
   y: number;
-  /** 占几格宽、几格高。 */
+  /** 占几格宽、几格高。开在墙上的（side 不空）w 是沿墙的长度，h 不用。 */
   w: number;
   h: number;
+  /** 开在哪面外墙上。不空时 x（上下墙）或 y（左右墙）是沿墙从左/上数的偏移，不占机房里的格子。 */
+  side: FloorWall;
 }
 
 /** 备件类型：硬件采集的部件类别，加上风扇、线缆和其他。 */

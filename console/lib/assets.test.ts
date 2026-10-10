@@ -472,3 +472,68 @@ test("asset template and export carry dropdowns for type, status, datacenter and
   const bare = XLSX.CFB.read(xlsxWithDropdowns(rows, "资产", assetDropdowns([], [])), { type: "buffer" });
   assert.match(Buffer.from(XLSX.CFB.find(bare, "/xl/worksheets/sheet1.xml")!.content as Uint8Array).toString("utf8"), /<dataValidations count="2">/);
 });
+
+test("floor plan: room walls, doors on walls, four facings and swapping an empty rack for a pillar", async () => {
+  const racks = await import("./racks.ts");
+  const site = racks.createSite({ datacenterId: testDatacenter(racks), code: "FP1", name: "平面图机房" });
+  racks.createRacks({ siteId: site.id, prefix: "A", from: 1, to: 4, pad: 2 });
+  const list = racks.listRacks(site.id);
+  const id = (name: string) => list.find((rack) => rack.name === name)!.id;
+  const placed = list.map((rack, index) => ({ id: rack.id, x: index + 1, y: 1, facing: "left" as const }));
+
+  const saved = racks.saveLayout(
+    site.id,
+    placed,
+    [
+      { kind: "door", label: "前门", x: 2, y: 0, w: 2, h: 1, side: "bottom" },
+      { kind: "switch", label: "总闸", x: 0, y: 1, w: 1, h: 1, side: "left" },
+      { kind: "ac", label: "", x: 6, y: 0, w: 1, h: 3 },
+    ],
+    [],
+    { w: 8, h: 4 },
+  );
+  assert.deepEqual([saved.site.floorW, saved.site.floorH], [8, 4]);
+  assert.equal(saved.racks.find((rack) => rack.id === id("A01"))?.facing, "left");
+  const door = saved.obstacles.find((item) => item.kind === "door")!;
+  assert.deepEqual([door.side, door.x, door.w], ["bottom", 2, 2]);
+  // 门在墙上，不占机房里的格子：同一位置可以放机柜。
+  assert.equal(racks.floorItemCells(door).length, 0);
+
+  assert.throws(() => racks.saveLayout(site.id, [{ id: id("A01"), x: 8, y: 1 }]), /外墙外面/);
+  assert.throws(() => racks.saveLayout(site.id, [], [{ kind: "door", label: "", x: 7, y: 0, w: 2, h: 1, side: "top" }]), /超出了那面墙/);
+  assert.throws(
+    () => racks.saveLayout(site.id, [], [{ kind: "door", label: "甲", x: 1, y: 0, w: 2, h: 1, side: "top" }, { kind: "door", label: "乙", x: 2, y: 0, w: 1, h: 1, side: "top" }]),
+    /甲 和 乙 在墙上重叠了/,
+  );
+  assert.throws(() => racks.saveLayout(site.id, [], [], [], { w: 8, h: 0 }), /一起填/);
+  assert.throws(() => racks.saveLayout(site.id, [{ id: id("A01"), x: 1, y: 1, facing: "sideways" as never }]), /朝向/);
+  // 机房改成不设大小：墙上的东西不能留。
+  assert.throws(() => racks.saveLayout(site.id, [], undefined, [], { w: 0, h: 0 }), /外墙|墙上|要先设/);
+
+  // 空机柜换成柱子：机柜删掉，柱子放在原位。
+  const swapped = racks.saveLayout(site.id, [], [...saved.obstacles, { kind: "pillar", label: "柱", x: 2, y: 1, w: 1, h: 1 }], [id("A02")]);
+  assert.equal(swapped.racks.some((rack) => rack.name === "A02"), false);
+  assert.ok(swapped.obstacles.some((item) => item.kind === "pillar" && item.x === 2 && item.y === 1));
+});
+
+test("floor plan editing helpers: shift a row right, move a group, check walls and overlaps", async () => {
+  const { moveKeys, planProblem, shiftRow } = await import("./floor.ts");
+  const plan = {
+    racks: { a1: { x: 0, y: 0, facing: "" as const }, a2: { x: 1, y: 0, facing: "" as const }, a3: { x: 2, y: 0, facing: "" as const }, b1: { x: 0, y: 2, facing: "" as const } },
+    items: [{ id: "door", kind: "door" as const, label: "", x: 1, y: 0, w: 1, h: 1, side: "top" as const }],
+    room: { w: 4, h: 4 },
+    removed: [] as string[],
+  };
+  assert.equal(planProblem(plan), "");
+  // A 排第二格放柱子：A02、A03 往右挪，B 排不动。
+  const shifted = shiftRow(plan, 1, 0);
+  assert.deepEqual([shifted.racks.a1.x, shifted.racks.a2.x, shifted.racks.a3.x, shifted.racks.b1.x], [0, 2, 3, 0]);
+  assert.equal(planProblem(shifted), "");
+  assert.match(planProblem(shiftRow(shifted, 2, 0)), /出了机房的墙/, "挪出墙要报出来");
+  // 整体挪：机柜和墙上的门一起往右一格，门只沿墙走。
+  const moved = moveKeys(plan, ["r:b1", "i:door"], 1, 1);
+  assert.deepEqual([moved.racks.b1, moved.items[0].x, moved.items[0].y], [{ x: 1, y: 3, facing: "" }, 2, 0]);
+  assert.match(planProblem(moveKeys(plan, ["r:b1"], 1, -2)), /重叠/);
+  // 换掉的机柜不算占格子。
+  assert.equal(planProblem({ ...moveKeys(plan, ["r:b1"], 1, -2), removed: ["a2"] }), "");
+});

@@ -299,6 +299,12 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX bmc_events_asset ON bmc_events(asset_id, id);
   `,
+  // 机房平面图：机房的长宽（格子数，0 是没设，不画外墙），门这类开在墙上的东西记在哪面墙。
+  `
+  ALTER TABLE sites ADD COLUMN floor_w INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE sites ADD COLUMN floor_h INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE floor_items ADD COLUMN side TEXT NOT NULL DEFAULT '';
+  `,
 ];
 
 let opened: { file: string; db: Database } | null = null;
