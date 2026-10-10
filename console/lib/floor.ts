@@ -42,7 +42,7 @@ export function floorPositions(racks: Rack[], obstacles: (Pick<FloorItem, "x" | 
 
 /** 编辑中的平面图：机柜位置和朝向、障碍物（门、柱子等）、机房大小、要换掉删除的空机柜。 */
 export interface Plan {
-  racks: Record<string, { x: number; y: number; facing: RackFacing }>;
+  racks: Record<string, { x: number; y: number; facing: RackFacing; disabled?: boolean }>;
   items: Omit<FloorItem, "siteId">[];
   room: { w: number; h: number };
   removed: string[];
@@ -107,6 +107,26 @@ export function moveKeys(plan: Plan, keys: Iterable<string>, dx: number, dy: num
     else item.y += dy;
   }
   return next;
+}
+
+/**
+ * 拖出一块区域放东西：(x0,y0) 到 (x1,y1) 这块里空着的格子每格放一个；merge 时整块放一个大的（要整块都空着）。
+ * 机柜和已有的东西占着的格子跳过。返回新放的东西，没地方放时是空数组。
+ */
+export function paintCells(plan: Plan, kind: FloorItem["kind"], x0: number, y0: number, x1: number, y1: number, merge: boolean, makeId: () => string): Plan["items"] {
+  const [left, right, top, bottom] = [Math.max(0, Math.min(x0, x1)), Math.max(x0, x1), Math.max(0, Math.min(y0, y1)), Math.max(y0, y1)];
+  const taken = new Set<string>();
+  for (const [id, pos] of Object.entries(plan.racks)) if (!plan.removed.includes(id)) taken.add(`${pos.x},${pos.y}`);
+  for (const item of plan.items) if (!item.side) for (let dx = 0; dx < item.w; dx++) for (let dy = 0; dy < item.h; dy++) taken.add(`${item.x + dx},${item.y + dy}`);
+  const free: [number, number][] = [];
+  for (let y = top; y <= bottom; y++) for (let x = left; x <= right; x++) if (!taken.has(`${x},${y}`)) free.push([x, y]);
+  if (merge) {
+    const w = right - left + 1;
+    const h = bottom - top + 1;
+    if (free.length !== w * h || w > 20 || h > 20) return [];
+    return [{ id: makeId(), kind, label: "", x: left, y: top, w, h, side: "" }];
+  }
+  return free.map(([x, y]) => ({ id: makeId(), kind, label: "", x, y, w: 1, h: 1, side: "" }));
 }
 
 /** 第 y 排从 x 起往右的机柜和一格深的障碍物都往右挪一格，空出 (x, y)。 */
