@@ -7,7 +7,7 @@ import type { HwComponent, HwPort, PortGroup } from "./types.ts";
  * 系统内：PCIe 插槽和 M.2 槽来自 BIOS 的 SMBIOS 表（dmidecode -t 9），再按总线地址找插在上面的设备；
  * 盘位来自背板的 SES（/sys/class/enclosure）、板载 SATA 口（/sys/class/ata_port）和 PCIe 热插拔槽（多为 NVMe 盘位），
  * 对不上盘位的盘单独列出；网口读链路、速率、IP 和所属 bond，IB 模式的口没有网口名，按 RDMA 设备列。
- * BMC：Chassis 的 PCIeSlots、Storage 里的盘位（有的 BMC 会列出空盘位）、网卡的 Ports。
+ * BMC：Chassis 的 PCIeSlots（名字是 NVMe、M.2 这类的算盘位，按 PCIe 设备编号对上里面的盘）、Storage 里的盘位（有的 BMC 会列出空盘位）、网卡的 Ports。
  */
 
 export const PORT_GROUP_LABEL: Record<PortGroup, string> = {
@@ -61,6 +61,12 @@ done
 `;
 
 const PCI_ADDRESS = /^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]$/i;
+
+/**
+ * 名字或类型是盘位的插槽：NVMe（U.2、E1.S、E3.S、EDSFF）和 M.2。BIOS 和 BMC 都把它们列成 PCIe 插槽
+ * （技嘉 G894 的 NVME0~7、P0_M.2），其实是硬盘位，放进硬盘位一组。
+ */
+export const DRIVE_BAY = /NVMe|U\.2|E[13]\.S|EDSFF|M\.2|SFF-8639/i;
 
 function rows(text: string | undefined, width: number): string[][] {
   return (text || "")
@@ -167,8 +173,9 @@ export function parseOsPorts(sections: Map<string, string>, components: HwCompon
     const usage = fields["Current Usage"] || "";
     const used = devs.length ? true : /in use/i.test(usage) ? true : /available/i.test(usage) ? false : null;
     const m2 = /M\.2/i.test(fields.Type || "");
+    const bay = m2 || DRIVE_BAY.test(fields.Designation || "") || DRIVE_BAY.test(fields.Type || "");
     ports.push({
-      group: m2 ? "drive" : "pcie",
+      group: bay ? "drive" : "pcie",
       name: fields.Designation || `插槽 ${fields.ID || ports.length + 1}`,
       type: slotType(fields.Type || "", fields.Length || ""),
       used,
@@ -309,38 +316,66 @@ function id(doc: RedfishDoc): string {
   return str(doc, "Id") || String(doc["@odata.id"] || "").split("/").filter(Boolean).pop() || "";
 }
 
+function driveText(doc: RedfishDoc): string {
+  const bytes = Number(doc.CapacityBytes) || 0;
+  return [str(doc, "Model"), bytes ? `${Math.round(bytes / 1e9)} GB` : ""].filter(Boolean).join(" ");
+}
+
 /** 从 crawlRedfish 读到的文档里取接口。 */
 export function redfishPorts(raw: RedfishRaw): HwPort[] {
   const ports: HwPort[] = [];
   const devices = new Map(raw.pcieDevices.map((doc) => [String(doc["@odata.id"] || ""), doc]));
+  const drivePorts: HwPort[] = [];
+  const placed = new Set<RedfishDoc>();
+  const present = raw.drives.filter((doc) => state(doc) !== "Absent");
 
   for (const doc of raw.pcieSlots) {
     const slots = Array.isArray(doc.Slots) ? (doc.Slots as RedfishDoc[]) : [];
     slots.forEach((slot, index) => {
-      const linked = ((slot.Links as { PCIeDevice?: { "@odata.id"?: string }[] } | undefined)?.PCIeDevice || [])
-        .map((item) => devices.get(item?.["@odata.id"] || ""))
-        .filter((item): item is RedfishDoc => Boolean(item));
+      const links = ((slot.Links as { PCIeDevice?: { "@odata.id"?: string }[] } | undefined)?.PCIeDevice || []).map((item) => item?.["@odata.id"] || "").filter(Boolean);
+      const linked = links.map((link) => devices.get(link)).filter((item): item is RedfishDoc => Boolean(item));
       const slotState = state(slot);
       const lanes = Number(slot.Lanes) || 0;
+      const name = label(slot) || `${id(doc)} 插槽 ${index + 1}`;
+      const used = links.length ? true : slotState === "Absent" ? false : slotState === "Enabled" ? true : null;
+      const pcieType = [str(slot, "PCIeType") && `PCIe ${str(slot, "PCIeType")}`, lanes && `x${lanes}`].filter(Boolean).join(" ");
+      if (DRIVE_BAY.test(name) || DRIVE_BAY.test(str(slot, "SlotType"))) {
+        // 盘位：插着的 PCIe 设备是 00_2D_00，对应的盘 Name 是 00_2D_00_00（AMI；Id 是 NVMe0_NameSpace1，序号和盘位号对不上），
+        // 按编号前缀对上，盘就不再单独列一遍。
+        const deviceIds = links.map((link) => link.split("/").pop() || "").filter(Boolean);
+        const drives = present.filter((drive) => [id(drive), str(drive, "Name")].some((key) => deviceIds.some((device) => key === device || key.startsWith(`${device}_`))));
+        drives.forEach((drive) => placed.add(drive));
+        drivePorts.push({
+          group: "drive",
+          name,
+          type: [/M\.2/i.test(name) ? "M.2" : "NVMe", pcieType && `（${pcieType}）`].filter(Boolean).join(""),
+          used,
+          device: drives.length ? deviceText(drives.map(driveText)) : deviceText(linked.map((item) => str(item, "Model") || str(item, "Name") || id(item))),
+        });
+        return;
+      }
       ports.push({
         group: "pcie",
-        name: label(slot) || `${id(doc)} 插槽 ${index + 1}`,
-        type: [str(slot, "PCIeType") && `PCIe ${str(slot, "PCIeType")}`, lanes && `x${lanes}`, str(slot, "SlotType")].filter(Boolean).join(" "),
-        used: linked.length ? true : slotState === "Absent" ? false : slotState === "Enabled" ? true : null,
+        name,
+        type: [pcieType, str(slot, "SlotType")].filter(Boolean).join(" "),
+        used,
         device: deviceText(linked.map((item) => str(item, "Model") || str(item, "Name") || id(item))),
       });
     });
   }
 
+  // BMC 给的顺序是 NVME3、2、1、0、7……，按名字排。
+  ports.push(...drivePorts.sort((x, y) => x.name.localeCompare(y.name, "en", { numeric: true })));
   for (const doc of raw.drives) {
+    if (placed.has(doc)) continue;
     const absent = state(doc) === "Absent";
-    const bytes = Number(doc.CapacityBytes) || 0;
     ports.push({
       group: "drive",
       name: label(doc) || str(doc, "Name") || id(doc),
       type: [str(doc, "Protocol"), str(doc, "FormFactor")].filter(Boolean).join(" "),
       used: !absent,
-      device: absent ? "" : [str(doc, "Model"), bytes ? `${Math.round(bytes / 1e9)} GB` : ""].filter(Boolean).join(" "),
+      device: absent ? "" : driveText(doc),
+      ...(drivePorts.length && !absent && !label(doc) ? { note: "没对上盘位" } : {}),
     });
   }
 
