@@ -565,7 +565,7 @@ export function importAssets(records: { row: number; cells: SheetCells }[], acto
               continue;
             }
             const rack = rackFinder(cells.site || "", value, cells.datacenter || "");
-            if (rack === "ambiguous") throw new Error(`好几个机房都有机柜 ${value}，在「机房」列写明是哪个`);
+            if (rack === "ambiguous") throw new Error(`机柜 ${value} 对得上好几个（不同机房都有，或者像 G3 和 G03 这样两个都在），在「机房」列写明，或者写完整的机柜号`);
             const where = [cells.datacenter ? `数据中心「${cells.datacenter}」` : "", cells.site ? `机房「${cells.site}」` : ""].filter(Boolean).join("的");
             if (!rack) throw new Error(`${where ? `${where}里` : ""}没有机柜 ${value}，先在机房页建好`);
             input.rackId = rack.id;
