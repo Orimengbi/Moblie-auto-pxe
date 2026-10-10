@@ -11,8 +11,9 @@ import { OPTICS_SCRIPT, parseOptics } from "./optics.ts";
 import { crawlRedfish, RedfishAuthError, redfishGetter, type RedfishGet } from "./redfish.ts";
 import { renderRevokeScript } from "./render.ts";
 import { assetBmcAccounts, getAsset } from "./assets.ts";
+import { collectSettings } from "./bmc-redfish.ts";
 import { filePayloadPath, getFile, getProject, getTask, listMachines, listNicPlans, readLeasesText, saveInventory, saveOptics, writeTask } from "./store.ts";
-import type { Asset, HwChange, HwPort, InventorySource, OpticsReading, Machine, NicPlan, RemoteTask, ServerRow, TaskHostSource, TaskKind, TaskTarget, TaskTargetStatus } from "./types.ts";
+import type { Asset, BmcSettingKind, HwChange, HwPort, InventorySource, OpticsReading, Machine, NicPlan, RemoteTask, ServerRow, TaskHostSource, TaskKind, TaskTarget, TaskTargetStatus } from "./types.ts";
 
 const OUTPUT_LIMIT = 16000;
 /** 采集脚本的原始输出要整段解析，不能像普通任务那样只留结尾。 */
@@ -81,6 +82,8 @@ export interface TaskInput {
   kind?: TaskKind;
   /** 采集硬件读哪几边，默认两边都读。 */
   sources?: InventorySource[];
+  /** 采集硬件时顺带读 BMC 设置、BIOS 设置，默认不读。 */
+  settings?: BmcSettingKind[];
   name?: string;
   script?: string;
   /** 资产 id。 */
@@ -108,8 +111,11 @@ export function createTask(input: TaskInput, context: HostContext = hostContext(
   if (!script.trim()) throw new Error("脚本是空的");
   if (script.length > 200000) throw new Error("脚本超过 200KB");
   const sources = kind === "inventory" ? (["os", "bmc"] as const).filter((source) => !input.sources || input.sources.includes(source)) : [];
-  if (kind === "inventory" && !sources.length) throw new Error("至少选一种采集方式");
-  const defaultName = kind === "revoke" ? "交付清理：撤掉控制台公钥" : kind === "inventory" ? "采集硬件配置" : script.trim().split("\n")[0].slice(0, 80);
+  const settings = kind === "inventory" ? (["overview", "bios"] as const).filter((item) => input.settings?.includes(item)) : [];
+  if (kind === "inventory" && !sources.length && !settings.length) throw new Error("至少选一种采集方式");
+  const settingsName = settings.map((item) => (item === "overview" ? "BMC" : "BIOS")).join("、");
+  const inventoryName = sources.length ? `采集硬件配置${settings.length ? `和 ${settingsName} 设置` : ""}` : `读取 ${settingsName} 设置`;
+  const defaultName = kind === "revoke" ? "交付清理：撤掉控制台公钥" : kind === "inventory" ? inventoryName : script.trim().split("\n")[0].slice(0, 80);
   const name = (input.name || "").trim().slice(0, 80) || defaultName;
   const fileIds = kind === "script" ? [...new Set(input.fileIds || [])] : [];
   for (const id of fileIds) {
@@ -122,11 +128,12 @@ export function createTask(input: TaskInput, context: HostContext = hostContext(
     const row = getAsset(id);
     if (!row) throw new Error("选中的机器已经不在资产里，刷新页面再选");
     const found = resolveAssetHost(row, context);
-    // 采集硬件只读 BMC 时不需要系统地址；两边都读时有一边能连就去试。
-    const reachable = kind === "inventory" ? (sources.includes("os") && Boolean(found.host)) || (sources.includes("bmc") && Boolean(row.bmcIp)) : Boolean(found.host);
+    // 采集硬件只读 BMC 时不需要系统地址；两边都读时有一边能连就去试。BMC、BIOS 设置也是从 BMC 读。
+    const viaBmc = sources.includes("bmc") || settings.length > 0;
+    const reachable = kind === "inventory" ? (sources.includes("os") && Boolean(found.host)) || (viaBmc && Boolean(row.bmcIp)) : Boolean(found.host);
     const missing =
       kind === "inventory"
-        ? `${sources.includes("os") ? "找不到系统地址" : ""}${sources.length === 2 ? "，" : ""}${sources.includes("bmc") ? "还没有 BMC 地址" : ""}`
+        ? [sources.includes("os") ? "找不到系统地址" : "", viaBmc ? "还没有 BMC 地址" : ""].filter(Boolean).join("，")
         : "找不到这台机器的地址：资产和服务器表都没填系统地址，DHCP 租约里也没有它的装机网卡";
     return {
       serverId: row.id,
@@ -150,6 +157,7 @@ export function createTask(input: TaskInput, context: HostContext = hostContext(
     status: targets.some((item) => item.status === "pending") ? "running" : "done",
     targets,
     ...(kind === "inventory" ? { inventorySources: [...sources] } : {}),
+    ...(settings.length ? { inventorySettings: [...settings] } : {}),
     createdAt: new Date().toISOString(),
   };
   if (task.status === "done") task.finishedAt = task.createdAt;
@@ -296,7 +304,7 @@ function portLines(ports: HwPort[]): string[] {
 }
 
 export async function collectInventory(
-  task: Pick<RemoteTask, "projectId" | "timeoutSec" | "inventorySources">,
+  task: Pick<RemoteTask, "projectId" | "timeoutSec" | "inventorySources" | "inventorySettings">,
   target: Pick<TaskTarget, "serverId" | "host" | "sn">,
   exec: Exec,
   redfish: RedfishFactory = redfishGetter,
@@ -379,6 +387,18 @@ export async function collectInventory(
       }
       if (!done) lines.push(`BMC（${row.bmcIp}）：${failure}`);
     }
+  }
+
+  if (task.inventorySettings?.length && row && Date.now() < deadline) {
+    const settings = await withDeadline(collectSettings(row, task.inventorySettings), deadline, "读 BMC、BIOS 设置").catch((error: unknown) => ({
+      ok: 0,
+      tried: task.inventorySettings!.length,
+      lines: [`BMC、BIOS 设置：${error instanceof Error ? error.message : "读取失败"}`],
+    }));
+    ok += settings.ok;
+    tried += settings.tried;
+    if (settings.ok) reached = true;
+    lines.push(...settings.lines);
   }
 
   const output = tail(`${lines.filter(Boolean).join("\n")}\n`);
