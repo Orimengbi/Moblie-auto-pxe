@@ -93,26 +93,54 @@ function watts(value: number | null): string {
   return value === null ? "" : `${value} W`;
 }
 
-/** 侧边栏「BMC」：经 Redfish 看和改引导、定位灯、资产编号、虚拟介质、功耗、固件。 */
+/** 概况和 BIOS 顶上那一行：上次什么时候从 BMC 读的，和手动读取的按钮。打开页面不自动读 BMC。 */
+export function ReadBar({ readAt, reading, onRead, hint }: { readAt: string; reading: boolean; onRead: () => void; hint?: string }) {
+  return (
+    <Stack direction="row" spacing={1.5} sx={{ alignItems: "center", flexWrap: "wrap" }} useFlexGap>
+      <Typography variant="body2" sx={{ flex: 1, color: "text.secondary" }}>
+        {reading ? hint || "正在从 BMC 读取" : readAt ? `上次从 BMC 读取：${formatTime(readAt)}` : "还没从 BMC 读过"}
+      </Typography>
+      <Button size="small" variant={readAt ? "outlined" : "contained"} disabled={reading} onClick={onRead}>
+        {reading ? "正在读…" : readAt ? "重新读取" : "从 BMC 读取"}
+      </Button>
+    </Stack>
+  );
+}
+
+interface Snapshot {
+  readAt: string;
+  overview: BmcOverview | null;
+  isos: View["isos"];
+  events: StreamStatus;
+}
+
+/** 侧边栏「BMC」：经 Redfish 看和改引导、定位灯、资产编号、虚拟介质、功耗、固件。打开时只显示上次读到的，点按钮才读 BMC。 */
 export function ServerBmc({ assetId }: { assetId: string }) {
-  const [view, setView] = useState<View | null>(null);
+  const [data, setData] = useState<Snapshot | null>(null);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [reading, setReading] = useState(false);
 
-  const load = useCallback(async () => {
-    const result = await api<View>(`/api/assets/${assetId}/redfish`);
-    if (result.ok) {
-      setView(result.data);
-      setError("");
-    } else setError(result.error);
-  }, [assetId]);
+  /** refresh 为 true 才去 BMC 读，否则只拿控制台存的上一次结果。 */
+  const load = useCallback(
+    async (refresh = false) => {
+      if (refresh) setReading(true);
+      const result = await api<Snapshot>(`/api/assets/${assetId}/redfish${refresh ? "?refresh=1" : ""}`);
+      if (refresh) setReading(false);
+      if (result.ok) {
+        setData(result.data);
+        setError("");
+      } else setError(result.error);
+    },
+    [assetId],
+  );
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  /** 发一个改动，成功后显示 BMC 的回复并重新读一遍。 */
+  /** 发一个改动，成功后显示 BMC 的回复，再从 BMC 读一遍看结果。 */
   async function send(url: string, method: string, body: unknown): Promise<boolean> {
     setBusy(true);
     setMessage("");
@@ -124,19 +152,35 @@ export function ServerBmc({ assetId }: { assetId: string }) {
     }
     setError("");
     setMessage(result.data.message || "已完成");
-    await load();
+    await load(true);
     return true;
   }
 
-  if (!view)
+  if (!data)
     return (
       <Typography variant="body2" sx={{ color: error ? "error.main" : "text.secondary" }}>
-        {error || "正在经 Redfish 读 BMC（第一次要十几秒）"}
+        {error || "正在读取"}
       </Typography>
     );
 
+  const bar = <ReadBar readAt={data.readAt} reading={reading} onRead={() => void load(true)} hint="正在经 Redfish 读 BMC，要十几秒" />;
+  if (!data.overview)
+    return (
+      <Stack spacing={2}>
+        {bar}
+        {error ? (
+          <Typography variant="body2" color="error">
+            {error}
+          </Typography>
+        ) : null}
+        <EventStreamLine status={data.events} />
+      </Stack>
+    );
+  const view: View = { ...data.overview, isos: data.isos, events: data.events };
+
   return (
     <Stack spacing={2}>
+      {bar}
       {error ? (
         <Typography variant="body2" color="error">
           {error}
@@ -147,14 +191,7 @@ export function ServerBmc({ assetId }: { assetId: string }) {
           {message}
         </Typography>
       ) : null}
-      <Section
-        title="整机"
-        extra={
-          <Button size="small" onClick={() => void load()} disabled={busy}>
-            刷新
-          </Button>
-        }
-      >
+      <Section title="整机">
         <Stack direction="row" useFlexGap spacing={2.5} sx={{ flexWrap: "wrap" }}>
           <Fact label="电源" value={<StatusChip tone={powerTone(view.powerState)} label={view.powerState === "On" ? "开机" : view.powerState === "Off" ? "关机" : view.powerState || "未知"} />} />
           <Fact label="健康" value={<StatusChip tone={healthTone(view.health)} label={view.health || "未知"} />} />

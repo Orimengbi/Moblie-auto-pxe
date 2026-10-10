@@ -125,6 +125,32 @@ export async function assetSession(assetId: string): Promise<{ asset: Asset; ses
   return { asset, session: await openSession(asset) };
 }
 
+// ---------- 上次读到的结果 ----------
+
+/** 概况和 BIOS 不在每次打开页面时读 BMC，存一份上次手动读到的，页面先显示它。 */
+export type SnapshotKind = "overview" | "bios";
+
+function snapshotFile(assetId: string, kind: SnapshotKind): string {
+  return path.join(dataDir(), "redfish", "assets", assetId.replace(/[^\w-]/g, "_"), `${kind}.json`);
+}
+
+export function loadSnapshot<T>(assetId: string, kind: SnapshotKind): { readAt: string; data: T } | null {
+  try {
+    return JSON.parse(fs.readFileSync(snapshotFile(assetId, kind), "utf8")) as { readAt: string; data: T };
+  } catch {
+    return null;
+  }
+}
+
+export function saveSnapshot<T>(assetId: string, kind: SnapshotKind, data: T): { readAt: string; data: T } {
+  const snapshot = { readAt: new Date().toISOString(), data };
+  const file = snapshotFile(assetId, kind);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(`${file}.tmp`, JSON.stringify(snapshot));
+  fs.renameSync(`${file}.tmp`, file);
+  return snapshot;
+}
+
 // ---------- 概况 ----------
 
 export interface BootOptionView {

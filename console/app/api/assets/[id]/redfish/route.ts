@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { audited, jsonError, readJson } from "@/lib/api";
-import { addEvent } from "@/lib/assets";
+import { addEvent, getAsset } from "@/lib/assets";
 import { requireUser } from "@/lib/auth";
-import { assetSession, bmcOverview, changeSystem, type SystemChange } from "@/lib/bmc-redfish";
+import { assetSession, bmcOverview, changeSystem, loadSnapshot, saveSnapshot, type BmcOverview, type SystemChange } from "@/lib/bmc-redfish";
 import { bootOrigin } from "@/lib/net";
 import { imageDir } from "@/lib/paths";
 import { streamStatus } from "@/lib/redfish-events";
@@ -26,12 +26,22 @@ function isoChoices(): { name: string; url: string }[] {
   }
 }
 
-/** 这台 BMC 的概况：电源、引导、定位灯、虚拟介质、功耗、固件升级状态。 */
-export async function GET(_: Request, context: Context) {
+/**
+ * 这台 BMC 的概况：电源、引导、定位灯、虚拟介质、功耗、固件升级状态。
+ * 平常给上次读到的，不连 BMC；带 ?refresh=1 才去 BMC 读一遍并存下来。
+ */
+export async function GET(request: Request, context: Context) {
   try {
     const { id } = await context.params;
+    const extra = { isos: isoChoices(), events: streamStatus(id) };
+    if (new URL(request.url).searchParams.get("refresh") !== "1") {
+      if (!getAsset(id)) throw new Error("资产不存在");
+      const cached = loadSnapshot<BmcOverview>(id, "overview");
+      return Response.json({ readAt: cached?.readAt || "", overview: cached?.data || null, ...extra });
+    }
     const { session } = await assetSession(id);
-    return Response.json({ ...(await bmcOverview(session)), isos: isoChoices(), events: streamStatus(id) });
+    const saved = saveSnapshot(id, "overview", await bmcOverview(session));
+    return Response.json({ readAt: saved.readAt, overview: saved.data, ...extra });
   } catch (error) {
     return jsonError(error);
   }

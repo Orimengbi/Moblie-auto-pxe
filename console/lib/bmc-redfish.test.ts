@@ -200,3 +200,11 @@ test("recorded events are kept and critical ones open a sticky alert (task event
   assert.equal(open[0].count, 2);
   assert.equal(open[0].severity, "critical");
 });
+
+test("the last read is kept per asset so pages do not hit the BMC on open", () => {
+  assert.equal(bmc.loadSnapshot("asset-1", "bios"), null);
+  const saved = bmc.saveSnapshot("asset-1", "bios", { attributes: [1, 2] });
+  assert.deepEqual(bmc.loadSnapshot("asset-1", "bios"), saved);
+  assert.equal(bmc.loadSnapshot("asset-1", "overview"), null);
+  assert.equal(bmc.loadSnapshot("asset-2", "bios"), null);
+});
