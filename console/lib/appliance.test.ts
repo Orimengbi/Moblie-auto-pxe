@@ -26,8 +26,8 @@ import {
   renderNicScript,
   renderUbuntuAutoinstall,
 } from "./render.ts";
-import { bindServerBoot, controlAsset, createIpmi, deleteProject, deleteServer, saveServer, getTask, listMachines, listServers, markServerInstalled, requestReinstall, saveFile, createNic, createProfile, createProject, createReport, customizationForMac, getIpmiBySn, getMachine, getProject, getState, importProjectPlan, importServerSheet, listImages, listNicsBySn, listProjects, publicServer, reconcileServers, renameProject, saveMachine, saveMachineFact, saveNetwork, setProjectEnabled, updateProjectNetwork } from "./store.ts";
-import { updateAsset } from "./assets.ts";
+import { bindServerBoot, controlAsset, removeAsset, createIpmi, deleteProject, deleteServer, saveServer, getTask, listMachines, listServers, markServerInstalled, requestReinstall, saveFile, createNic, createProfile, createProject, createReport, customizationForMac, getIpmiBySn, getMachine, getProject, getState, importProjectPlan, importServerSheet, listImages, listNicsBySn, listProjects, publicServer, reconcileServers, renameProject, saveMachine, saveMachineFact, saveNetwork, setProjectEnabled, updateProjectNetwork } from "./store.ts";
+import { getAsset, updateAsset } from "./assets.ts";
 import { DEFAULT_STATE, type ImageRecord, type Profile } from "./types.ts";
 
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pxe-test-"));
@@ -826,8 +826,16 @@ test("one server can be added, fixed and removed without a new sheet", async () 
   assert.match(reset.detail, /原账号已更新/);
   await assert.rejects(saveServer(project.id, "not-a-row", base), /不在这个项目里/);
 
+  // 还在批次里的资产不让删，不然会按批次里的行自动重建。
+  const assetId = listServers().find((row) => row.id === created.id)!.assetId;
+  assert.ok(getAsset(assetId));
+  assert.throws(() => removeAsset(assetId), /还在装机批次「/);
+  assert.ok(getAsset(assetId));
+
   await deleteServer(project.id, created.id);
   assert.equal(listServers().some((row) => row.id === created.id), false);
+  assert.equal(removeAsset(assetId).sn, "SN-EDIT9");
+  assert.equal(getAsset(assetId), null);
   await deleteProject(project.id);
 });
 

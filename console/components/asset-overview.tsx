@@ -13,6 +13,7 @@ import { StatusChip } from "@/components/mui/status-chip";
 import type { AssetRow } from "@/lib/asset-view";
 import { ASSET_STATUS, ASSET_STATUS_TONE, ASSET_TYPES, WARRANTY_LABEL } from "@/lib/asset-labels";
 import type { Customer } from "@/lib/types";
+import { api } from "@/lib/client-api";
 
 const MONO = "var(--font-geist-mono), monospace";
 
@@ -24,6 +25,34 @@ export function AssetOverview({ assetId, onChanged }: { assetId: string; onChang
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [error, setError] = useState("");
   const [editing, setEditing] = useState(false);
+  const [admin, setAdmin] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  useEffect(() => {
+    void fetch("/api/auth/me")
+      .then((response) => (response.ok ? response.json() : null))
+      .then((me) => setAdmin(me?.role === "admin"))
+      .catch(() => setAdmin(false));
+  }, []);
+
+  /** 删资产不能撤销，要输一遍序列号确认。删掉后列表刷新，侧边栏跟着关掉。 */
+  async function remove() {
+    if (!asset) return;
+    const typed = window.prompt(`删除资产 ${asset.tag}（${asset.sn}）？\n\n记录、告警、硬件采集会一起删掉，不能恢复；装在上面的备件退回库里，工单保留但不再关联这台。\n\n确认的话输入序列号：`);
+    if (typed === null) return;
+    if (typed.trim().toUpperCase() !== asset.sn.toUpperCase()) {
+      window.alert("序列号不对，没有删除");
+      return;
+    }
+    setDeleting(true);
+    const result = await api(`/api/assets/${assetId}`, "DELETE");
+    setDeleting(false);
+    if (!result.ok) {
+      window.alert(result.error);
+      return;
+    }
+    onChanged?.();
+  }
 
   const load = useCallback(async () => {
     const [one, list] = await Promise.all([fetch(`/api/assets/${assetId}`).catch(() => null), fetch("/api/customers").catch(() => null)]);
@@ -66,6 +95,11 @@ export function AssetOverview({ assetId, onChanged }: { assetId: string; onChang
         <Button variant="outlined" sx={{ ml: "auto" }} onClick={() => setEditing(true)}>
           编辑资料
         </Button>
+        {admin ? (
+          <Button variant="outlined" color="error" disabled={deleting} onClick={() => void remove()}>
+            删除
+          </Button>
+        ) : null}
       </Stack>
       <Block
         title="基本"
