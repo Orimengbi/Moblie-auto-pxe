@@ -22,8 +22,14 @@ export async function DELETE(request: Request, context: Context) {
     requireAdmin(request);
     const { id } = await context.params;
     const site = getSite(id);
-    await audited(request, { action: "删除机房", targetType: "site", targetId: id, targetLabel: site ? `${site.code} ${site.name}` : id }, () => deleteSite(id));
-    return Response.json({ ok: true });
+    // ?racks=1：连里面的空机柜一起删。
+    const withRacks = new URL(request.url).searchParams.get("racks") === "1";
+    const result = await audited(
+      request,
+      (done: { racks: number } | null) => ({ action: "删除机房", targetType: "site", targetId: id, targetLabel: site ? `${site.code} ${site.name}` : id, detail: done?.racks ? `连同 ${done.racks} 个机柜` : "" }),
+      () => deleteSite(id, withRacks),
+    );
+    return Response.json({ ok: true, racks: result.racks });
   } catch (error) {
     return jsonError(error);
   }

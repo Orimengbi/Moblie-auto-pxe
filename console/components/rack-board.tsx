@@ -227,8 +227,17 @@ export function RackBoard({
   }
 
   async function removeSite(target: Site) {
-    if (!window.confirm(`删除机房「${target.name}」？`)) return;
-    const result = await api(`/api/sites/${target.id}`, "DELETE");
+    const count = racks.filter((rack) => rack.siteId === target.id).length;
+    if (count) {
+      // 连机柜一起删，删了找不回来：输一遍机房代码确认。
+      const typed = window.prompt(`删除机房「${target.name}」，连同里面的 ${count} 个机柜和平面图上的门、柱子等一起删掉，不能恢复。\n机柜里还放着设备的话不会删。\n\n确认的话输入机房代码 ${target.code}：`);
+      if (typed === null) return;
+      if (typed.trim().toLowerCase() !== target.code.toLowerCase()) {
+        setError("机房代码不对，没有删除");
+        return;
+      }
+    } else if (!window.confirm(`删除机房「${target.name}」？`)) return;
+    const result = await api(`/api/sites/${target.id}${count ? "?racks=1" : ""}`, "DELETE");
     setError(result.ok ? "" : result.error);
     router.refresh();
   }
