@@ -1,11 +1,14 @@
 import { auditRequest, jsonError, readSheetUpload, userOrResponse } from "@/lib/api";
+import { prepareAssetImport, runAssetImport } from "@/lib/asset-import";
 import { parseAssetTable } from "@/lib/asset-sheet";
-import { importAssets } from "@/lib/assets";
-import { enrichRecords } from "@/lib/bmc-identify";
+import { createJob, runInBackground, updateJob } from "@/lib/import-jobs";
 
 export const dynamic = "force-dynamic";
 
-/** Excel 批量导入资产。dryRun=1 只预览，不写入。序列号可以不填，有 BMC 地址和账号密码就从 BMC 读。 */
+/**
+ * Excel 批量导入资产。dryRun=1 只预览，不写入。序列号可以不填，有 BMC 地址和账号密码就从 BMC 读。
+ * background=1 时放到后台：马上返回 jobId，读 BMC 的进度和预览在 /api/import-jobs/<id> 里看，确认也在那里。
+ */
 export async function POST(request: Request) {
   const identity = userOrResponse(request);
   if (identity instanceof Response) return identity;
@@ -16,21 +19,19 @@ export async function POST(request: Request) {
     const parsed = parseAssetTable(rows);
     if (parsed.error) throw new Error(parsed.error);
     if (parsed.records.length > 5000) throw new Error("一次最多导入 5000 行");
-    // 只填了 BMC 地址和账号密码的行：连 BMC 读序列号、厂商、型号、BMC MAC，补进空格子。读不到又没序列号的算出错。
-    const enriched = await enrichRecords(parsed.records);
-    const usable = parsed.records.filter((record) => !enriched.get(record.row)?.error).map((record) => ({ ...record, cells: enriched.get(record.row)?.cells || record.cells }));
-    const result = importAssets(usable, identity.user.username, { dryRun });
-    for (const record of parsed.records) {
-      const extra = enriched.get(record.row);
-      if (extra?.error) {
-        result.errors++;
-        result.rows.push({ row: record.row, sn: "", action: "error", message: extra.error });
-      } else if (extra?.note) {
-        const row = result.rows.find((item) => item.row === record.row);
-        if (row) row.message = [extra.note, row.message].filter(Boolean).join("\n");
-      }
+
+    if (form.get("background") === "1") {
+      const job = createJob({ owner: identity.user.username, kind: "assets", title: file.name, page: "/assets" });
+      updateJob(job.id, { progress: { done: 0, total: parsed.records.length, label: `读到 ${parsed.records.length} 行，正在连 BMC 补信息` } });
+      runInBackground(job.id, async () => {
+        const prepared = await prepareAssetImport(parsed.records, parsed.ignored, (done, total) => updateJob(job.id, { progress: { done, total, label: `读 BMC ${done}/${total} 台` } }));
+        updateJob(job.id, { status: "ready", result: runAssetImport(prepared, identity.user.username, true), progress: { done: 1, total: 1, label: "预览好了，等确认" } }, prepared);
+      });
+      return Response.json({ jobId: job.id });
     }
-    result.rows.sort((a, b) => a.row - b.row);
+
+    // 只填了 BMC 地址和账号密码的行：连 BMC 读序列号、厂商、型号、BMC MAC，补进空格子。读不到又没序列号的算出错。
+    const result = runAssetImport(await prepareAssetImport(parsed.records, parsed.ignored), identity.user.username, dryRun);
     if (!dryRun) {
       auditRequest(request, identity, {
         action: "Excel 导入资产",
@@ -40,7 +41,7 @@ export async function POST(request: Request) {
         ok: result.errors === 0,
       });
     }
-    return Response.json({ ...result, ignored: parsed.ignored, dryRun });
+    return Response.json(result);
   } catch (error) {
     return jsonError(error);
   }

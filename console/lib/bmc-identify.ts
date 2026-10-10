@@ -163,14 +163,27 @@ export async function enrichRow(cells: SheetCells, identify: typeof identifyBmc 
   return { cells, note: "", error: `没填序列号，BMC ${ip} 又读不到：${failure}` };
 }
 
-/** 一批行并发补，同时最多连 8 台 BMC。 */
-export async function enrichRecords<T extends { row: number; cells: SheetCells }>(records: T[], identify: typeof identifyBmc = identifyBmc): Promise<Map<number, Enriched>> {
+/** 这一行会不会去连 BMC（有地址、有账号，而且有要补的格子）。进度只按这些行算。 */
+export function needsBmc(cells: SheetCells): boolean {
+  const account = Boolean((cells.bmcUser && cells.bmcPassword) || (cells.bmcFallbackUser && cells.bmcFallbackPassword));
+  return Boolean(cells.bmcIp && account && (!cells.sn || !cells.vendor || !cells.model || !cells.bmcMac));
+}
+
+/** 一批行并发补，同时最多连 8 台 BMC。onProgress 在每读完一台 BMC 后调用。 */
+export async function enrichRecords<T extends { row: number; cells: SheetCells }>(
+  records: T[],
+  identify: typeof identifyBmc = identifyBmc,
+  onProgress?: (done: number, total: number) => void,
+): Promise<Map<number, Enriched>> {
   const out = new Map<number, Enriched>();
+  const total = records.filter((record) => needsBmc(record.cells)).length;
+  let finished = 0;
   let next = 0;
   const worker = async () => {
     while (next < records.length) {
       const record = records[next++];
       out.set(record.row, await enrichRow(record.cells, identify));
+      if (needsBmc(record.cells)) onProgress?.(++finished, total);
     }
   };
   await Promise.all(Array.from({ length: Math.min(8, records.length) }, worker));

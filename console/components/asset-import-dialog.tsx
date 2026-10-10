@@ -4,7 +4,7 @@ import { ImportDialog } from "@/components/import-dialog";
 import type { ImportRowResult } from "@/lib/assets";
 
 /** Excel 批量导入资产：按序列号对上，空格子不改，先预览再写入。序列号可以不填，从 BMC 读。 */
-export function AssetImportDialog({ open, onClose, onDone }: { open: boolean; onClose: () => void; onDone: () => void }) {
+export function AssetImportDialog({ open, jobId, onClose, onDone }: { open: boolean; jobId?: string | null; onClose: () => void; onDone: () => void }) {
   return (
     <ImportDialog<ImportRowResult>
       open={open}
@@ -17,6 +17,8 @@ export function AssetImportDialog({ open, onClose, onDone }: { open: boolean; on
       ]}
       unit="台"
       label={(row) => row.sn}
+      background
+      jobId={jobId}
       onClose={onClose}
       onDone={onDone}
     />

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Checkbox from "@mui/material/Checkbox";
@@ -9,12 +9,14 @@ import DialogActions from "@mui/material/DialogActions";
 import DialogContent from "@mui/material/DialogContent";
 import DialogTitle from "@mui/material/DialogTitle";
 import FormControlLabel from "@mui/material/FormControlLabel";
+import LinearProgress from "@mui/material/LinearProgress";
 import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
 import UploadFileOutlined from "@mui/icons-material/UploadFileOutlined";
 import { StatusChip } from "@/components/mui/status-chip";
 import type { Tone } from "@/lib/asset-labels";
 import { api } from "@/lib/client-api";
+import type { ImportJob } from "@/lib/import-jobs";
 
 export interface ImportRow {
   row: number;
@@ -38,6 +40,8 @@ const ACTION_TONE: Record<ImportRow["action"], Tone> = { create: "primary", upda
 /**
  * Excel 批量导入的通用弹窗：选文件后先预览（dryRun=1），列出新建、更新和有问题的行，确认后再真正写入。
  * 资产和机柜导入都用它，只是接口、模板和每行的显示不同。
+ * background 时读表和预览放到服务器后台（资产导入要连 BMC，可能要几分钟）：显示进度，可以「最小化到任务」，
+ * 之后从右上角任务列表点开（带 jobId）接着看预览、确认。
  */
 export function ImportDialog<R extends ImportRow>({
   open,
@@ -48,6 +52,8 @@ export function ImportDialog<R extends ImportRow>({
   fields = {},
   unit,
   label,
+  background = false,
+  jobId: initialJobId = null,
   onClose,
   onDone,
 }: {
@@ -63,6 +69,10 @@ export function ImportDialog<R extends ImportRow>({
   unit: string;
   /** 每行显示的名字，例如序列号、机柜号。 */
   label: (row: R) => string;
+  /** 放到后台跑，见上面的说明。 */
+  background?: boolean;
+  /** 打开一个已经在跑或跑完的后台导入。 */
+  jobId?: string | null;
   onClose: () => void;
   onDone: () => void;
 }) {
@@ -72,6 +82,53 @@ export function ImportDialog<R extends ImportRow>({
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
   const [showAll, setShowAll] = useState(false);
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [job, setJob] = useState<ImportJob<ImportSummary<R>> | null>(null);
+  const reported = useRef("");
+  // 父组件每次渲染都给一个新的 onDone，放进 ref，免得轮询跟着反复重开。
+  const onDoneRef = useRef(onDone);
+  onDoneRef.current = onDone;
+  const [pollTick, setPollTick] = useState(0);
+
+  // 从任务列表点开：接上那个后台导入。
+  useEffect(() => {
+    if (open && initialJobId) setJobId(initialJobId);
+  }, [open, initialJobId]);
+
+  // 后台导入：在跑时每秒取一次进度；预览好了显示预览，写完了显示结果。
+  useEffect(() => {
+    if (!open || !jobId) return;
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      const result = await api<ImportJob<ImportSummary<R>>>(`/api/import-jobs/${jobId}`);
+      if (!alive) return;
+      if (!result.ok) {
+        setError(result.error);
+        setJob(null);
+        return;
+      }
+      const next = result.data;
+      setJob(next);
+      setError(next.status === "error" ? next.error : "");
+      if (next.status === "ready" && next.result) setPreview(next.result);
+      if (next.status === "done" && next.result) {
+        setDone(next.result);
+        if (reported.current !== next.id) {
+          reported.current = next.id;
+          onDoneRef.current();
+        }
+      }
+      if (next.status === "running") timer = setTimeout(poll, 1000);
+    };
+    void poll();
+    return () => {
+      alive = false;
+      if (timer) clearTimeout(timer);
+    };
+  }, [open, jobId, pollTick]);
+
+  const running = background ? job?.status === "running" || pending : pending;
 
   function reset() {
     setFile(null);
@@ -79,24 +136,48 @@ export function ImportDialog<R extends ImportRow>({
     setDone(null);
     setError("");
     setShowAll(false);
+    setJobId(null);
+    setJob(null);
   }
 
+  /** 后台导入在跑时关窗口就是最小化：任务接着跑，右上角任务列表里能看到、能点回来。 */
   function close() {
     reset();
     onClose();
   }
 
-  async function send(target: File, dryRun: boolean) {
+  /** 告诉右上角任务列表马上刷新一次。 */
+  function notifyTasks() {
+    window.dispatchEvent(new Event("pxe:import-jobs"));
+  }
+
+  async function send(target: File | null, dryRun: boolean) {
     setPending(true);
     setError("");
+    if (background && !dryRun && jobId) {
+      const result = await api(`/api/import-jobs/${jobId}`, "POST", { action: "commit" });
+      setPending(false);
+      if (!result.ok) return setError(result.error);
+      setJob((current) => (current ? { ...current, phase: "commit", status: "running", progress: { done: 0, total: 1, label: "正在写入" } } : current));
+      setPollTick((tick) => tick + 1);
+      notifyTasks();
+      return;
+    }
+    if (!target) return setPending(false);
     const form = new FormData();
     form.set("file", target);
     form.set("dryRun", dryRun ? "1" : "0");
+    if (background) form.set("background", "1");
     for (const [key, value] of Object.entries(fields)) form.set(key, value);
-    const result = await api<ImportSummary<R>>(endpoint, "POST", form);
+    const result = await api<ImportSummary<R> & { jobId?: string }>(endpoint, "POST", form);
     setPending(false);
     if (!result.ok) {
       setError(result.error);
+      return;
+    }
+    if (result.data.jobId) {
+      setJobId(result.data.jobId);
+      notifyTasks();
       return;
     }
     if (dryRun) setPreview(result.data);
@@ -111,7 +192,7 @@ export function ImportDialog<R extends ImportRow>({
   const unchanged = result ? (result.unchanged ?? result.rows.filter((row) => row.action === "same").length) : 0;
 
   return (
-    <Dialog open={open} onClose={() => !pending && close()} maxWidth="md" scroll="paper">
+    <Dialog open={open} onClose={() => (background ? close() : !pending && close())} maxWidth="md" scroll="paper">
       <DialogTitle>{title}</DialogTitle>
       <DialogContent dividers sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
         <Typography variant="body2" component="div" sx={{ color: "text.secondary" }}>
@@ -124,7 +205,7 @@ export function ImportDialog<R extends ImportRow>({
             </Button>
           ))}
           {!done ? (
-            <Button component="label" variant="outlined" startIcon={<UploadFileOutlined />} disabled={pending}>
+            <Button component="label" variant="outlined" startIcon={<UploadFileOutlined />} disabled={running || Boolean(jobId && job?.phase === "commit")}>
               选择文件
               <input
                 type="file"
@@ -134,22 +215,35 @@ export function ImportDialog<R extends ImportRow>({
                   const picked = event.target.files?.[0] || null;
                   setFile(picked);
                   setPreview(null);
+                  setJobId(null);
+                  setJob(null);
                   if (picked) void send(picked, true);
                 }}
               />
             </Button>
           ) : null}
-          {file && !done ? (
+          {(file || job) && !done ? (
             <Typography variant="body2" noWrap sx={{ minWidth: 0, maxWidth: "100%" }}>
-              {file.name}
+              {file?.name || job?.title}
             </Typography>
           ) : null}
-          {pending ? (
+          {pending && !job ? (
             <Typography variant="body2" sx={{ color: "text.secondary" }}>
               正在读表
             </Typography>
           ) : null}
         </Stack>
+        {job?.status === "running" ? (
+          <Stack spacing={0.75}>
+            <Typography variant="body2" sx={{ color: "text.secondary" }}>
+              {job.progress.label}
+            </Typography>
+            {job.progress.total > 1 ? <LinearProgress variant="determinate" value={(job.progress.done / job.progress.total) * 100} /> : <LinearProgress />}
+            <Typography variant="caption" sx={{ color: "text.secondary" }}>
+              在后台跑，可以点「最小化到任务」先去干别的，跑完在右上角「任务」里点开接着看。
+            </Typography>
+          </Stack>
+        ) : null}
         {error ? (
           <Typography variant="body2" color="error">
             {error}
@@ -214,10 +308,14 @@ export function ImportDialog<R extends ImportRow>({
           </Button>
         ) : (
           <>
-            <Button disabled={pending} onClick={close}>
-              取消
-            </Button>
-            <Button variant="contained" disabled={pending || !file || !preview || preview.created + preview.updated === 0} onClick={() => file && void send(file, false)}>
+            {background && jobId ? (
+              <Button onClick={close}>{running ? "最小化到任务" : "先放着"}</Button>
+            ) : (
+              <Button disabled={pending} onClick={close}>
+                取消
+              </Button>
+            )}
+            <Button variant="contained" disabled={running || !(file || jobId) || !preview || preview.created + preview.updated === 0} onClick={() => void send(file, false)}>
               {preview ? `确认导入 ${preview.created + preview.updated} ${unit}` : "确认导入"}
             </Button>
           </>

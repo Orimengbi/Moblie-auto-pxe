@@ -19,6 +19,7 @@ import Typography from "@mui/material/Typography";
 import CloseOutlined from "@mui/icons-material/CloseOutlined";
 import ChecklistOutlined from "@mui/icons-material/ChecklistOutlined";
 import { formatBytes, percent, useUploads, type LiveUpload } from "@/components/upload-provider";
+import type { ImportJob } from "@/lib/import-jobs";
 import type { TaskFeed, TaskSummary } from "@/lib/types";
 import { formatTime } from "@/lib/time";
 
@@ -136,19 +137,53 @@ function BatchItem({ task, onDismiss }: { task: TaskSummary; onDismiss?: () => v
   );
 }
 
-function Section({ title, float, onFloat, children }: { title: string; float: boolean; onFloat: (on: boolean) => void; children: React.ReactNode }) {
+/** 后台的表格导入：在跑的显示进度，预览好了的等你点开确认。点「打开」回到导入页面接着看。 */
+function ImportItem({ job, onRemove, onOpen }: { job: ImportJob; onRemove: () => void; onOpen: () => void }) {
+  const summary = job.result as { created?: number; updated?: number; errors?: number } | null;
+  const counts = summary ? `新建 ${summary.created ?? 0}，更新 ${summary.updated ?? 0}${summary.errors ? `，${summary.errors} 行有问题` : ""}` : "";
+  const state =
+    job.status === "running" ? (job.phase === "commit" ? "正在写入" : "准备中") : job.status === "ready" ? "预览好了，等确认" : job.status === "done" ? "已导入" : "出错了";
+  const value = job.status === "running" && job.progress.total > 1 ? Math.floor((job.progress.done / job.progress.total) * 100) : 100;
+  return (
+    <Stack spacing={0.5}>
+      <Row title={job.title} state={state} error={job.status === "error"} />
+      {job.status === "running" ? (
+        job.progress.total > 1 ? <Bar value={value} active /> : <LinearProgress sx={{ height: 6, borderRadius: 3 }} />
+      ) : null}
+      <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+        <Typography variant="caption" noWrap sx={{ flex: 1, minWidth: 0, color: job.status === "error" ? "error.main" : "text.secondary" }}>
+          {job.status === "running" ? job.progress.label : job.status === "error" ? job.error : `${job.status === "ready" ? "预览：" : ""}${counts}`} · {formatTime(job.startedAt)}
+        </Typography>
+        <MuiLink component={Link} href={`${job.page}?import=${encodeURIComponent(job.id)}`} onClick={onOpen} variant="caption" underline="hover">
+          {job.status === "ready" ? "确认" : "打开"}
+        </MuiLink>
+        {job.status !== "running" ? (
+          <Tooltip title="从列表里去掉">
+            <IconButton size="small" aria-label="去掉" onClick={onRemove} sx={{ p: 0.25 }}>
+              <CloseOutlined sx={{ fontSize: 14 }} />
+            </IconButton>
+          </Tooltip>
+        ) : null}
+      </Stack>
+    </Stack>
+  );
+}
+
+function Section({ title, float, onFloat, children }: { title: string; float?: boolean; onFloat?: (on: boolean) => void; children: React.ReactNode }) {
   return (
     <Stack spacing={1.5} component="section">
       <Stack direction="row" sx={{ alignItems: "center", justifyContent: "space-between" }}>
         <Typography variant="subtitle2" sx={{ color: "text.secondary" }}>
           {title}
         </Typography>
-        <FormControlLabel
-          control={<Checkbox checked={float} onChange={(event) => onFloat(event.target.checked)} sx={{ p: 0.5 }} />}
-          label="小浮窗"
-          slotProps={{ typography: { variant: "caption", color: "text.secondary" } }}
-          sx={{ mr: 0 }}
-        />
+        {onFloat ? (
+          <FormControlLabel
+            control={<Checkbox checked={Boolean(float)} onChange={(event) => onFloat(event.target.checked)} sx={{ p: 0.5 }} />}
+            label="小浮窗"
+            slotProps={{ typography: { variant: "caption", color: "text.secondary" } }}
+            sx={{ mr: 0 }}
+          />
+        ) : null}
       </Stack>
       {children}
     </Stack>
@@ -163,11 +198,12 @@ function Empty({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** 右上角的任务列表：镜像上传和批量任务的进度都在这里，每类可以单独开小浮窗。 */
+/** 右上角的任务列表：镜像上传、表格导入和批量任务的进度都在这里，上传和批量任务可以单独开小浮窗。 */
 export function TaskCenter() {
   const pathname = usePathname();
   const uploads = useUploads();
   const [feed, setFeed] = useState<TaskFeed>(EMPTY);
+  const [imports, setImports] = useState<ImportJob[]>([]);
   const [open, setOpen] = useState(false);
   const [prefs, setPrefs] = useState<FloatPrefs>(DEFAULT_PREFS);
   // 小浮窗只跟这次打开页面以后跑过的批量任务，免得旧任务一上来就弹出来。
@@ -181,17 +217,32 @@ export function TaskCenter() {
   const stale: LiveUpload[] = feed.uploads.filter((item) => !liveIds.has(item.id)).map((item) => ({ ...item, state: "paused" }));
   const panelUploads = [...live.filter((item) => item.state !== "done"), ...stale];
   const runningBatch = feed.tasks.filter((task) => task.status === "running");
-  const busy = live.filter((item) => item.state === "running").length + runningBatch.length + feed.extracting.length;
+  // 等确认的导入也算，提醒你回去点确认。
+  const pendingImports = imports.filter((job) => job.status === "running" || job.status === "ready").length;
+  const busy = live.filter((item) => item.state === "running").length + runningBatch.length + feed.extracting.length + pendingImports;
   const doneCount = live.filter((item) => item.state === "done").length;
 
   const load = useCallback(async () => {
     try {
-      const response = await fetch("/api/tasks", { cache: "no-store" });
-      if (response.ok) setFeed(await response.json());
+      const [tasks, importJobs] = await Promise.all([fetch("/api/tasks", { cache: "no-store" }), fetch("/api/import-jobs", { cache: "no-store" })]);
+      if (tasks.ok) setFeed(await tasks.json());
+      if (importJobs.ok) setImports(await importJobs.json());
     } catch {
       // 断网时保留上次的列表，下一轮再取。
     }
   }, []);
+
+  // 导入窗口开了后台任务或最小化时马上刷新。
+  useEffect(() => {
+    const refresh = () => void load();
+    window.addEventListener("pxe:import-jobs", refresh);
+    return () => window.removeEventListener("pxe:import-jobs", refresh);
+  }, [load]);
+
+  async function removeImport(id: string) {
+    await fetch(`/api/import-jobs/${id}`, { method: "DELETE" }).catch(() => null);
+    await load();
+  }
 
   useEffect(() => setPrefs(loadPrefs()), []);
 
@@ -256,6 +307,13 @@ export function TaskCenter() {
             ))}
             {!panelUploads.length && !feed.extracting.length ? <Empty>没有进行中的上传。</Empty> : null}
           </Section>
+          {imports.length ? (
+            <Section title="表格导入">
+              {imports.map((job) => (
+                <ImportItem key={job.id} job={job} onRemove={() => void removeImport(job.id)} onOpen={() => setOpen(false)} />
+              ))}
+            </Section>
+          ) : null}
           <Section title="批量任务" float={prefs.batch} onFloat={(on) => setFloat("batch", on)}>
             {feed.tasks.map((task) => (
               <BatchItem key={task.id} task={task} />
