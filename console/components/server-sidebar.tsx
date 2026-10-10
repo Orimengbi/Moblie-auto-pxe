@@ -75,6 +75,35 @@ function keepsOpen(target: EventTarget | null): boolean {
  * 点外面、按 Esc 或右上角关闭；点到列表里别的行不关，直接换成那一台。
  * 从装机批次打开时带 projectId，硬件配置按那个批次的基准检查。
  */
+/** 标题序列号旁边的小字：最近一次硬件采集里的 BIOS 和 BMC 版本。没采集过就不显示。 */
+function FirmwareVersions({ assetId }: { assetId: string }) {
+  const [versions, setVersions] = useState<{ bios: string; bmc: string } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      const response = await fetch(`/api/assets/${assetId}/inventory?view=firmware`).catch(() => null);
+      const body = response?.ok ? await response.json().catch(() => null) : null;
+      if (alive) setVersions(body);
+    };
+    void load();
+    const onUpdated = (event: Event) => {
+      if ((event as CustomEvent<string>).detail === assetId) void load();
+    };
+    window.addEventListener("pxe:inventory-updated", onUpdated);
+    return () => {
+      alive = false;
+      window.removeEventListener("pxe:inventory-updated", onUpdated);
+    };
+  }, [assetId]);
+  const parts = [versions?.bios && `BIOS ${versions.bios}`, versions?.bmc && `BMC ${versions.bmc}`].filter(Boolean);
+  if (!parts.length) return null;
+  return (
+    <Typography component="span" variant="caption" sx={{ color: "text.secondary", fontFamily: "var(--font-geist-mono), monospace", whiteSpace: "nowrap" }}>
+      {parts.join(" · ")}
+    </Typography>
+  );
+}
+
 export function ServerSidebar({ projectId, row, initialTab = "overview", onClose, onChanged }: { projectId?: string; row: Row | null; initialTab?: Tab; onClose: () => void; onChanged?: () => void }) {
   // 换一台机器时停在同一个标签上，方便一台台对比。
   const [tab, setTab] = useState<Tab>(initialTab);
@@ -116,9 +145,12 @@ export function ServerSidebar({ projectId, row, initialTab = "overview", onClose
           >
             <Box sx={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
               <Box sx={{ position: "relative", px: 2.5, pt: 2, pr: 6, borderBottom: 1, borderColor: "divider" }}>
-                <Typography variant="h3" sx={{ fontFamily: "var(--font-geist-mono), monospace", wordBreak: "break-all" }}>
-                  {row.sn}
-                </Typography>
+                <Box sx={{ display: "flex", alignItems: "baseline", flexWrap: "wrap", columnGap: 1.5, rowGap: 0.25 }}>
+                  <Typography variant="h3" sx={{ fontFamily: "var(--font-geist-mono), monospace", wordBreak: "break-all" }}>
+                    {row.sn}
+                  </Typography>
+                  {network ? null : <FirmwareVersions key={row.id} assetId={row.id} />}
+                </Box>
                 <Typography variant="body2" sx={{ mt: 0.5, color: "text.secondary" }}>
                   {row.description}
                 </Typography>

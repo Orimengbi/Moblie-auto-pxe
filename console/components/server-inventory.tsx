@@ -157,11 +157,13 @@ export function ServerInventory({ projectId, row }: { projectId?: string; row: {
       const target = task?.targets[0];
       if (target && target.status !== "ok") setError(`采集没有成功：${target.output.trim().split("\n").pop() || target.status}`);
       else setMessage("采集完成");
+      // 侧边栏标题旁的 BIOS/BMC 版本跟着更新。
+      window.dispatchEvent(new CustomEvent("pxe:inventory-updated", { detail: row.id }));
       router.refresh();
       await load("");
     }, 3000);
     return () => clearInterval(timer);
-  }, [collecting, load, router]);
+  }, [collecting, load, router, row.id]);
 
   async function collect() {
     setError("");

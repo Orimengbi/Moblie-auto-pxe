@@ -583,3 +583,14 @@ test("inventory tasks collect both sources, keep history and feed the baseline",
   assert.equal(getOptics(serverId), null, "删资产时一起删收发光读数");
   assert.deepEqual(listInventory(serverId), [], "删资产时一起删采集记录");
 });
+
+test("headline BIOS/BMC versions come from host firmware only", async () => {
+  const { headlineFirmware } = await import("./inventory.ts");
+  const fw = (slot: string, firmware: string) => ({ kind: "firmware", slot, model: slot, vendor: "", sn: "", firmware, attrs: {} }) as unknown as HwComponent;
+  // Redfish（AMI G894）：双 BMC 镜像，HGX 底板 BMC 不算。
+  assert.deepEqual(headlineFirmware([fw("HGX_FW_BMC_0", "B3-2602-05.0"), fw("BIOS", "R05_F04"), fw("BMCImage1", "13.06.27"), fw("BMCImage2", "13.06.27")]), { bios: "R05_F04", bmc: "13.06.27" });
+  assert.deepEqual(headlineFirmware([fw("BMCImage1", "13.06.27"), fw("BMCImage2", "13.06.26")]), { bios: "", bmc: "13.06.27 / 13.06.26" });
+  // 系统内采集。
+  assert.deepEqual(headlineFirmware([fw("BIOS", "R05_F04"), fw("BMC", "13.06")]), { bios: "R05_F04", bmc: "13.06" });
+  assert.deepEqual(headlineFirmware([]), { bios: "", bmc: "" });
+});
