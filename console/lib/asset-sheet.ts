@@ -192,6 +192,17 @@ export function assetsToRows(
   ];
 }
 
+/** 导入模板和导出表里要下拉选的列：类型、状态按固定选项，数据中心、机房按现有的代码（也认名称，所以只提醒不拦）。 */
+export function assetDropdowns(datacenters: Pick<Datacenter, "code">[], sites: Pick<Site, "code">[]): { header: string; values: string[]; strict: boolean }[] {
+  const header = (field: SheetField) => SHEET_COLUMNS.find((column) => column.field === field)!.header;
+  return [
+    { header: header("type"), values: Object.values(ASSET_TYPES), strict: true },
+    { header: header("status"), values: Object.values(ASSET_STATUS), strict: true },
+    { header: header("datacenter"), values: datacenters.map((item) => item.code), strict: false },
+    { header: header("site"), values: sites.map((item) => item.code), strict: false },
+  ];
+}
+
 export const TEMPLATE_EXAMPLE: Partial<Record<SheetField, string>> = {
   sn: "SNABC001",
   type: "服务器",

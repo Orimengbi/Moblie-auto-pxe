@@ -441,3 +441,34 @@ test("data centers hold rooms, rooms move between them and sheets carry the data
   assert.deepEqual([d.datacenterId, d.place], [nrt.id, "S120 / A02 / U1"]);
   assert.throws(() => racks.updateSite(s120.id, { datacenterId: "nope", code: "S120", name: "x" }), /数据中心不存在/);
 });
+
+test("asset template and export carry dropdowns for type, status, datacenter and room", async () => {
+  const XLSX = (await import("xlsx")).default;
+  const { xlsxWithDropdowns } = await import("./xlsx-dropdown.ts");
+  const { assetDropdowns, SHEET_COLUMNS, parseAssetTable } = await import("./asset-sheet.ts");
+  const rows = [["编号", ...SHEET_COLUMNS.map((column) => column.header)], ["RS-1", "SN-DROP-1", "服务器", "在用"]];
+  const buffer = xlsxWithDropdowns(rows, "资产", assetDropdowns([{ code: "KIX13" }], [{ code: "R1" }, { code: "R2" }]));
+  fs.writeFileSync(path.join(temp, "dropdown.xlsx"), buffer);
+  // 第一张表照旧能读、能原样导回；选项在第二张隐藏表里。
+  const book = XLSX.read(buffer, { type: "buffer" });
+  assert.deepEqual(book.SheetNames, ["资产", "选项"]);
+  assert.equal(book.Workbook?.Sheets?.[1]?.Hidden, 1);
+  const back = XLSX.utils.sheet_to_json(book.Sheets["资产"], { header: 1, defval: "" }) as unknown[][];
+  assert.equal(parseAssetTable(back).records[0].cells.sn, "SN-DROP-1");
+  assert.deepEqual(XLSX.utils.sheet_to_json(book.Sheets["选项"], { header: 1, defval: "" }).slice(0, 3), [
+    ["类型", "状态", "数据中心", "机房"],
+    ["服务器", "入库", "KIX13", "R1"],
+    ["网络设备", "上架", "", "R2"],
+  ]);
+  const zip = XLSX.CFB.read(buffer, { type: "buffer" });
+  const sheet = Buffer.from(XLSX.CFB.find(zip, "/xl/worksheets/sheet1.xml")!.content as Uint8Array).toString("utf8");
+  // 类型是第 C 列（前面有「编号」），状态 D，数据中心 I，机房 J。
+  assert.match(sheet, /<\/sheetData><dataValidations count="4">/);
+  assert.match(sheet, /sqref="C2:C1000"><formula1>'选项'!\$A\$2:\$A\$5<\/formula1>/);
+  assert.match(sheet, /errorStyle="stop"[^>]*sqref="D2:D1000"><formula1>'选项'!\$B\$2:\$B\$9</);
+  assert.match(sheet, /errorStyle="warning"[^>]*sqref="I2:I1000"><formula1>'选项'!\$C\$2:\$C\$2</);
+  assert.match(sheet, /sqref="J2:J1000"><formula1>'选项'!\$D\$2:\$D\$3</);
+  // 没有数据中心、机房时只给类型和状态下拉。
+  const bare = XLSX.CFB.read(xlsxWithDropdowns(rows, "资产", assetDropdowns([], [])), { type: "buffer" });
+  assert.match(Buffer.from(XLSX.CFB.find(bare, "/xl/worksheets/sheet1.xml")!.content as Uint8Array).toString("utf8"), /<dataValidations count="2">/);
+});
