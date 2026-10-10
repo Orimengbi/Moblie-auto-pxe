@@ -150,8 +150,15 @@ async function fetchAll(get: RedfishGet, paths: string[], errors: string[], limi
 }
 
 /** 读一个集合的全部成员。大的集合分页，后面的页在 Members@odata.nextLink 里。 */
-async function collection(get: RedfishGet, path: string, errors: string[]): Promise<RedfishDoc[]> {
+async function collection(get: RedfishGet, path: string, errors: string[], expand = false): Promise<RedfishDoc[]> {
   if (!path) return [];
+  if (expand) {
+    const expanded = await expandedCollection(get, path).catch((error) => {
+      if (error instanceof RedfishAuthError) throw error;
+      return null;
+    });
+    if (expanded) return expanded;
+  }
   try {
     const paths: string[] = [];
     let page: RedfishDoc | null = await get(path);
@@ -166,6 +173,32 @@ async function collection(get: RedfishGet, path: string, errors: string[]): Prom
     errors.push(`${path}：${error instanceof Error ? error.message : "读取失败"}`);
     return [];
   }
+}
+
+const EXPAND = "$expand=.($levels=1)";
+
+function withExpand(path: string): string {
+  return path.includes("$expand=") ? path : `${path}${path.includes("?") ? "&" : "?"}${EXPAND}`;
+}
+
+/**
+ * 用 $expand 一次拿到集合成员的全文（ProtocolFeaturesSupported.ExpandQuery）。
+ * 成员只给了链接、或者 BMC 不认 $expand 时返回 null，由调用方一个个读。
+ * AMI 的下一页链接不带 $expand，要自己补上。
+ */
+async function expandedCollection(get: RedfishGet, path: string): Promise<RedfishDoc[] | null> {
+  const out: RedfishDoc[] = [];
+  let next = withExpand(path);
+  for (let pages = 0; next && pages < 50; pages++) {
+    const page = await get(next);
+    if (!page) return pages ? out : null;
+    const list = Array.isArray(page.Members) ? (page.Members as RedfishDoc[]) : [];
+    if (list.some((item) => Object.keys(item).length <= 1)) return null;
+    out.push(...list);
+    const link = page["Members@odata.nextLink"];
+    next = typeof link === "string" && link ? withExpand(link) : "";
+  }
+  return out;
 }
 
 /** 读一个单独的文档；读不到记一笔，账号被拒照样抛出。 */
@@ -189,7 +222,9 @@ async function eachLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<
 }
 
 /** 按 Redfish 的链接走一遍：Systems、Chassis、Managers 和固件清单。 */
-export async function crawlRedfish(get: RedfishGet): Promise<RedfishRaw> {
+export async function crawlRedfish(get: RedfishGet, options: { expand?: boolean } = {}): Promise<RedfishRaw> {
+  // 默认用 $expand：在 G894 上结果一样，请求数 546 → 320，整体 134 → 126 秒（BMC 一次只处理一个请求，省的是来回）。
+  const many = (path: string, errors: string[]) => collection(get, path, errors, options.expand ?? true);
   const errors: string[] = [];
   const root = await get("/redfish/v1/");
   if (!root) throw new Error("BMC 没有 Redfish 服务");
@@ -209,27 +244,27 @@ export async function crawlRedfish(get: RedfishGet): Promise<RedfishRaw> {
     errors,
   };
 
-  raw.systems = await collection(get, link(root, "Systems") || "/redfish/v1/Systems", errors);
+  raw.systems = await many(link(root, "Systems") || "/redfish/v1/Systems", errors);
   for (const system of raw.systems) {
-    raw.processors.push(...(await collection(get, link(system, "Processors"), errors)));
-    raw.memory.push(...(await collection(get, link(system, "Memory"), errors)));
-    for (const storage of await collection(get, link(system, "Storage"), errors)) {
+    raw.processors.push(...(await many(link(system, "Processors"), errors)));
+    raw.memory.push(...(await many(link(system, "Memory"), errors)));
+    for (const storage of await many(link(system, "Storage"), errors)) {
       const drives = Array.isArray(storage.Drives) ? storage.Drives : [];
       const paths = drives.map((item) => (item as { "@odata.id"?: string })?.["@odata.id"]).filter((id): id is string => typeof id === "string");
       raw.drives.push(...(await fetchAll(get, paths, errors)));
     }
   }
 
-  raw.chassis = await collection(get, link(root, "Chassis") || "/redfish/v1/Chassis", errors);
+  raw.chassis = await many(link(root, "Chassis") || "/redfish/v1/Chassis", errors);
   // 带 GPU 底板的机器有上百个机箱，几个一起读。
   await eachLimit(raw.chassis, 4, async (chassis) => {
-    raw.pcieDevices.push(...(await collection(get, link(chassis, "PCIeDevices"), errors)));
-    raw.networkAdapters.push(...(await collection(get, link(chassis, "NetworkAdapters"), errors)));
+    raw.pcieDevices.push(...(await many(link(chassis, "PCIeDevices"), errors)));
+    raw.networkAdapters.push(...(await many(link(chassis, "NetworkAdapters"), errors)));
     const slots = await optional(get, link(chassis, "PCIeSlots"), errors);
     if (slots) raw.pcieSlots.push(slots);
     // 新的 BMC 用 PowerSubsystem/PowerSupplies，旧的把电源列在 Power 里。
     const subsystem = link(chassis, "PowerSubsystem");
-    const fromSubsystem = subsystem ? await collection(get, link(await optional(get, subsystem, errors), "PowerSupplies"), errors) : [];
+    const fromSubsystem = subsystem ? await many(link(await optional(get, subsystem, errors), "PowerSupplies"), errors) : [];
     if (fromSubsystem.length) {
       raw.powerSupplies.push(...fromSubsystem);
     } else if (link(chassis, "Power")) {
@@ -243,12 +278,12 @@ export async function crawlRedfish(get: RedfishGet): Promise<RedfishRaw> {
   await eachLimit(raw.networkAdapters, 4, async (adapter) => {
     const ports = link(adapter, "Ports") || link(adapter, "NetworkPorts");
     const name = typeof adapter.Model === "string" && adapter.Model.trim() ? adapter.Model.trim() : String(adapter.Id || "");
-    for (const port of await collection(get, ports, errors)) raw.networkPorts.push({ ...port, _adapter: name });
+    for (const port of await many(ports, errors)) raw.networkPorts.push({ ...port, _adapter: name });
   });
 
-  raw.managers = await collection(get, link(root, "Managers") || "/redfish/v1/Managers", errors);
+  raw.managers = await many(link(root, "Managers") || "/redfish/v1/Managers", errors);
   const update = await optional(get, link(root, "UpdateService"), errors);
-  raw.firmware = await collection(get, link(update, "FirmwareInventory"), errors);
+  raw.firmware = await many(link(update, "FirmwareInventory"), errors);
 
   // 同一个部件可能从不同的链接读到两次（比如 PCIe 设备挂在两个机箱下），按 @odata.id 去重。
   for (const key of ["processors", "memory", "drives", "pcieDevices", "networkAdapters", "pcieSlots", "networkPorts", "firmware"] as const) {
