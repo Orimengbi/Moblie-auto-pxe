@@ -1,4 +1,4 @@
-import type { AlertSeverity, AlertSource, AlertStatus, Asset, AssetStatus, FloorItemKind, AssetType, Customer, PartKind, PartStatus, TagSettings, TicketKind, TicketPriority, TicketStatus } from "./types.ts";
+import type { AlertSeverity, AlertSource, AlertStatus, Asset, AssetStatus, AssetType, Customer, FloorItemKind, PartKind, PartStatus, RackFacing, TagSettings, TicketKind, TicketPriority, TicketStatus } from "./types.ts";
 
 /** 页面和服务端共用的名称。这个文件不碰数据库，客户端组件可以直接引用。 */
 export const ASSET_TYPES: Record<AssetType, string> = {
@@ -131,9 +131,15 @@ export const TICKET_STATUS_TONE: Record<TicketStatus, Tone> = {
 export const ALERT_SEVERITY_TONE: Record<AlertSeverity, Tone> = { critical: "error", warning: "warning" };
 
 export const FLOOR_ITEM_KINDS: Record<FloorItemKind, string> = {
+  door: "门",
   pillar: "柱子",
   ac: "空调",
   power: "配电柜",
+  switch: "电力开关",
+  ups: "UPS",
+  fire: "消防",
   blocked: "不可用位置",
   other: "其他",
 };
+
+export const RACK_FACING: Record<RackFacing, string> = { "": "不设", up: "朝上", down: "朝下", left: "朝左", right: "朝右" };

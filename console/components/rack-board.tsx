@@ -315,14 +315,15 @@ export function RackBoard({
               新建机柜
             </Button>
           </Stack>
-          {siteRacks.length === 0 ? (
+          {siteRacks.length === 0 && view !== "floor" ? (
             <Typography variant="body2" sx={{ color: "text.secondary" }}>
-              这个机房还没有机柜。点「新建机柜」，可以一次建一排，例如 A01 到 A20。
+              这个机房还没有机柜。点「新建机柜」，可以一次建一排，例如 A01 到 A20；也可以先切到俯视图画机房的墙、门和空调。
             </Typography>
           ) : view === "floor" ? (
             <RackFloor
               key={site.id}
               siteId={site.id}
+              room={{ w: site.floorW, h: site.floorH }}
               racks={siteRacks}
               obstacles={obstacles.filter((item) => item.siteId === site.id)}
               assets={assets}

@@ -1,6 +1,7 @@
 import { assertCodeFree, countWhere, db, runOrPreview, transaction, type SqlValue } from "./db.ts";
 import { cleanCode, cleanName, cleanText } from "./validate.ts";
-import type { Datacenter, FloorItem, FloorItemKind, Rack, RackFacing, Site } from "./types.ts";
+import { FLOOR_ITEM_KINDS as FLOOR_ITEM_LABEL, RACK_FACING } from "./asset-labels.ts";
+import type { Datacenter, FloorItem, FloorItemKind, FloorWall, Rack, RackFacing, Site } from "./types.ts";
 
 /**
  * 数据中心、机房和机柜，从大到小：数据中心 → 机房 → 机柜 → 设备。
@@ -29,6 +30,8 @@ function toSite(row: Record<string, SqlValue>): Site {
     name: String(row.name),
     address: String(row.address),
     note: String(row.note),
+    floorW: Number(row.floor_w ?? 0),
+    floorH: Number(row.floor_h ?? 0),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
@@ -45,7 +48,7 @@ function toRack(row: Record<string, SqlValue>): Rack {
     note: String(row.note),
     posX: row.pos_x === null || row.pos_x === undefined ? null : Number(row.pos_x),
     posY: row.pos_y === null || row.pos_y === undefined ? null : Number(row.pos_y),
-    facing: (["up", "down"].includes(String(row.facing)) ? String(row.facing) : "") as RackFacing,
+    facing: (["up", "down", "left", "right"].includes(String(row.facing)) ? String(row.facing) : "") as RackFacing,
     disabled: Boolean(row.disabled),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
@@ -312,8 +315,10 @@ function parseFacing(value: string): RackFacing {
   const key = value.trim().toLowerCase();
   if (["上", "朝上", "up", "u", "北", "前"].includes(key)) return "up";
   if (["下", "朝下", "down", "d", "南", "后"].includes(key)) return "down";
+  if (["左", "朝左", "left", "l", "西"].includes(key)) return "left";
+  if (["右", "朝右", "right", "r", "东"].includes(key)) return "right";
   if (["", "不设", "无", "-", "none"].includes(key)) return "";
-  throw new Error(`朝向「${value}」认不出，写「上」或「下」`);
+  throw new Error(`朝向「${value}」认不出，写「上」「下」「左」或「右」`);
 }
 
 /** 是、不可用、y、1、true → true；否、可用、n、0、false → false。 */
@@ -386,7 +391,7 @@ export function importRacks(rows: unknown[][], defaultSiteId: string | null, opt
             next = { ...next, facing: wanted.facing };
           }
           const show = (field: (typeof changed)[number], value: unknown) =>
-            field === "disabled" ? (value ? "不可用" : "可用") : field === "facing" ? ({ "": "不设", up: "朝上", down: "朝下" } as Record<string, string>)[String(value)] : String(value || "空");
+            field === "disabled" ? (value ? "不可用" : "可用") : field === "facing" ? RACK_FACING[value as RackFacing] : String(value || "空");
           entry.action = changed.length ? "update" : "same";
           entry.message = changed.map((field) => `${{ rowLabel: "列/排", heightU: "高度", powerKw: "功率", note: "备注", disabled: "状态", facing: "朝向" }[field]}：${show(field, existing[field])} → ${show(field, next[field])}`).join("，");
           if (changed.length) result.updated++;
@@ -466,7 +471,9 @@ export interface LayoutItem {
   disabled?: boolean;
 }
 
-const FLOOR_KINDS: FloorItemKind[] = ["pillar", "ac", "power", "blocked", "other"];
+const FLOOR_KINDS: FloorItemKind[] = ["door", "pillar", "ac", "power", "switch", "ups", "fire", "blocked", "other"];
+const WALLS: FloorWall[] = ["top", "bottom", "left", "right"];
+const FACINGS: RackFacing[] = ["", "up", "down", "left", "right"];
 
 export function listFloorItems(siteId?: string): FloorItem[] {
   const rows = siteId ? db().prepare("SELECT * FROM floor_items WHERE site_id = ? ORDER BY y, x").all(siteId) : db().prepare("SELECT * FROM floor_items ORDER BY y, x").all();
@@ -479,12 +486,14 @@ export function listFloorItems(siteId?: string): FloorItem[] {
     y: Number(row.y),
     w: Number(row.w),
     h: Number(row.h),
+    side: String(row.side ?? "") as FloorWall,
   }));
 }
 
-/** 障碍物占的格子。 */
-export function floorItemCells(item: Pick<FloorItem, "x" | "y" | "w" | "h">): string[] {
+/** 障碍物占的格子。开在墙上的（门）不占机房里的格子。 */
+export function floorItemCells(item: Pick<FloorItem, "x" | "y" | "w" | "h"> & { side?: FloorWall }): string[] {
   const cells: string[] = [];
+  if (item.side) return cells;
   for (let dx = 0; dx < item.w; dx++) for (let dy = 0; dy < item.h; dy++) cells.push(`${item.x + dx},${item.y + dy}`);
   return cells;
 }
@@ -496,12 +505,25 @@ export function floorItemCells(item: Pick<FloorItem, "x" | "y" | "w" | "h">): st
 export function saveLayout(
   siteId: string,
   items: LayoutItem[],
-  obstacles?: Omit<FloorItem, "id" | "siteId">[],
+  obstacles?: (Omit<FloorItem, "id" | "siteId" | "side"> & { side?: FloorWall })[],
   /** 要删掉的机柜（批量改成柱子等障碍物时用，障碍物本身在 obstacles 里）。必须是空柜。 */
   remove: string[] = [],
-): { racks: Rack[]; obstacles: FloorItem[] } {
-  if (!getSite(siteId)) throw new Error("机房不存在");
+  /** 机房的宽、深（格子数），给了就改；0 表示不设外墙。 */
+  room?: { w: number; h: number },
+): { racks: Rack[]; obstacles: FloorItem[]; site: Site } {
+  const site = getSite(siteId);
+  if (!site) throw new Error("机房不存在");
   return transaction(db(), () => {
+    let roomW = site.floorW;
+    let roomH = site.floorH;
+    if (room) {
+      [roomW, roomH] = [room.w, room.h].map(Number);
+      if (![roomW, roomH].every((value) => Number.isInteger(value) && value >= 0 && value <= MAX_FLOOR)) throw new Error(`机房的宽和深要是 0 到 ${MAX_FLOOR} 的整数`);
+      if (!roomW !== !roomH) throw new Error("机房的宽和深要一起填，或者都填 0 不画外墙");
+      db().prepare("UPDATE sites SET floor_w = ?, floor_h = ?, updated_at = ? WHERE id = ?").run(roomW, roomH, new Date().toISOString(), siteId);
+    }
+    /** 设了机房大小时，东西都要在墙里面。 */
+    const inside = (x: number, y: number, w: number, h: number) => !roomW || (x + w <= roomW && y + h <= roomH);
     const racks = new Map(listRacks(siteId).map((rack) => [rack.id, rack]));
     const now = new Date().toISOString();
     for (const id of remove) {
@@ -518,8 +540,9 @@ export function saveLayout(
       if (!rack) throw new Error("布局里有不属于这个机房的机柜，刷新页面再改");
       const placed = item.x !== null && item.y !== null;
       if (placed && (![item.x, item.y].every((value) => Number.isInteger(value) && value! >= 0 && value! < MAX_FLOOR))) throw new Error(`机柜 ${rack.name} 的位置不对`);
+      if (placed && !inside(item.x!, item.y!, 1, 1)) throw new Error(`机柜 ${rack.name} 在机房外墙外面，把机房改大或者挪进来`);
       const facing = item.facing ?? rack.facing;
-      if (!["", "up", "down"].includes(facing)) throw new Error("朝向只能是上、下或不设");
+      if (!FACINGS.includes(facing)) throw new Error("朝向只能是上、下、左、右或不设");
       const disabled = item.disabled ?? rack.disabled;
       if (disabled && !rack.disabled) {
         const used = countWhere("assets", "rack_id", rack.id);
@@ -535,13 +558,23 @@ export function saveLayout(
       db().prepare("DELETE FROM floor_items WHERE site_id = ?").run(siteId);
       for (const raw of obstacles) {
         const kind = FLOOR_KINDS.includes(raw.kind) ? raw.kind : "other";
-        const [x, y, w, h] = [raw.x, raw.y, raw.w ?? 1, raw.h ?? 1].map(Number);
+        const side: FloorWall = WALLS.includes(raw.side as FloorWall) ? (raw.side as FloorWall) : "";
+        const [x, y, w, h] = [side === "left" || side === "right" ? 0 : raw.x, side === "top" || side === "bottom" ? 0 : raw.y, raw.w ?? 1, side ? 1 : (raw.h ?? 1)].map(Number);
         if (![x, y].every((value) => Number.isInteger(value) && value >= 0 && value < MAX_FLOOR) || ![w, h].every((value) => Number.isInteger(value) && value >= 1 && value <= 20)) {
           throw new Error("障碍物的位置或大小不对");
         }
+        const name = raw.label || FLOOR_ITEM_LABEL[kind];
+        if (side) {
+          if (!roomW) throw new Error(`「${name}」开在墙上，要先设机房的宽和深`);
+          const along = side === "top" || side === "bottom" ? roomW : roomH;
+          const offset = side === "top" || side === "bottom" ? x : y;
+          if (offset + w > along) throw new Error(`「${name}」超出了那面墙`);
+        } else if (!inside(x, y, w, h)) {
+          throw new Error(`「${name}」在机房外墙外面，把机房改大或者挪进来`);
+        }
         db()
-          .prepare("INSERT INTO floor_items (id, site_id, kind, label, x, y, w, h, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-          .run(crypto.randomUUID(), siteId, kind, cleanText(raw.label, 20), x, y, w, h, now);
+          .prepare("INSERT INTO floor_items (id, site_id, kind, label, x, y, w, h, side, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+          .run(crypto.randomUUID(), siteId, kind, cleanText(raw.label, 20), x, y, w, h, side, now);
       }
     }
     const taken = new Map<string, string>();
@@ -551,6 +584,25 @@ export function saveLayout(
     };
     for (const item of listFloorItems(siteId)) for (const key of floorItemCells(item)) occupy(key, item.label || "障碍物");
     for (const rack of racks.values()) if (rack.posX !== null && rack.posY !== null) occupy(`${rack.posX},${rack.posY}`, `机柜 ${rack.name}`);
-    return { racks: listRacks(siteId), obstacles: listFloorItems(siteId) };
+    // 只改机房大小、没重新给东西时，已经存着的也要在墙里面。
+    for (const item of listFloorItems(siteId)) {
+      const name = item.label || FLOOR_ITEM_LABEL[item.kind];
+      if (item.side && !roomW) throw new Error(`「${name}」开在墙上，机房要设宽和深`);
+      if (item.side && (item.side === "top" || item.side === "bottom" ? item.x : item.y) + item.w > (item.side === "top" || item.side === "bottom" ? roomW : roomH)) throw new Error(`「${name}」超出了那面墙，机房不能改这么小`);
+      if (!item.side && !inside(item.x, item.y, item.w, item.h)) throw new Error(`「${name}」在机房外墙外面，机房不能改这么小`);
+    }
+    for (const rack of racks.values()) {
+      if (rack.posX !== null && rack.posY !== null && !inside(rack.posX, rack.posY, 1, 1)) throw new Error(`机柜 ${rack.name} 在机房外墙外面，机房不能改这么小`);
+    }
+    // 门之间不能重叠（同一面墙上）。
+    const walls = new Map<string, string>();
+    for (const item of listFloorItems(siteId).filter((entry) => entry.side)) {
+      for (let d = 0; d < item.w; d++) {
+        const key = `${item.side}:${(item.side === "top" || item.side === "bottom" ? item.x : item.y) + d}`;
+        if (walls.has(key)) throw new Error(`${walls.get(key)} 和 ${item.label || FLOOR_ITEM_LABEL[item.kind]} 在墙上重叠了`);
+        walls.set(key, item.label || FLOOR_ITEM_LABEL[item.kind]);
+      }
+    }
+    return { racks: listRacks(siteId), obstacles: listFloorItems(siteId), site: getSite(siteId)! };
   });
 }
