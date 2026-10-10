@@ -202,3 +202,32 @@ test("maps Redfish slots, drives and adapter ports", () => {
   assert.equal(ports[4].speed, "100G");
   assert.equal(ports[4].mac, "74:25:54:00:00:01");
 });
+
+test("NVMe and M.2 slots from the BMC count as drive bays and carry their drive (Gigabyte G894)", () => {
+  const device = (bus: string, model: string) => ({ "@odata.id": `/redfish/v1/Chassis/Self/PCIeDevices/${bus}`, Id: bus, Model: model });
+  const slot = (labelText: string, lanes: number, links: string[]) => ({
+    PCIeType: "Gen5",
+    Lanes: lanes,
+    Location: { PartLocation: { ServiceLabel: labelText } },
+    Status: { State: links.length ? "Enabled" : "Absent" },
+    ...(links.length ? { Links: { PCIeDevice: links.map((bus) => ({ "@odata.id": `/redfish/v1/Chassis/Self/PCIeDevices/${bus}` })) } } : {}),
+  });
+  // 和真机一样：Id 是 NVMe0_NameSpace1 这种，总线编号在 Name 里。
+  const drive = (driveId: string, model: string, bytes: number) => ({ "@odata.id": `/redfish/v1/Systems/Self/Storage/S/Drives/${driveId}`, Id: `NVMe${driveId.slice(3, 5)}_NameSpace1`, Name: driveId, Model: model, CapacityBytes: bytes, Protocol: "NVMe", Status: { State: "Enabled" } });
+  const raw = {
+    pcieDevices: [device("00_2D_00", "NVMe DC SSD [Atomos Prime]"), device("00_33_00", "ConnectX-7"), device("00_51_00", "ASM1166"), device("00_54_00", "SSSTC NVMe")],
+    pcieSlots: [{ "@odata.id": "/redfish/v1/Chassis/Self/PCIeSlots", Id: "PCIeSlots", Slots: [slot("SLOT1", 16, ["00_33_00"]), slot("P0_M.2", 32, ["00_51_00", "00_54_00"]), slot("NVME3", 4, ["00_2D_00"]), slot("NVME7", 4, [])] }],
+    drives: [drive("00_2D_00_00", "SOLIDIGM SB5PH27X076T", 7681501126656), drive("00_54_00_00", "SSSTC CA6-8D1024", 1024209543168), drive("00_99_00_00", "Other", 1e12)],
+    networkPorts: [],
+  } as unknown as RedfishRaw;
+  assert.deepEqual(
+    redfishPorts(raw).map((port) => [port.group, port.name, port.type, port.used, port.device, port.note || ""]),
+    [
+      ["pcie", "SLOT1", "PCIe Gen5 x16", true, "ConnectX-7", ""],
+      ["drive", "NVME3", "NVMe（PCIe Gen5 x4）", true, "SOLIDIGM SB5PH27X076T 7682 GB", ""],
+      ["drive", "NVME7", "NVMe（PCIe Gen5 x4）", false, "", ""],
+      ["drive", "P0_M.2", "M.2（PCIe Gen5 x32）", true, "SSSTC CA6-8D1024 1024 GB", ""],
+      ["drive", "00_99_00_00", "NVMe", true, "Other 1000 GB", "没对上盘位"],
+    ],
+  );
+});
