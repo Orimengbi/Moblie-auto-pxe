@@ -100,6 +100,7 @@ export function ProjectTaskRunner({
   onPick,
   files,
   tasks,
+  revoke: canRevoke = true,
 }: {
   /** 从装机批次页发起时带上，任务记在这个批次下。 */
   projectId?: string;
@@ -110,7 +111,10 @@ export function ProjectTaskRunner({
   /** 批次里所有机器。采集硬件没勾选时对全部机器做。 */
   onPick: (ids: string[]) => void;
   files: RemoteFile[];
-  tasks: RemoteTask[];
+  /** 不给就不显示任务列表，发起后直接跳到任务详情。 */
+  tasks?: RemoteTask[];
+  /** 显示交付清理（撤公钥）。资产页不放。 */
+  revoke?: boolean;
 }) {
   const router = useRouter();
   const [fileIds, setFileIds] = useState<string[]>([]);
@@ -123,11 +127,12 @@ export function ProjectTaskRunner({
   const [uploading, setUploading] = useState("");
   // 0 表示收起，只看最近 3 条；展开后按页看，一页 10 条。
   const [taskPage, setTaskPage] = useState(0);
-  const running = tasks.some((task) => task.status === "running");
-  const taskPages = Math.max(1, Math.ceil(tasks.length / 10));
+  const list = tasks ?? [];
+  const running = list.some((task) => task.status === "running");
+  const taskPages = Math.max(1, Math.ceil(list.length / 10));
   const page = Math.min(taskPage, taskPages);
   // 收起时执行中的任务也始终显示。
-  const shownTasks = page ? tasks.slice((page - 1) * 10, page * 10) : tasks.filter((task, index) => index < 3 || task.status === "running");
+  const shownTasks = page ? list.slice((page - 1) * 10, page * 10) : list.filter((task, index) => index < 3 || task.status === "running");
 
   useEffect(() => {
     if (!running) return;
@@ -154,7 +159,8 @@ export function ProjectTaskRunner({
       setError(result.error || "任务没有创建成功");
       return false;
     }
-    router.refresh();
+    if (tasks) router.refresh();
+    else router.push(`/tasks/${result.id}`);
     return true;
   }
 
@@ -306,113 +312,117 @@ export function ProjectTaskRunner({
         ) : null}
       </Stack>
 
-      <Paper variant="outlined" sx={{ p: 1.5 }}>
-        <Stack spacing={1} sx={{ alignItems: "flex-start" }}>
-          <Typography variant="subtitle2">交付清理</Typography>
-          <Typography variant="body2" sx={{ color: "text.secondary" }}>
-            交付前从机器上撤掉小主机的公钥。上面选了机器就只撤选中的，没选就撤全部已安装的机器。撤完后这些机器不能再从这里管理。
-          </Typography>
-          <Button variant="contained" color="error" disabled={pending} onClick={revoke}>
-            撤掉控制台公钥
-          </Button>
-        </Stack>
-      </Paper>
-
-      <Stack spacing={1.5}>
-        <Typography variant="subtitle2">最近的任务</Typography>
-        {tasks.length === 0 ? (
-          <Typography variant="body2" sx={{ color: "text.secondary" }}>
-            还没有执行过任务。
-          </Typography>
-        ) : null}
-        {shownTasks.map((task) => (
-          <Accordion key={task.id} variant="outlined" disableGutters defaultExpanded={task.status === "running"} slotProps={{ transition: { unmountOnExit: true } }} sx={FOLD_SX}>
-            <AccordionSummary expandIcon={<ExpandMoreOutlined />}>
-              <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: "wrap", alignItems: "center" }}>
-                <StatusChip
-                  tone={task.status === "running" ? "info" : task.targets.every((target) => target.status === "ok") ? "success" : "error"}
-                  label={task.status === "running" ? "执行中" : "已结束"}
-                />
-                <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                  {task.name}
-                </Typography>
-                <Typography variant="caption" sx={{ color: "text.secondary" }}>
-                  {counts(task)}
-                </Typography>
-                <Typography variant="caption" sx={{ color: "text.secondary" }}>
-                  {formatTime(task.createdAt)}
-                </Typography>
-                <MuiLink component={Link} href={`/tasks/${task.id}`} variant="caption" onClick={(event) => event.stopPropagation()}>
-                  详情
-                </MuiLink>
-                {task.status === "done" ? (
-                  <Button
-                    onClick={(event) => {
-                      // 别顺带把折叠块展开或收起。
-                      event.stopPropagation();
-                      if (task.kind === "script") {
-                        setScript(task.script);
-                        setName(task.name);
-                        setFileIds(task.fileIds.filter((id) => files.some((file) => file.id === id)));
-                      }
-                      onPick(task.targets.filter((target) => target.status !== "ok").map((target) => target.serverId));
-                    }}
-                  >
-                    选中没成功的机器
-                  </Button>
-                ) : null}
-              </Stack>
-            </AccordionSummary>
-            <AccordionDetails>
-              <Stack spacing={1}>
-                {task.targets.map((target) => (
-                  <Accordion key={target.serverId} variant="outlined" disableGutters slotProps={{ transition: { unmountOnExit: true } }} sx={FOLD_SX}>
-                    <AccordionSummary expandIcon={<ExpandMoreOutlined />} sx={{ minHeight: 40, "& .MuiAccordionSummary-content": { my: 0.75 } }}>
-                      <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: "wrap", alignItems: "center" }}>
-                        <StatusChip tone={taskTargetTone(target.status)} label={TARGET[target.status]} />
-                        <Typography variant="caption" sx={{ fontFamily: MONO }}>
-                          {target.sn}
-                        </Typography>
-                        <Typography variant="caption" sx={{ color: "text.secondary" }}>
-                          {target.host || "无地址"}
-                          {target.hostSource ? `（${HOST_SOURCE[target.hostSource]}）` : ""}
-                          {target.exitCode !== null ? ` · 退出码 ${target.exitCode}` : ""}
-                        </Typography>
-                      </Stack>
-                    </AccordionSummary>
-                    <AccordionDetails sx={{ pt: 0 }}>
-                      <Box
-                        component="pre"
-                        sx={{ m: 0, maxHeight: 320, overflow: "auto", borderRadius: 1, bgcolor: "action.hover", p: 1, fontFamily: MONO, fontSize: 12, whiteSpace: "pre-wrap" }}
-                      >
-                        {target.output || "（没有输出）"}
-                      </Box>
-                    </AccordionDetails>
-                  </Accordion>
-                ))}
-              </Stack>
-            </AccordionDetails>
-          </Accordion>
-        ))}
-        {page ? (
-          <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: "wrap", alignItems: "center" }}>
-            <Button variant="outlined" disabled={page <= 1} onClick={() => setTaskPage(page - 1)}>
-              上一页
-            </Button>
+      {canRevoke ? (
+        <Paper variant="outlined" sx={{ p: 1.5 }}>
+          <Stack spacing={1} sx={{ alignItems: "flex-start" }}>
+            <Typography variant="subtitle2">交付清理</Typography>
             <Typography variant="body2" sx={{ color: "text.secondary" }}>
-              第 {page} / {taskPages} 页，共 {tasks.length} 条
+              交付前从机器上撤掉小主机的公钥。上面选了机器就只撤选中的，没选就撤全部已安装的机器。撤完后这些机器不能再从这里管理。
             </Typography>
-            <Button variant="outlined" disabled={page >= taskPages} onClick={() => setTaskPage(page + 1)}>
-              下一页
+            <Button variant="contained" color="error" disabled={pending} onClick={revoke}>
+              撤掉控制台公钥
             </Button>
-            <Button onClick={() => setTaskPage(0)}>收起</Button>
           </Stack>
-        ) : tasks.length > shownTasks.length ? (
-          <Box>
-            <Button onClick={() => setTaskPage(1)}>显示更多</Button>
-          </Box>
-        ) : null}
-      </Stack>
+        </Paper>
+      ) : null}
+
+      {tasks ? (
+        <Stack spacing={1.5}>
+          <Typography variant="subtitle2">最近的任务</Typography>
+          {tasks.length === 0 ? (
+            <Typography variant="body2" sx={{ color: "text.secondary" }}>
+              还没有执行过任务。
+            </Typography>
+          ) : null}
+          {shownTasks.map((task) => (
+            <Accordion key={task.id} variant="outlined" disableGutters defaultExpanded={task.status === "running"} slotProps={{ transition: { unmountOnExit: true } }} sx={FOLD_SX}>
+              <AccordionSummary expandIcon={<ExpandMoreOutlined />}>
+                <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: "wrap", alignItems: "center" }}>
+                  <StatusChip
+                    tone={task.status === "running" ? "info" : task.targets.every((target) => target.status === "ok") ? "success" : "error"}
+                    label={task.status === "running" ? "执行中" : "已结束"}
+                  />
+                  <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                    {task.name}
+                  </Typography>
+                  <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                    {counts(task)}
+                  </Typography>
+                  <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                    {formatTime(task.createdAt)}
+                  </Typography>
+                  <MuiLink component={Link} href={`/tasks/${task.id}`} variant="caption" onClick={(event) => event.stopPropagation()}>
+                    详情
+                  </MuiLink>
+                  {task.status === "done" ? (
+                    <Button
+                      onClick={(event) => {
+                        // 别顺带把折叠块展开或收起。
+                        event.stopPropagation();
+                        if (task.kind === "script") {
+                          setScript(task.script);
+                          setName(task.name);
+                          setFileIds(task.fileIds.filter((id) => files.some((file) => file.id === id)));
+                        }
+                        onPick(task.targets.filter((target) => target.status !== "ok").map((target) => target.serverId));
+                      }}
+                    >
+                      选中没成功的机器
+                    </Button>
+                  ) : null}
+                </Stack>
+              </AccordionSummary>
+              <AccordionDetails>
+                <Stack spacing={1}>
+                  {task.targets.map((target) => (
+                    <Accordion key={target.serverId} variant="outlined" disableGutters slotProps={{ transition: { unmountOnExit: true } }} sx={FOLD_SX}>
+                      <AccordionSummary expandIcon={<ExpandMoreOutlined />} sx={{ minHeight: 40, "& .MuiAccordionSummary-content": { my: 0.75 } }}>
+                        <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: "wrap", alignItems: "center" }}>
+                          <StatusChip tone={taskTargetTone(target.status)} label={TARGET[target.status]} />
+                          <Typography variant="caption" sx={{ fontFamily: MONO }}>
+                            {target.sn}
+                          </Typography>
+                          <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                            {target.host || "无地址"}
+                            {target.hostSource ? `（${HOST_SOURCE[target.hostSource]}）` : ""}
+                            {target.exitCode !== null ? ` · 退出码 ${target.exitCode}` : ""}
+                          </Typography>
+                        </Stack>
+                      </AccordionSummary>
+                      <AccordionDetails sx={{ pt: 0 }}>
+                        <Box
+                          component="pre"
+                          sx={{ m: 0, maxHeight: 320, overflow: "auto", borderRadius: 1, bgcolor: "action.hover", p: 1, fontFamily: MONO, fontSize: 12, whiteSpace: "pre-wrap" }}
+                        >
+                          {target.output || "（没有输出）"}
+                        </Box>
+                      </AccordionDetails>
+                    </Accordion>
+                  ))}
+                </Stack>
+              </AccordionDetails>
+            </Accordion>
+          ))}
+          {page ? (
+            <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: "wrap", alignItems: "center" }}>
+              <Button variant="outlined" disabled={page <= 1} onClick={() => setTaskPage(page - 1)}>
+                上一页
+              </Button>
+              <Typography variant="body2" sx={{ color: "text.secondary" }}>
+                第 {page} / {taskPages} 页，共 {tasks.length} 条
+              </Typography>
+              <Button variant="outlined" disabled={page >= taskPages} onClick={() => setTaskPage(page + 1)}>
+                下一页
+              </Button>
+              <Button onClick={() => setTaskPage(0)}>收起</Button>
+            </Stack>
+          ) : tasks.length > shownTasks.length ? (
+            <Box>
+              <Button onClick={() => setTaskPage(1)}>显示更多</Button>
+            </Box>
+          ) : null}
+        </Stack>
+      ) : null}
     </Stack>
   );
 }
