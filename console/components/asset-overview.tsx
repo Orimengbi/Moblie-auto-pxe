@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { AssetEditDialog } from "@/components/asset-edit-dialog";
+import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Chip from "@mui/material/Chip";
@@ -27,6 +28,7 @@ export function AssetOverview({ assetId, onChanged }: { assetId: string; onChang
   const [editing, setEditing] = useState(false);
   const [admin, setAdmin] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [blocked, setBlocked] = useState(false);
 
   useEffect(() => {
     void fetch("/api/auth/me")
@@ -38,6 +40,11 @@ export function AssetOverview({ assetId, onChanged }: { assetId: string; onChang
   /** 删资产不能撤销，要输一遍序列号确认。删掉后列表刷新，侧边栏跟着关掉。 */
   async function remove() {
     if (!asset) return;
+    // 还在装机批次里：资产会按批次里的行自动重建，先去批次里删那一行。
+    if (asset.batch) {
+      setBlocked(true);
+      return;
+    }
     const typed = window.prompt(`删除资产 ${asset.tag}（${asset.sn}）？\n\n记录、告警、硬件采集会一起删掉，不能恢复；装在上面的备件退回库里，工单保留但不再关联这台。\n\n确认的话输入序列号：`);
     if (typed === null) return;
     if (typed.trim().toUpperCase() !== asset.sn.toUpperCase()) {
@@ -101,6 +108,19 @@ export function AssetOverview({ assetId, onChanged }: { assetId: string; onChang
           </Button>
         ) : null}
       </Stack>
+      {blocked && asset.batch ? (
+        <Alert
+          severity="warning"
+          onClose={() => setBlocked(false)}
+          action={
+            <Button color="inherit" size="small" component={Link} href={`/projects/${asset.batch.projectId}?remove=${encodeURIComponent(asset.batch.rowId)}`}>
+              去装机批次里删除
+            </Button>
+          }
+        >
+          这台还在装机批次「{asset.batch.name || "装机批次"}」里，资产会按批次里的那一行自动重建。先在批次里删掉这一行，再回来删资产。
+        </Alert>
+      ) : null}
       <Block
         title="基本"
         items={[
