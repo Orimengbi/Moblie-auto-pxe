@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
+import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Divider from "@mui/material/Divider";
@@ -254,18 +256,35 @@ export function ProjectServerList({
   const sideRow = rows.find((row) => row.id === sideId) || null;
   const assetOf = (ids: string[]) => ids.map((id) => rows.find((row) => row.id === id)?.assetId).filter((id): id is string => Boolean(id));
 
-  async function remove(row: ServerListRow) {
-    if (!window.confirm(`从这个装机批次里删掉 ${row.sn}？资产和它的硬件记录还在，也不会动这台机器的 BMC 和系统。`)) return;
+  async function remove(row: ServerListRow): Promise<boolean> {
+    if (!window.confirm(`从这个装机批次里删掉 ${row.sn}？资产和它的硬件记录还在，也不会动这台机器的 BMC 和系统。`)) return false;
     setError("");
     const response = await fetch(`/api/projects/${projectId}/servers/${row.id}`, { method: "DELETE" });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) {
       setError(body.error || "删除失败");
-      return;
+      return false;
     }
     setPicked((list) => list.filter((id) => id !== row.id));
     router.refresh();
+    return true;
   }
+
+  // 从资产页「去装机批次里删除」跳过来：?remove=<行 id>，顶上提示这一台，打开它的侧边栏，删完给回资产页的链接。
+  const search = useSearchParams();
+  const removeId = search.get("remove");
+  const [handoff, setHandoff] = useState<{ rowId: string; sn: string; assetId: string; done: boolean } | null>(null);
+  const handoffRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!removeId) return;
+    const row = rows.find((item) => item.id === removeId);
+    if (!row) return;
+    setHandoff((current) => (current?.rowId === row.id ? current : { rowId: row.id, sn: row.sn, assetId: row.assetId, done: false }));
+    // 不开侧边栏（会挡住提示里的按钮），只标出这一行，把提示滚到眼前。
+    requestAnimationFrame(() => handoffRef.current?.scrollIntoView({ block: "center", behavior: "smooth" }));
+    // 只认一次，刷新页面不再弹。
+    window.history.replaceState(null, "", window.location.pathname);
+  }, [removeId, rows]);
 
   /** 按租约找 BMC 并推进每台机器。force 时连上次密码不对的机器也重新登录。 */
   const check = useCallback(
@@ -465,8 +484,36 @@ export function ProjectServerList({
 
   const selection = useMemo<GridRowSelectionModel>(() => ({ type: "include", ids: new Set(picked) }), [picked]);
 
+  const handoffRow = handoff ? rows.find((row) => row.id === handoff.rowId) : undefined;
+
   return (
     <Stack spacing={3}>
+      {handoff ? (
+        <Alert
+          ref={handoffRef}
+          severity={handoff.done ? "success" : "warning"}
+          onClose={() => setHandoff(null)}
+          action={
+            handoff.done ? (
+              <Button color="inherit" size="small" component={Link} href={`/assets?open=${encodeURIComponent(handoff.assetId)}`}>
+                回到资产继续删除
+              </Button>
+            ) : handoffRow ? (
+              <Button
+                color="inherit"
+                size="small"
+                onClick={async () => {
+                  if (await remove(handoffRow)) setHandoff({ ...handoff, done: true });
+                }}
+              >
+                从批次删除
+              </Button>
+            ) : null
+          }
+        >
+          {handoff.done ? `${handoff.sn} 已经从这个装机批次删掉，回到资产页就能删除资产了。` : `要删除资产 ${handoff.sn}，先把它从这个装机批次里删掉（已在下面的列表里标出）。`}
+        </Alert>
+      ) : null}
       <Stack spacing={1.5}>
         <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: "wrap", alignItems: "center" }}>
           <Typography variant="body2" sx={{ color: "text.secondary" }}>
@@ -564,6 +611,7 @@ export function ProjectServerList({
                 "& .MuiDataGrid-row": { cursor: "pointer" },
                 "& .MuiDataGrid-cell": { py: 0.75, whiteSpace: "normal", wordBreak: "break-word" },
                 ...(sideId ? { [`& .MuiDataGrid-row[data-id=${JSON.stringify(sideId)}]`]: { bgcolor: "action.selected" } } : {}),
+              ...(handoff && !handoff.done ? { [`& .MuiDataGrid-row[data-id=${JSON.stringify(handoff.rowId)}]`]: { bgcolor: "action.selected", outline: "2px solid", outlineColor: "warning.main", outlineOffset: "-2px" } } : {}),
               }}
             />
           </Box>
