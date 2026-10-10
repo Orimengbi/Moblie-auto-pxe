@@ -973,4 +973,6 @@ export interface MonitorSettings {
   ignoreSensors: string;
   /** BMC 连续几次连不上才报。 */
   bmcFailuresToAlert: number;
+  /** 经 Redfish SSE 长连着收 BMC 的实时事件。 */
+  redfishEvents: boolean;
 }

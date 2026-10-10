@@ -68,12 +68,63 @@ export function redfishGetter(host: string, user: string, password: string, time
     });
 }
 
-function link(doc: RedfishDoc | null | undefined, key: string): string {
+export interface RedfishResponse {
+  status: number;
+  body: RedfishDoc | null;
+  headers: Record<string, string>;
+}
+
+/** 写操作用的请求：PATCH、POST、DELETE。返回状态码和响应体，401 照样抛 RedfishAuthError。 */
+export type RedfishRequest = (method: string, path: string, body?: unknown, headers?: Record<string, string>) => Promise<RedfishResponse>;
+
+export function redfishRequester(host: string, user: string, password: string, timeoutMs = 30_000): RedfishRequest {
+  const auth = `Basic ${Buffer.from(`${user}:${password}`).toString("base64")}`;
+  return (method, path, body, extra = {}) =>
+    new Promise((resolve, reject) => {
+      const payload = body === undefined ? undefined : Buffer.from(JSON.stringify(body));
+      const headers: Record<string, string | number> = { Authorization: auth, Accept: "application/json", ...extra };
+      if (payload) {
+        headers["Content-Type"] = "application/json";
+        headers["Content-Length"] = payload.length;
+      }
+      const request = https.request({ host, port: bmcPort(), path, method, agent, timeout: timeoutMs, headers }, (response) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("error", reject);
+        response.on("end", () => {
+          const status = response.statusCode || 0;
+          if (status === 401) return reject(new RedfishAuthError(`BMC 拒绝了账号（HTTP ${status}）`));
+          const text = Buffer.concat(chunks).toString("utf8");
+          let parsed: RedfishDoc | null = null;
+          try {
+            parsed = text.trim() ? (JSON.parse(text) as RedfishDoc) : null;
+          } catch {
+            parsed = null;
+          }
+          const flat: Record<string, string> = {};
+          for (const [key, value] of Object.entries(response.headers)) if (typeof value === "string") flat[key.toLowerCase()] = value;
+          resolve({ status, body: parsed, headers: flat });
+        });
+      });
+      request.on("timeout", () => request.destroy(new Error("超时")));
+      request.on("error", reject);
+      request.end(payload);
+    });
+}
+
+/** Redfish 出错时的说明：优先拿 @Message.ExtendedInfo 里的第一条。 */
+export function redfishError(response: RedfishResponse): string {
+  const error = response.body?.error as { message?: string; "@Message.ExtendedInfo"?: { Message?: string }[] } | undefined;
+  const info = error?.["@Message.ExtendedInfo"]?.map((item) => item.Message).filter(Boolean) || [];
+  return (info.join("；") || error?.message || `HTTP ${response.status}`).slice(0, 400);
+}
+
+export function link(doc: RedfishDoc | null | undefined, key: string): string {
   const value = doc?.[key] as { "@odata.id"?: string } | undefined;
   return typeof value?.["@odata.id"] === "string" ? value["@odata.id"] : "";
 }
 
-function members(doc: RedfishDoc | null): string[] {
+export function members(doc: RedfishDoc | null): string[] {
   const list = doc?.Members;
   if (!Array.isArray(list)) return [];
   return list.map((item) => (item as { "@odata.id"?: string })?.["@odata.id"]).filter((id): id is string => typeof id === "string");

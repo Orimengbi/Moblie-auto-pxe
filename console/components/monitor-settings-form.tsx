@@ -63,6 +63,15 @@ export function MonitorSettingsForm({ settings }: { settings: MonitorSettings })
           系统内间隔填 0 就不 SSH 进系统查 GPU 和硬盘。系统内检查要能用控制台的密钥登录（装机时写入的公钥）。
         </Typography>
       </Box>
+      <Box>
+        <FormControlLabel
+          control={<Switch checked={form.redfishEvents} onChange={(event) => setForm({ ...form, redfishEvents: event.target.checked })} />}
+          label="实时接收 BMC 事件（Redfish SSE）"
+        />
+        <Typography variant="caption" sx={{ display: "block", color: "text.secondary" }}>
+          控制台和每台被监控服务器的 BMC 保持一条连接，BMC 一有事件就收到，严重和警告的直接开告警。不需要 BMC 能连回控制台。
+        </Typography>
+      </Box>
       <FormControl component="fieldset">
         <FormLabel component="legend" sx={{ typography: "subtitle2", color: "text.primary", mb: 0.5 }}>
           监控哪些状态的资产

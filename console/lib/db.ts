@@ -285,6 +285,20 @@ const MIGRATIONS: string[] = [
     WHERE EXISTS (SELECT 1 FROM sites);
   UPDATE sites SET datacenter_id = (SELECT id FROM datacenters LIMIT 1) WHERE datacenter_id IS NULL;
   `,
+  // BMC 经 Redfish SSE 推来的事件，每台只留最近的一批。
+  `
+  CREATE TABLE bmc_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+    at TEXT NOT NULL,
+    received_at TEXT NOT NULL,
+    severity TEXT NOT NULL DEFAULT '',
+    message_id TEXT NOT NULL DEFAULT '',
+    message TEXT NOT NULL DEFAULT '',
+    origin TEXT NOT NULL DEFAULT ''
+  );
+  CREATE INDEX bmc_events_asset ON bmc_events(asset_id, id);
+  `,
 ];
 
 let opened: { file: string; db: Database } | null = null;

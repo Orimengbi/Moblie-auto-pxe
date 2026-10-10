@@ -16,6 +16,9 @@ import { AssetMonitor } from "@/components/asset-monitor";
 import { AssetOverview } from "@/components/asset-overview";
 import { AssetTickets } from "@/components/asset-tickets";
 import { NetworkDevice } from "@/components/network-device";
+import { ServerBios } from "@/components/server-bios";
+import { ServerBmc } from "@/components/server-bmc";
+import { ServerBmcLogs } from "@/components/server-bmc-logs";
 import { ServerChanges } from "@/components/server-changes";
 import { ServerInventory } from "@/components/server-inventory";
 import { ServerOptics } from "@/components/server-optics";
@@ -34,7 +37,7 @@ interface Row {
   description: string;
 }
 
-type Tab = "overview" | "netports" | "monitor" | "tickets" | "hardware" | "changes" | "ports" | "topology" | "optics" | "history";
+type Tab = "overview" | "netports" | "monitor" | "bmc" | "bios" | "bmclogs" | "tickets" | "hardware" | "changes" | "ports" | "topology" | "optics" | "history";
 
 interface TabContext {
   row: Row;
@@ -50,6 +53,9 @@ const TABS: { id: Tab; label: string; where: "server" | "network" | "all"; rende
   { id: "netports", label: "端口", where: "network", render: ({ row }) => <NetworkDevice assetId={row.id} /> },
   { id: "overview", label: "概况", where: "all", render: ({ row, onChanged }) => <AssetOverview assetId={row.id} onChanged={onChanged} /> },
   { id: "monitor", label: "监控", where: "all", render: ({ row }) => <AssetMonitor assetId={row.id} /> },
+  { id: "bmc", label: "BMC", where: "server", render: ({ row }) => <ServerBmc assetId={row.id} /> },
+  { id: "bios", label: "BIOS", where: "server", render: ({ row }) => <ServerBios assetId={row.id} /> },
+  { id: "bmclogs", label: "BMC 日志", where: "server", render: ({ row }) => <ServerBmcLogs assetId={row.id} /> },
   { id: "tickets", label: "工单", where: "all", render: ({ row, onChanged }) => <AssetTickets asset={{ id: row.id, tag: row.tag || row.sn, sn: row.sn, model: "" }} onChanged={onChanged} /> },
   { id: "hardware", label: "硬件配置", where: "server", render: ({ row, projectId }) => <ServerInventory projectId={projectId} row={row} /> },
   { id: "changes", label: "变更记录", where: "all", render: ({ row }) => <ServerChanges row={row} /> },
