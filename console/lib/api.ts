@@ -1,5 +1,6 @@
 import { audit, type AuditInput } from "./assets.ts";
 import * as XLSX from "xlsx";
+import { xlsxWithDropdowns, type Dropdown } from "./xlsx-dropdown.ts";
 import { AuthError, authenticate, clientAddress, requireUser, type Identity } from "./auth.ts";
 import type { RemoteTask } from "./types.ts";
 
@@ -67,11 +68,9 @@ export async function readSheetUpload(request: Request, options: { maxMB: number
   return { form, file, rows: XLSX.utils.sheet_to_json(sheet, { header: 1, raw: options.raw, defval: "" }) as unknown[][] };
 }
 
-/** 生成一张 xlsx 下载。文件名可以有中文（按 RFC 5987 编码，HTTP 头里不能直接放中文）。 */
-export function xlsxResponse(rows: unknown[][], sheetName: string, filename: string): Response {
-  const book = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet(rows), sheetName);
-  const body = XLSX.write(book, { type: "buffer", bookType: "xlsx" }) as Buffer;
+/** 生成一张 xlsx 下载。文件名可以有中文（按 RFC 5987 编码，HTTP 头里不能直接放中文）。dropdowns 给某些列加下拉选择。 */
+export function xlsxResponse(rows: unknown[][], sheetName: string, filename: string, dropdowns: Dropdown[] = []): Response {
+  const body = xlsxWithDropdowns(rows, sheetName, dropdowns);
   const ascii = filename.replace(/[^\x20-\x7e]/g, "_").replace(/"/g, "");
   return new Response(new Uint8Array(body), {
     headers: {
