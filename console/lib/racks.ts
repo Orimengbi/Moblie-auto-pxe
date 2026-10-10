@@ -201,13 +201,33 @@ function rackHeight(value: unknown): number {
 
 type RackFields = Omit<Rack, "id" | "createdAt" | "updatedAt" | "posX" | "posY" | "facing">;
 
-function cleanRack(input: RackInput, id: string | null): RackFields {
+/**
+ * 机柜号比对用的写法：不分大小写，不管空格、-、_、.，数字前面的 0 去掉。g3、G03、G-03 都是 G|3。
+ * A1-01 和 A101 不一样（A|1|1 和 A|101）。
+ */
+export function rackKey(name: string): string {
+  return (name.toUpperCase().match(/\d+|[^\d\s._-]+/g) || []).map((part) => (/^\d+$/.test(part) ? String(Number(part)) : part)).join("|");
+}
+
+/** 在一批机柜里找机柜号：先找完全一样的（不分大小写），没有再按 rackKey 找。对上好几个时返回 "ambiguous"。 */
+export function findRackByName<T extends Pick<Rack, "name">>(list: T[], name: string): T | null | "ambiguous" {
+  const lower = name.trim().toLowerCase();
+  const exact = list.filter((rack) => rack.name.toLowerCase() === lower);
+  if (exact.length) return exact.length > 1 ? "ambiguous" : exact[0];
+  const key = rackKey(name);
+  const loose = key ? list.filter((rack) => rackKey(rack.name) === key) : [];
+  return loose.length > 1 ? "ambiguous" : loose[0] || null;
+}
+
+/** taken：批量建时传进来的已有机柜号（rackKey），免得每建一个都把整个机房的机柜读一遍。 */
+function cleanRack(input: RackInput, id: string | null, taken?: Set<string>): RackFields {
   const site = getSite(String(input.siteId ?? ""));
   if (!site) throw new Error("选的机房不存在");
   const name = String(input.name ?? "").trim();
   if (!/^[A-Za-z0-9._-]{1,24}$/.test(name)) throw new Error("机柜号需要 1 到 24 位字母、数字、点、- 或 _");
-  const clash = db().prepare("SELECT id FROM racks WHERE site_id = ? AND name = ? AND id != ?").get(site.id, name, id || "");
-  if (clash) throw new Error(`「${site.name}」里已经有机柜 ${name}`);
+  // G3 和 G03 算同一个机柜号，不能同时有。
+  const clash = taken ? (taken.has(rackKey(name)) ? { name } : null) : listRacks(site.id).find((rack) => rack.id !== id && rackKey(rack.name) === rackKey(name));
+  if (clash) throw new Error(clash.name === name ? `「${site.name}」里已经有机柜 ${name}` : `「${site.name}」里已经有机柜 ${clash.name}，和 ${name} 是同一个机柜号`);
   const heightU = rackHeight(input.heightU);
   const current = id ? getRack(id) : null;
   const disabled = input.disabled === undefined ? Boolean(current?.disabled) : Boolean(input.disabled);
@@ -280,14 +300,17 @@ export function createRacks(input: RackInput & { prefix?: string; from?: number 
   return transaction(db(), () => {
     const created: Rack[] = [];
     const skipped: string[] = [];
+    // 已有的机柜号只读一次；G3 和 G03 算同一个。
+    const taken = new Set(listRacks(String(input.siteId ?? "")).map((rack) => rackKey(rack.name)));
     for (const prefix of prefixes) {
       for (let n = from; n <= to; n++) {
         const name = `${prefix}${String(n).padStart(pad, "0")}`;
-        if (db().prepare("SELECT id FROM racks WHERE site_id = ? AND name = ?").get(String(input.siteId ?? ""), name)) {
+        if (taken.has(rackKey(name))) {
           skipped.push(name);
           continue;
         }
-        created.push(insertRack(cleanRack({ ...input, name, rowLabel: String(input.rowLabel ?? "").trim() || prefix }, null)));
+        created.push(insertRack(cleanRack({ ...input, name, rowLabel: String(input.rowLabel ?? "").trim() || prefix }, null, taken)));
+        taken.add(rackKey(name));
       }
     }
     return { created, skipped };
@@ -376,7 +399,9 @@ export function importRacks(rows: unknown[][], defaultSiteId: string | null, opt
         const facing = cells.facing !== undefined ? parseFacing(cells.facing) : undefined;
         const disabled = cells.disabled !== undefined ? parseYes(cells.disabled) : undefined;
         transaction(db(), () => {
-          const existing = listRacks(site.id).find((rack) => rack.name === cells.name);
+          const found = findRackByName(listRacks(site.id), cells.name!);
+          if (found === "ambiguous") throw new Error(`机柜号 ${cells.name} 对得上好几个机柜，写完整的机柜号`);
+          const existing = found;
           if (!existing) {
             const made = createRack({ siteId: site.id, name: cells.name, rowLabel: cells.rowLabel, heightU: cells.heightU ?? 42, powerKw: cells.powerKw, note: cells.note, disabled });
             if (facing) db().prepare("UPDATE racks SET facing = ? WHERE id = ?").run(facing, made.id);
@@ -462,10 +487,11 @@ export function cachedRackFinder(): (siteText: string, rackName: string, datacen
     const site = key ? sites.find((item) => (!datacenter || item.datacenterId === datacenter.id) && same(item, key)) : null;
     if (key && !site) return null;
     const inDatacenter = new Set(sites.filter((item) => !datacenter || item.datacenterId === datacenter.id).map((item) => item.id));
-    const name = rackName.trim().toLowerCase();
-    const matches = racks.filter((rack) => (site ? rack.siteId === site.id : inDatacenter.has(rack.siteId)) && rack.name.toLowerCase() === name);
-    if (matches.length > 1) return "ambiguous";
-    return matches[0] || null;
+    // g3 能对上 G03，见 findRackByName。
+    return findRackByName(
+      racks.filter((rack) => (site ? rack.siteId === site.id : inDatacenter.has(rack.siteId))),
+      rackName,
+    );
   };
 }
 

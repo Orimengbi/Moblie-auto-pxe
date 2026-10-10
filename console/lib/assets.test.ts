@@ -424,7 +424,7 @@ test("data centers hold rooms, rooms move between them and sheets carry the data
     "alice",
   );
   assert.deepEqual(imported.rows.map((row) => row.action), ["error", "error", "create", "create", "error", "error"], JSON.stringify(imported.rows));
-  assert.match(imported.rows[0].message, /好几个机房/);
+  assert.match(imported.rows[0].message, /对得上好几个（不同机房都有/);
   assert.match(imported.rows[4].message, /数据中心「NRT1」的机房「S110」里没有机柜 A01/);
   assert.match(imported.rows[5].message, /填了数据中心就要填机柜/);
 
@@ -549,4 +549,25 @@ test("a room can be deleted together with its empty racks and floor items", asyn
   assert.equal(racks.getSite(site.id), null);
   assert.equal(racks.listRacks(site.id).length, 0);
   assert.equal(racks.listFloorItems(site.id).length, 0);
+});
+
+test("rack numbers match loosely: g3 finds G03, but G3 and G03 cannot both exist", async () => {
+  const racks = await import("./racks.ts");
+  assert.deepEqual(["g3", "G03", "G-03", "g 003"].map(racks.rackKey), ["G|3", "G|3", "G|3", "G|3"]);
+  assert.notEqual(racks.rackKey("A1-01"), racks.rackKey("A101"));
+  const site = racks.createSite({ datacenterId: testDatacenter(racks), code: "LZ1", name: "补零机房" });
+  racks.createRacks({ siteId: site.id, prefix: "G", from: 1, to: 5, pad: 2 });
+  const finder = racks.cachedRackFinder();
+  const found = finder("LZ1", "g3");
+  assert.ok(found && found !== "ambiguous");
+  const g03 = found;
+  assert.equal(g03.name, "G03");
+  assert.equal(finder("LZ1", "G9"), null);
+  assert.throws(() => racks.createRack({ siteId: site.id, name: "G3", heightU: 42 }), /已经有机柜 G03，和 G3 是同一个机柜号/);
+  const again = racks.createRacks({ siteId: site.id, prefix: "G", from: 4, to: 6, pad: 1 });
+  assert.deepEqual([again.created.map((rack) => rack.name), again.skipped], [["G6"], ["G4", "G5"]]);
+  // 资产导入填 g3 能放进 G03。
+  const imported = assets.importAssets([{ row: 2, cells: { sn: "LOOSE-RACK-1", site: "LZ1", rack: "g3", uStart: "10", uHeight: "2" } }], "alice");
+  assert.equal(imported.errors, 0, JSON.stringify(imported.rows));
+  assert.equal(assets.findAssetBySn("LOOSE-RACK-1")?.rackId, g03.id);
 });
