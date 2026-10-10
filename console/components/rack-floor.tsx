@@ -178,6 +178,8 @@ export function RackFloor({
   const [drag, setDrag] = useState<{ type: "move" | "box" | "paint"; x0: number; y0: number; x1: number; y1: number; merge?: boolean; add?: boolean } | null>(null);
   /** 选中的空格子放东西时合成一整块。 */
   const [mergeFill, setMergeFill] = useState(false);
+  /** 正在改的机房宽深（输入框里的字）；没在改时显示现在的大小。 */
+  const [roomText, setRoomText] = useState<{ w: string; h: string } | null>(null);
   /** Ctrl+C 复制的东西，Ctrl+V 粘到鼠标所在的格子。 */
   const [clipboard, setClipboard] = useState<Obstacle[]>([]);
   const hover = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -369,13 +371,29 @@ export function RackFloor({
     if (busy.length) setError(`${busy.map(rackName).join("、")} 里放着设备，没删；其他 ${empty.length} 个保存时删掉`);
   }
 
-  /** 在选中的空格子上放 kind；mergeFill 时合成一整块。 */
-  function fillSelected(kind: FloorItemKind) {
-    if (!plan || !selCells.length) return;
+  /**
+   * 选中的全都变成 kind：空格子放上（mergeFill 时合成一整块），柱子空调等改类型，空机柜换掉（保存时删机柜）。
+   * 放着设备的机柜跳过。
+   */
+  function applyKind(kind: FloorItemKind) {
+    if (!plan) return;
     let n = 0;
-    const made = fillCells(plan, kind, selCells, mergeFill, () => `new-${Date.now()}-${n++}`);
-    if (!made.length) return setError(mergeFill ? "选的格子要正好拼成一个长方形才能合成一块，最大 20×20" : "选的格子都有东西了");
-    if (tryCommit({ ...plan, items: [...plan.items, ...made] })) setSelected(new Set(made.map((item) => `i:${item.id}`)));
+    const makeId = () => `new-${Date.now()}-${n++}`;
+    const made = selCells.length ? fillCells(plan, kind, selCells, mergeFill, makeId) : [];
+    if (selCells.length && !made.length && !selItems.length && !selRacks.length)
+      return setError(mergeFill ? "选的格子要正好拼成一个长方形才能合成一块，最大 20×20" : "选的格子都有东西了");
+    const busy = selRacks.filter((id) => (infos.get(id)?.devices || 0) > 0);
+    const swap = selRacks.filter((id) => !busy.includes(id) && plan.racks[id]);
+    const fromRacks = swap.map((id) => ({ ...newItem(kind, plan.racks[id].x, plan.racks[id].y), id: makeId() }));
+    const changed = new Set(selItems.map((item) => item.id));
+    const next: Plan = {
+      ...plan,
+      removed: [...new Set([...plan.removed, ...swap])],
+      items: [...plan.items.map((item) => (changed.has(item.id) ? { ...item, kind } : item)), ...made, ...fromRacks],
+    };
+    if (!tryCommit(next)) return;
+    setSelected(new Set([...[...changed, ...made.map((item) => item.id), ...fromRacks.map((item) => item.id)].map((id) => `i:${id}`), ...busy.map((id) => `r:${id}`)]));
+    if (busy.length) setError(`${busy.map(rackName).join("、")} 里放着设备，没换；其他的保存时删掉机柜`);
   }
 
   function selectAll() {
@@ -399,6 +417,12 @@ export function RackFloor({
     // 正在打字时不拦着，只提示；保存时再检查。
     setPlan(next);
     setError(next.room.w && next.room.h ? planProblem(next, rackName) : "");
+  }
+
+  /** 输入框里改宽深：没设过墙时另一边用现在画出来的大小。 */
+  function typeRoom(text: { w: string; h: string }) {
+    setRoomText(text);
+    setRoom(Number(text.w) || 0, Number(text.h) || 0);
   }
 
   function startEdit() {
@@ -511,13 +535,23 @@ export function RackFloor({
     if (cx >= 0 && cy >= 0) addItem(kind, cx, cy);
   }
 
-  /** 框（像素）碰到的机柜、障碍物，withCells 时还有框里的空格子，加到 base 上。 */
+  /** 框（像素）碰到的机柜、障碍物，加到 base 上；withCells 且框里一个东西都没碰到时，选框里的空格子。 */
   function boxKeys(target: Plan, base: Set<Key>, left: number, right: number, top: number, bottom: number, withCells: boolean): Set<Key> {
     const hit = (box: { left: number; top: number; width: number; height: number }) => box.left < right && box.left + box.width > left && box.top < bottom && box.top + box.height > top;
     const keys = new Set(base);
-    for (const cell of cells) if (hit({ left: cell.x * CELL_W, top: cell.y * CELL_H, width: CELL_W, height: CELL_H })) keys.add(`r:${cell.rack.id}`);
-    for (const item of target.items) if (hit(itemBox(item, target.room))) keys.add(`i:${item.id}`);
-    if (withCells) {
+    // 框到了机柜或柱子等就只选这些（想改的是它们），空格子不顺带选上，免得点类型时连空格子也放满。
+    let touched = false;
+    for (const cell of cells)
+      if (hit({ left: cell.x * CELL_W, top: cell.y * CELL_H, width: CELL_W, height: CELL_H })) {
+        keys.add(`r:${cell.rack.id}`);
+        touched = true;
+      }
+    for (const item of target.items)
+      if (hit(itemBox(item, target.room))) {
+        keys.add(`i:${item.id}`);
+        touched = true;
+      }
+    if (withCells && !touched) {
       const taken = takenCells(target);
       for (let y = Math.max(0, Math.floor(top / CELL_H)); y < Math.min(height, Math.ceil(bottom / CELL_H)); y++)
         for (let x = Math.max(0, Math.floor(left / CELL_W)); x < Math.min(width, Math.ceil(right / CELL_W)); x++) if (!taken.has(`${x},${y}`)) keys.add(`c:${x},${y}`);
@@ -617,6 +651,8 @@ export function RackFloor({
   const changed = editing && JSON.stringify(plan) !== JSON.stringify(saved);
   const offset = (key: Key) => (drag?.type === "move" && selected.has(key) && (dragCells.dx || dragCells.dy) ? { transform: `translate(${dragCells.dx * CELL_W}px, ${dragCells.dy * CELL_H}px)`, opacity: 0.8, zIndex: 3 } : {});
   const wallTool = Boolean(editing && tool && walled);
+  // 没设过墙时预填现在画出来的大小，改的时候知道要加减多少。
+  const roomShown = roomText ?? { w: String(view.room.w || width), h: String(view.room.h || height) };
 
   return (
     <Stack spacing={1.5}>
@@ -666,8 +702,8 @@ export function RackFloor({
                 size="small"
                 value={tool}
                 onChange={(_, next: FloorItemKind | "" | null) => {
-                  // 先选了空格子再点类型：直接放到这些格子上。
-                  if (next && selCells.length) return fillSelected(next);
+                  // 先选了东西再点类型：选中的都变成这个（空格子放上、柱子等改类型、空机柜换掉）。
+                  if (next && (selCells.length || selItems.length || selRacks.length)) return applyKind(next);
                   setTool(next ?? "");
                   setSelected(new Set());
                 }}
@@ -693,9 +729,9 @@ export function RackFloor({
                 <TextField
                   size="small"
                   type="number"
-                  value={plan.room.w || ""}
-                  placeholder="宽"
-                  onChange={(event) => setRoom(Number(event.target.value), plan.room.h)}
+                  value={roomShown.w}
+                  onChange={(event) => typeRoom({ ...roomShown, w: event.target.value })}
+                  onBlur={() => setRoomText(null)}
                   slotProps={{ htmlInput: { min: 0, max: 200, "aria-label": "机房宽（格）" } }}
                   sx={{ width: 76, bgcolor: "background.paper" }}
                 />
@@ -703,13 +739,13 @@ export function RackFloor({
                 <TextField
                   size="small"
                   type="number"
-                  value={plan.room.h || ""}
-                  placeholder="深"
-                  onChange={(event) => setRoom(plan.room.w, Number(event.target.value))}
+                  value={roomShown.h}
+                  onChange={(event) => typeRoom({ ...roomShown, h: event.target.value })}
+                  onBlur={() => setRoomText(null)}
                   slotProps={{ htmlInput: { min: 0, max: 200, "aria-label": "机房深（格）" } }}
                   sx={{ width: 76, bgcolor: "background.paper" }}
                 />
-                <Typography variant="caption">格</Typography>
+                <Typography variant="caption">格{walled ? "" : "（还没设墙，改了才有）"}</Typography>
                 <Button type="button" size="small" onClick={fitRoom}>
                   按内容
                 </Button>
@@ -732,7 +768,7 @@ export function RackFloor({
                       size="small"
                       slotProps={{ select: { native: true }, htmlInput: { "aria-label": "在选中的空格子放" } }}
                       value=""
-                      onChange={(event) => event.target.value && fillSelected(event.target.value as FloorItemKind)}
+                      onChange={(event) => event.target.value && applyKind(event.target.value as FloorItemKind)}
                       sx={{ bgcolor: "background.paper" }}
                     >
                       <option value="">空格子放…</option>
@@ -766,6 +802,23 @@ export function RackFloor({
                         设为不可用
                       </Button>
                     )}
+                    {selItems.length || selCells.length ? null : (
+                      <TextField
+                        select
+                        size="small"
+                        slotProps={{ select: { native: true }, htmlInput: { "aria-label": "机柜换成" } }}
+                        value=""
+                        onChange={(event) => event.target.value && applyKind(event.target.value as FloorItemKind)}
+                        sx={{ bgcolor: "background.paper" }}
+                      >
+                        <option value="">机柜换成…</option>
+                        {(Object.keys(FLOOR_ITEM_KINDS) as FloorItemKind[]).map((kind) => (
+                          <option key={kind} value={kind}>
+                            {FLOOR_ITEM_KINDS[kind]}
+                          </option>
+                        ))}
+                      </TextField>
+                    )}
                     <Button type="button" size="small" color="error" onClick={deleteSelectedRacks}>
                       删除机柜（{selRacks.length}）
                     </Button>
@@ -788,7 +841,7 @@ export function RackFloor({
                       size="small"
                       slotProps={{ select: { native: true } }}
                       value={selItems.every((item) => item.kind === selItems[0].kind) ? selItems[0].kind : ""}
-                      onChange={(event) => event.target.value && updateSelectedItems({ kind: event.target.value as FloorItemKind })}
+                      onChange={(event) => event.target.value && applyKind(event.target.value as FloorItemKind)}
                       sx={{ bgcolor: "background.paper" }}
                     >
                       {selItems.every((item) => item.kind === selItems[0].kind) ? null : <option value="">（几种都有）</option>}
@@ -852,7 +905,7 @@ export function RackFloor({
             ) : (
               <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center" }}>
                 <Typography variant="caption" sx={{ color: "text.secondary" }}>
-                  先选后改：点格子或在空白处拖框选（空格子也能选），Shift/Ctrl 继续加选，选完再点上面的「柱子」等放到选中的空格子上；拖动或按方向键整体挪；选了机柜后能一起改朝向、设不可用、选同一排、删除；选了几个柱子空调等能一起改类型和名字；Ctrl+C / Ctrl+V 复制到鼠标所在的格子；Delete 删除；Ctrl+Z 撤销。
+                  先选后改：点格子或在空白处拖框选（空格子也能选），Shift/Ctrl 继续加选，选完再点上面的「柱子」等，选中的都变成它（空格子放上、柱子空调等改类型、空机柜换掉）；拖动或按方向键整体挪；选了机柜后能一起改朝向、设不可用、选同一排、删除；选了几个柱子空调等能一起改类型和名字；Ctrl+C / Ctrl+V 复制到鼠标所在的格子；Delete 删除；Ctrl+Z 撤销。
                 </Typography>
                 <Button type="button" size="small" onClick={selectAll}>
                   全选
