@@ -571,3 +571,15 @@ test("rack numbers match loosely: g3 finds G03, but G3 and G03 cannot both exist
   assert.equal(imported.errors, 0, JSON.stringify(imported.rows));
   assert.equal(assets.findAssetBySn("LOOSE-RACK-1")?.rackId, g03.id);
 });
+
+test("floor plan painting fills empty cells in a dragged area, or one merged block", async () => {
+  const { paintCells } = await import("./floor.ts");
+  const plan = { racks: { a1: { x: 1, y: 0, facing: "" as const } }, items: [{ id: "p", kind: "pillar" as const, label: "", x: 2, y: 1, w: 1, h: 1, side: "" as const }], room: { w: 6, h: 4 }, removed: [] as string[] };
+  let n = 0;
+  const id = () => `n${n++}`;
+  const many = paintCells(plan, "pillar", 0, 0, 2, 1, false, id);
+  // 3×2 = 6 格，机柜和已有柱子占了 2 格。
+  assert.deepEqual(many.map((item) => `${item.x},${item.y}`), ["0,0", "2,0", "0,1", "1,1"]);
+  assert.deepEqual(paintCells(plan, "ac", 4, 3, 5, 0, true, id).map((item) => [item.x, item.y, item.w, item.h]), [[4, 0, 2, 4]], "拖反方向也行，合成一块");
+  assert.deepEqual(paintCells(plan, "ac", 0, 0, 2, 1, true, id), [], "有东西挡着不能合成一块");
+});
