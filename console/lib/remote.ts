@@ -8,6 +8,7 @@ import { portSummary, redfishPorts } from "./ports.ts";
 import { listLocalIpv4, sameSubnet } from "./net.ts";
 import { sshKeyPath, taskPath } from "./paths.ts";
 import { OPTICS_SCRIPT, parseOptics } from "./optics.ts";
+import { bmcColdReset, defaultIpmiExec, firstWorkingAccount, ipmiFailure, type IpmiExec } from "./ipmi-remote.ts";
 import { crawlRedfish, RedfishAuthError, redfishGetter, type RedfishGet } from "./redfish.ts";
 import { renderRevokeScript } from "./render.ts";
 import { assetBmcAccounts, getAsset } from "./assets.ts";
@@ -420,6 +421,62 @@ export async function queryOptics(assetId: string, exec: Exec = defaultExec, con
     throw new Error(`SSH 登录 ${host} 失败。机器没开、地址不对，或者装机时没写入控制台公钥`);
   }
   return saveOptics({ serverId: row.id, at: new Date().toISOString(), host, ports: parseOptics(ran.output) });
+}
+
+/**
+ * 在系统里经本机 IPMI 接口（KCS，/dev/ipmi0）让 BMC 冷重启，BMC 网口不通也能用。
+ * 退出码 3：没有 ipmitool；4：没有 IPMI 设备。
+ */
+export const BMC_RESET_SCRIPT = `
+if ! command -v ipmitool >/dev/null 2>&1; then echo "系统里没有 ipmitool"; exit 3; fi
+if [ ! -e /dev/ipmi0 ] && [ ! -e /dev/ipmi/0 ] && [ ! -e /dev/ipmidev/0 ]; then
+  modprobe ipmi_devintf 2>/dev/null; modprobe ipmi_si 2>/dev/null; sleep 2
+fi
+if [ ! -e /dev/ipmi0 ] && [ ! -e /dev/ipmi/0 ] && [ ! -e /dev/ipmidev/0 ]; then echo "系统里没有 IPMI 设备（/dev/ipmi0）"; exit 4; fi
+out=$(timeout 60 ipmitool mc reset cold 2>&1); code=$?
+echo "$out"
+case "$out" in *"Sent cold reset"*) exit 0 ;; esac
+exit $code
+`;
+
+export type BmcResetVia = "outband" | "inband";
+
+/**
+ * 重启 BMC（冷重启，不影响服务器系统）。outband 用资产上的 BMC 账号经网口发 IPMI；
+ * inband SSH 进系统，用系统里的 ipmitool 经本机接口发，BMC 网络不通或密码不对时用这个。
+ */
+export async function resetBmc(
+  assetId: string,
+  via: BmcResetVia,
+  deps: { exec?: Exec; ipmi?: IpmiExec; context?: HostContext } = {},
+): Promise<{ message: string }> {
+  const asset = getAsset(assetId);
+  if (!asset) throw new Error("资产不存在");
+  const after = "BMC 要 1~3 分钟才能重新连上，这期间网页、远程控制台和 Redfish 都连不上";
+  if (via === "outband") {
+    if (!asset.bmcIp) throw new Error(`${asset.sn} 还没有 BMC 地址，带外重启不了，可以试带内`);
+    const accounts = assetBmcAccounts(asset);
+    if (!accounts.length) throw new Error(`${asset.sn} 没有 BMC 账号密码，带外重启不了，可以试带内`);
+    const ipmi = deps.ipmi || defaultIpmiExec;
+    const { account, result } = await firstWorkingAccount(asset.bmcIp, accounts, ipmi);
+    if (!account) {
+      throw new Error(
+        ipmiFailure(result.stderr) === "denied" ? `${asset.sn} 的 BMC ${asset.bmcIp} 不接受资产里的账号密码，可以试带内` : `${asset.sn} 的 BMC ${asset.bmcIp} 没有回应，可以试带内`,
+      );
+    }
+    await bmcColdReset(asset.bmcIp, account.user, account.password, ipmi);
+    return { message: `${asset.sn}：已让 BMC ${asset.bmcIp} 冷重启（带外）。${after}` };
+  }
+  if (via !== "inband") throw new Error("不支持的重启方式");
+  const { host } = resolveAssetHost(asset, deps.context || hostContext());
+  if (!host) throw new Error(`${asset.sn} 找不到系统地址，带内重启不了`);
+  const ran = await (deps.exec || defaultExec)("ssh", [...sshOptions(), `root@${host}`, "bash -s"], BMC_RESET_SCRIPT, Date.now() + 90_000);
+  const said = ran.output.trim().split("\n").slice(-3).join(" ").slice(0, 200);
+  if (ran.timedOut) throw new Error(`${asset.sn}（${host}）超过 90 秒没完成，已中止`);
+  if (ran.code === 255) throw new Error(`SSH 登录 ${host} 失败。机器没开、地址不对，或者装机时没写入控制台公钥`);
+  if (ran.code === 3) throw new Error(`${asset.sn}（${host}）的系统里没有 ipmitool，先装上（apt/yum install ipmitool）`);
+  if (ran.code !== 0) throw new Error(`${asset.sn}（${host}）重启 BMC 失败${said ? `：${said}` : ""}`);
+  return { message: `${asset.sn}：已经系统 ${host} 让 BMC 冷重启（带内）。${after}` };
 }
 
 /** 在独立进程里跑完一个任务，每台机器状态变化时写回任务文件。 */

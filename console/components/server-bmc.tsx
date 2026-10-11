@@ -12,6 +12,7 @@ import IconButton from "@mui/material/IconButton";
 import List from "@mui/material/List";
 import ListItem from "@mui/material/ListItem";
 import ListItemText from "@mui/material/ListItemText";
+import Menu from "@mui/material/Menu";
 import MenuItem from "@mui/material/MenuItem";
 import Paper from "@mui/material/Paper";
 import Stack from "@mui/material/Stack";
@@ -163,7 +164,20 @@ export function ServerBmc({ assetId }: { assetId: string }) {
       </Typography>
     );
 
-  const bar = <ReadBar readAt={data.readAt} reading={reading} onRead={() => void load(true)} hint="正在经 Redfish 读 BMC，要十几秒" />;
+  const bar = (
+    <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+      <Box sx={{ flex: 1 }}>
+        <ReadBar readAt={data.readAt} reading={reading} onRead={() => void load(true)} hint="正在经 Redfish 读 BMC，要十几秒" />
+      </Box>
+      <BmcResetButton
+        assetId={assetId}
+        onDone={(ok, text) => {
+          setError(ok ? "" : text);
+          setMessage(ok ? text : "");
+        }}
+      />
+    </Stack>
+  );
   if (!data.overview)
     return (
       <Stack spacing={2}>
@@ -171,6 +185,11 @@ export function ServerBmc({ assetId }: { assetId: string }) {
         {error ? (
           <Typography variant="body2" color="error">
             {error}
+          </Typography>
+        ) : null}
+        {message ? (
+          <Typography variant="body2" sx={{ color: "success.main" }}>
+            {message}
           </Typography>
         ) : null}
         <EventStreamLine status={data.events} />
@@ -255,6 +274,38 @@ export function ServerBmc({ assetId }: { assetId: string }) {
 
       <MediaSection view={view} busy={busy} onSend={(body) => send(`/api/assets/${assetId}/redfish/media`, "POST", body)} />
     </Stack>
+  );
+}
+
+/** 「重启 BMC」：带外经 BMC 网口发 IPMI，带内 SSH 进系统发。BMC 刚重启连不上，所以完了不自动重读。 */
+function BmcResetButton({ assetId, onDone }: { assetId: string; onDone: (ok: boolean, text: string) => void }) {
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function reset(via: "outband" | "inband") {
+    setAnchor(null);
+    const how = via === "inband" ? "带内（SSH 进系统用 ipmitool）" : "带外（经 BMC 网口）";
+    if (!window.confirm(`${how}冷重启 BMC？\n\n服务器系统不受影响，1~3 分钟内 BMC 网页、远程控制台和 Redfish 都连不上。`)) return;
+    setBusy(true);
+    const result = await api<{ message: string }>(`/api/assets/${assetId}/control`, "POST", { bmcReset: via });
+    setBusy(false);
+    onDone(result.ok, result.ok ? result.data.message : result.error);
+  }
+
+  return (
+    <>
+      <Button size="small" color="warning" disabled={busy} onClick={(event) => setAnchor(event.currentTarget)}>
+        {busy ? "正在重启 BMC…" : "重启 BMC"}
+      </Button>
+      <Menu anchorEl={anchor} open={Boolean(anchor)} onClose={() => setAnchor(null)}>
+        <MenuItem onClick={() => void reset("outband")}>
+          <ListItemText primary="带外" secondary="经 BMC 网口发 IPMI" />
+        </MenuItem>
+        <MenuItem onClick={() => void reset("inband")}>
+          <ListItemText primary="带内" secondary="SSH 进系统，BMC 网络不通时用" />
+        </MenuItem>
+      </Menu>
+    </>
   );
 }
 
