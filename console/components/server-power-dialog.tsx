@@ -27,6 +27,8 @@ const POWER: { id: PowerAction; label: string; confirm?: string }[] = [
   { id: "cycle", label: "断电重启", confirm: "先断电再上电" },
 ];
 
+const BMC_RESET_CONFIRM = "冷重启 BMC（服务器系统不受影响），1~3 分钟内 BMC 网页、远程控制台和 Redfish 都连不上";
+
 const BOOT: { id: BootDevice; label: string }[] = [
   { id: "pxe", label: "网卡 PXE" },
   { id: "usb", label: "U 盘" },
@@ -95,10 +97,10 @@ export function ServerPowerDialog({ targets, onClose }: { targets: Target[]; onC
 
   return (
     <Dialog open={targets.length > 0} onClose={() => !pending && onClose()}>
-      <DialogTitle>电源和引导 · {names}</DialogTitle>
+      <DialogTitle>电源、引导和 BMC · {names}</DialogTitle>
       <DialogContent>
         <DialogContentText variant="body2" sx={{ mb: 2 }}>
-          通过 IPMI 操作，用 BMC 当前的账号登录。
+          电源和引导通过 IPMI 操作，用 BMC 当前的账号登录。
           {targets.some((item) => !item.bmcIp) ? " 有机器还没有 IPMI 地址，会跳过并报错。" : ""}
         </DialogContentText>
 
@@ -119,6 +121,21 @@ export function ServerPowerDialog({ targets, onClose }: { targets: Target[]; onC
           </Stack>
           <Typography variant="caption" color="text.secondary">
             关机是通知系统关机，系统没响应时用强制关机。关着的机器点重启会直接开机。
+          </Typography>
+        </Stack>
+
+        <Stack component="section" spacing={1} sx={{ borderTop: 1, borderColor: "divider", pt: 2, mt: 2 }}>
+          <Typography variant="subtitle2">BMC</Typography>
+          <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap" }}>
+            <Button variant="outlined" disabled={pending} onClick={() => run({ bmcReset: "outband" }, BMC_RESET_CONFIRM)}>
+              重启 BMC（带外）
+            </Button>
+            <Button variant="outlined" disabled={pending} onClick={() => run({ bmcReset: "inband" }, BMC_RESET_CONFIRM)}>
+              重启 BMC（带内）
+            </Button>
+          </Stack>
+          <Typography variant="caption" color="text.secondary">
+            冷重启 BMC，服务器系统照常运行。带外经 BMC 网口发 IPMI；带内 SSH 进系统用系统里的 ipmitool 发，BMC 网络不通或账号不对时用。重启后 1~3 分钟连不上 BMC。
           </Typography>
         </Stack>
 

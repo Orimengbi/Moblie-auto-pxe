@@ -181,6 +181,12 @@ export async function setBootDevice(
   if (result.code !== 0) fail(result, `设置从${spec.label}启动失败`);
 }
 
+/** 让 BMC 冷重启，不影响服务器系统。BMC 收到后马上断开，ipmitool 可能报错退出，看到「Sent cold reset」就算发出去了。 */
+export async function bmcColdReset(host: string, username: string, password: string, exec: IpmiExec): Promise<void> {
+  const result = await exec(host, username, password, ["mc", "reset", "cold"]);
+  if (result.code !== 0 && !/sent cold reset/i.test(`${result.stdout}\n${result.stderr}`)) fail(result, "重启 BMC 失败");
+}
+
 export async function powerStatus(host: string, username: string, password: string, exec: IpmiExec): Promise<"on" | "off" | "unknown"> {
   const result = await exec(host, username, password, ["chassis", "power", "status"]);
   return parsePowerStatus(result.stdout);
