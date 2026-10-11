@@ -23,6 +23,7 @@ import { ServerFirmware } from "@/components/server-firmware";
 import { ServerInventory } from "@/components/server-inventory";
 import { ServerOptics } from "@/components/server-optics";
 import { ServerPorts } from "@/components/server-ports";
+import { ServerSensors } from "@/components/server-sensors";
 import { ServerTopology } from "@/components/server-topology";
 
 interface Row {
@@ -37,7 +38,7 @@ interface Row {
   description: string;
 }
 
-export type Tab = "overview" | "netports" | "monitor" | "bmc" | "bios" | "firmware" | "bmclogs" | "tickets" | "hardware" | "ports" | "topology" | "optics" | "history";
+export type Tab = "overview" | "netports" | "monitor" | "sensors" | "bmc" | "bios" | "firmware" | "bmclogs" | "tickets" | "hardware" | "ports" | "topology" | "optics" | "history";
 
 interface TabContext {
   row: Row;
@@ -53,6 +54,7 @@ const TABS: { id: Tab; label: string; where: "server" | "network" | "all"; rende
   { id: "netports", label: "端口", where: "network", render: ({ row }) => <NetworkDevice assetId={row.id} /> },
   { id: "overview", label: "概况", where: "all", render: ({ row, onChanged }) => <AssetOverview assetId={row.id} onChanged={onChanged} /> },
   { id: "monitor", label: "监控", where: "all", render: ({ row }) => <AssetMonitor assetId={row.id} /> },
+  { id: "sensors", label: "传感器", where: "server", render: ({ row }) => <ServerSensors assetId={row.id} /> },
   { id: "bmc", label: "BMC", where: "server", render: ({ row }) => <ServerBmc assetId={row.id} /> },
   { id: "bios", label: "BIOS", where: "server", render: ({ row }) => <ServerBios assetId={row.id} /> },
   { id: "firmware", label: "固件", where: "server", render: ({ row }) => <ServerFirmware assetId={row.id} /> },
