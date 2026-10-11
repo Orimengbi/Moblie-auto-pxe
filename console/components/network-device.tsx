@@ -270,7 +270,7 @@ export function NetworkDevice({ assetId }: { assetId: string }) {
               </Typography>
             )}
             <Typography variant="caption" color="text.secondary">
-              历史采集 {view?.history} 份，部件、光模块、对端变了才存新的一份；变化在「变更记录」里。
+              历史采集 {view?.history} 份，部件、光模块、对端变了才存新的一份；变化在「记录」里。
             </Typography>
           </Stack>
         </>
