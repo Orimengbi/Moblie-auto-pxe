@@ -8,16 +8,29 @@ import { markedSections } from "./sections.ts";
 
 /** 每个口输出一段，段头是 "===PXEOPT mlx <rdma> <pci> <网口...>===" 或 "===PXEOPT eth <网口> <pci>==="。 */
 export const OPTICS_BODY = String.raw`pxeopt_pci() { basename "$(readlink -f "$1/device")"; }
+# Mellanox 的卡按 PCI 物理功能逐个读：做了 bond 的两个口只有一个 RDMA 设备（mlx5_bond_0），按 RDMA 设备读会漏掉第二个口的模块。
+# VF 不读（读到的是 PF 的模块）；switchdev 的 representor 和 PF 同一个 PCI 地址，不列成口。
 if command -v mlxlink >/dev/null 2>&1; then
-  for d in /sys/class/infiniband/*; do
-    [ -e "$d/device" ] || continue
-    echo "===PXEOPT mlx $(basename "$d") $(pxeopt_pci "$d") $(ls "$d/device/net" 2>/dev/null | tr '\n' ' ')==="
-    timeout 30 mlxlink -d "$(basename "$d")" -m --json 2>&1
+  for p in /sys/bus/pci/devices/*; do
+    [ "$(basename "$(readlink -f "$p/driver" 2>/dev/null)")" = mlx5_core ] || continue
+    [ -e "$p/physfn" ] && continue
+    [ -d "$p/net" ] || [ -d "$p/infiniband" ] || continue
+    r=$(ls "$p/infiniband" 2>/dev/null | head -n 1)
+    [ -n "$r" ] || r=$(basename "$p")
+    nets=""
+    for n in "$p"/net/*; do
+      [ -e "$n" ] || continue
+      case "$(cat "$n/phys_port_name" 2>/dev/null)" in pf*vf*|pf*sf*) continue ;; esac
+      nets="$nets $(basename "$n")"
+    done
+    echo "===PXEOPT mlx $r $(basename "$p")$nets==="
+    timeout 30 mlxlink -d "$(basename "$p")" -m --json 2>&1
   done
 fi
 for n in /sys/class/net/*; do
   [ -e "$n/device" ] || continue
-  if command -v mlxlink >/dev/null 2>&1 && [ -d "$n/device/infiniband" ]; then continue; fi
+  [ -e "$n/device/physfn" ] && continue
+  if command -v mlxlink >/dev/null 2>&1 && [ "$(basename "$(readlink -f "$n/device/driver" 2>/dev/null)")" = mlx5_core ]; then continue; fi
   case "$(pxeopt_pci "$n")" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f]:*) ;; *) continue ;; esac
   echo "===PXEOPT eth $(basename "$n") $(pxeopt_pci "$n")==="
   timeout 20 ethtool -m "$(basename "$n")" 2>&1 | head -n 300
@@ -55,8 +68,10 @@ function firstNumber(raw: unknown): number | undefined {
 }
 
 function parseMlxlink(head: string[], body: string): OpticsPort {
-  const [, rdma, pci, ...nets] = head;
-  const port: OpticsPort = { port: nets[0] || rdma, ports: nets, rdma, pci, source: "mlxlink", present: false, rx: [], tx: [] };
+  const [, device, pci, ...nets] = head;
+  // 做了 bond 的第二个口没有自己的 RDMA 设备，段头里给的是 PCI 地址。
+  const rdma = device === pci ? "" : device;
+  const port: OpticsPort = { port: nets[0] || rdma || pci, ports: nets, rdma, pci, source: "mlxlink", present: false, rx: [], tx: [] };
   const start = body.indexOf("{");
   let parsed: { status?: { code?: number; message?: string }; result?: { output?: Record<string, Record<string, unknown>> } } | null = null;
   try {
