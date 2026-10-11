@@ -4,6 +4,7 @@ import { assertCodeFree, countWhere, db, getSetting, putSetting, runOrPreview, t
 import { assertDate, cleanCode, cleanName, cleanText } from "./validate.ts";
 import { cachedRackFinder, getRack, listRacks, listSites, MAX_RACK_U, placeLabel } from "./racks.ts";
 import { assertIpv4, normalizeMac, normalizeSn } from "./net.ts";
+import { modelKey } from "./catalog-schema.ts";
 import type { Asset, AssetEvent, AssetStatus, AssetType, AuditEntry, Customer, PublicAsset, Rack, ServerRow, Site, TagSettings } from "./types.ts";
 
 export { ASSET_STATUS, ASSET_TYPES, renderTag } from "./asset-labels.ts";
@@ -340,7 +341,7 @@ function cleanAssetInput(input: AssetInput, current: AssetRecord | null): Partia
     out.rackId = id;
     if (!id) out.uStart = null;
   }
-  if (has("uHeight")) {
+  if (has("uHeight") && String(input.uHeight) !== "") {
     const height = Number(input.uHeight);
     if (!Number.isInteger(height) || height < 0 || height > MAX_RACK_U) throw new Error(`占用 U 需要 0 到 ${MAX_RACK_U} 的整数，0 表示侧挂`);
     out.uHeight = height;
@@ -355,6 +356,27 @@ function cleanAssetInput(input: AssetInput, current: AssetRecord | null): Partia
   const warrantyEnd = out.warrantyEnd ?? current?.warrantyEnd ?? "";
   if (warrantyStart && warrantyEnd && warrantyEnd < warrantyStart) throw new Error("保修到期早于保修开始");
   return out;
+}
+
+/** 型号字典里这个型号（含别名）记了高度就返回它，没记返回 null。资产类型和字典分类同名（server、switch、pdu）。 */
+export function catalogHeightOf(type: AssetType, model: string): number | null {
+  const key = modelKey(model || "");
+  if (!key) return null;
+  for (const row of db().prepare("SELECT model, aliases, attrs FROM catalog_models WHERE category = ?").all(type)) {
+    const names = [String(row.model), ...(JSON.parse(String(row.aliases)) as string[])];
+    if (!names.some((name) => modelKey(name) === key)) continue;
+    const height = (JSON.parse(String(row.attrs)) as Record<string, unknown>).heightU;
+    return typeof height === "number" && Number.isInteger(height) && height >= 0 && height <= MAX_RACK_U ? height : null;
+  }
+  return null;
+}
+
+/** 没明确填占用 U 时：新入库的、或者改了型号/类型的，按型号字典的高度来。 */
+function heightFromCatalog(before: AssetRecord | null, next: AssetRecord, input: AssetInput): void {
+  if (input.uHeight !== undefined && input.uHeight !== null && String(input.uHeight) !== "") return;
+  if (before && modelKey(before.model) === modelKey(next.model) && before.type === next.type) return;
+  const height = catalogHeightOf(next.type, next.model);
+  if (height !== null) next.uHeight = height;
 }
 
 /** 放进机柜的位置要在机柜高度以内，不能和同一机柜里别的设备重叠。侧挂（0U）不占 U 位。 */
@@ -468,6 +490,7 @@ export function createAsset(input: AssetInput, actor: string): Asset {
     if (findAssetBySn(record.sn)) throw new Error(`序列号 ${record.sn} 已经入库了`);
     skipTakenSeq(record);
     assertTagFree(record);
+    heightFromCatalog(null, record, input);
     assertPlacement(record);
     autoRack(null, record, input);
     insertAsset(record);
@@ -492,6 +515,7 @@ function applyUpdate(id: string, input: AssetInput, actor: string): { asset: Ass
       const other = findAssetBySn(next.sn);
       if (other) throw new Error(`序列号 ${next.sn} 已经是另一台资产 ${other.tag} 的了`);
     }
+    heightFromCatalog(before, next, input);
     assertPlacement(next);
     autoRack(before, next, input);
     const changes = describeChanges(before, next);

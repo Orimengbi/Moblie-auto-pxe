@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Chip from "@mui/material/Chip";
@@ -16,6 +17,7 @@ import Typography from "@mui/material/Typography";
 import { DataGrid, type GridColDef } from "@mui/x-data-grid";
 import { CATALOG_CATEGORIES, CATALOG_FIELDS, specText } from "@/lib/catalog-schema";
 import type { CatalogCategory, CatalogEntry } from "@/lib/types";
+import type { HeightSync } from "@/lib/catalog";
 import { api } from "@/lib/client-api";
 
 const MONO = "var(--font-geist-mono), monospace";
@@ -31,6 +33,7 @@ export function CatalogBoard({ entries, admin }: { entries: CatalogEntry[]; admi
   const [editing, setEditing] = useState<CatalogEntry | "new" | null>(null);
   const [filling, setFilling] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState<{ text: string; warn: boolean } | null>(null);
 
   const counts = useMemo(() => {
     const map = new Map<string, number>();
@@ -150,6 +153,11 @@ export function CatalogBoard({ entries, admin }: { entries: CatalogEntry[]; admi
           {error}
         </Typography>
       ) : null}
+      {notice ? (
+        <Alert severity={notice.warn ? "warning" : "success"} onClose={() => setNotice(null)} sx={{ whiteSpace: "pre-line" }}>
+          {notice.text}
+        </Alert>
+      ) : null}
       <Box sx={{ width: "100%", minWidth: 0 }}>
         <DataGrid
           rows={shown}
@@ -163,13 +171,26 @@ export function CatalogBoard({ entries, admin }: { entries: CatalogEntry[]; admi
           sx={{ "& .MuiDataGrid-cell": { display: "flex", alignItems: "center", py: 0.75 } }}
         />
       </Box>
-      <EntryDialog entry={editing} defaultCategory={category || "memory"} onClose={() => setEditing(null)} onSaved={() => router.refresh()} />
+      <EntryDialog entry={editing} defaultCategory={category || "memory"} onClose={() => setEditing(null)} onSaved={(sync) => {
+          setNotice(sync ? syncNotice(sync) : null);
+          router.refresh();
+        }}
+      />
       <AutofillDialog open={filling} onClose={() => setFilling(false)} onDone={() => router.refresh()} />
     </Stack>
   );
 }
 
-function EntryDialog({ entry, defaultCategory, onClose, onSaved }: { entry: CatalogEntry | "new" | null; defaultCategory: CatalogCategory; onClose: () => void; onSaved: () => void }) {
+/** 字典改了高度后，同型号资产改了几台、哪几台在机柜里放不下。 */
+function syncNotice(sync: HeightSync): { text: string; warn: boolean } {
+  const head = sync.updated ? `同型号的 ${sync.updated} 台资产占用 U 已改成 ${sync.height}U，机柜图跟着变。` : `没有要改的资产（同型号的都已经是 ${sync.height}U，或者还没有这个型号的资产）。`;
+  if (!sync.failed.length) return { text: head, warn: false };
+  const lines = sync.failed.slice(0, 20).map((item) => `${item.sn}：${item.error}`);
+  if (sync.failed.length > 20) lines.push(`…还有 ${sync.failed.length - 20} 台`);
+  return { text: `${head}\n${sync.failed.length} 台没改，在机柜里放不下，去机柜页挪一下位置再改：\n${lines.join("\n")}`, warn: true };
+}
+
+function EntryDialog({ entry, defaultCategory, onClose, onSaved }: { entry: CatalogEntry | "new" | null; defaultCategory: CatalogCategory; onClose: () => void; onSaved: (sync: HeightSync | null) => void }) {
   const [form, setForm] = useState({ category: defaultCategory as CatalogCategory, vendor: "", model: "", aliases: "", note: "" });
   const [attrs, setAttrs] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
@@ -200,7 +221,7 @@ function EntryDialog({ entry, defaultCategory, onClose, onSaved }: { entry: Cata
       setError(result.error);
       return;
     }
-    onSaved();
+    onSaved((result.data as { heightSync?: HeightSync | null }).heightSync ?? null);
     onClose();
   }
 

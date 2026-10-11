@@ -65,7 +65,7 @@ function formOf(asset: PublicAsset | null): Form {
     siteId: "",
     rackId: asset?.rackId || "",
     uStart: asset?.uStart ? String(asset.uStart) : "",
-    uHeight: String(asset?.uHeight ?? 1),
+    uHeight: asset ? String(asset.uHeight) : "",
     bmcMac: asset?.bmcMac || "",
     bmcIp: asset?.bmcIp || "",
     bmcUser: asset?.bmcUser || "",
@@ -146,7 +146,15 @@ export function AssetEditDialog({
     setError("");
     const { siteId, ...rest } = form;
     void siteId;
-    const body = { ...rest, snmpProfileId: form.snmpProfileId || null, customerId: form.customerId || null, rackId: form.rackId || null, uStart: form.rackId && form.uStart ? Number(form.uStart) : null, uHeight: Number(form.uHeight || 1) };
+    const body = {
+      ...rest,
+      snmpProfileId: form.snmpProfileId || null,
+      customerId: form.customerId || null,
+      rackId: form.rackId || null,
+      uStart: form.rackId && form.uStart ? Number(form.uStart) : null,
+      // 没填、或编辑时没动占用 U 就不传：新入库或改了型号时由服务端按型号字典取。
+      uHeight: form.uHeight === "" || form.uHeight === (asset ? String(asset.uHeight) : "") ? undefined : Number(form.uHeight),
+    };
     const response = await fetch(creating ? "/api/assets" : `/api/assets/${asset.id}`, {
       method: creating ? "POST" : "PATCH",
       headers: { "content-type": "application/json" },
@@ -221,7 +229,7 @@ export function AssetEditDialog({
             </Field>
             <Spacer />
             <Field label="起始 U" {...field("uStart")} type="number" htmlInput={{ min: 1 }} disabled={!form.rackId || form.uHeight === "0"} placeholder="最下面那个 U" />
-            <Field label="占用 U" {...field("uHeight")} type="number" htmlInput={{ min: 0, max: 60 }} placeholder="0 表示侧挂" />
+            <Field label="占用 U" {...field("uHeight")} type="number" htmlInput={{ min: 0, max: 60 }} placeholder={creating ? "空着按型号字典，没有就 1" : "0 表示侧挂"} />
             <Field label="位置备注" {...field("location")} placeholder="可留空，例如 后侧、冷通道" />
           </Group>
 
