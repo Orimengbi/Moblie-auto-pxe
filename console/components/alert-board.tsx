@@ -12,6 +12,7 @@ import Typography from "@mui/material/Typography";
 import { DataGrid, type GridColDef } from "@mui/x-data-grid";
 import { StatusChip } from "@/components/mui/status-chip";
 import { ALERT_SEVERITY, ALERT_SEVERITY_TONE, ALERT_SOURCE, ALERT_STATUS } from "@/lib/asset-labels";
+import { matchesSearch, pasteAsList, searchTerms } from "@/lib/search";
 import type { Alert } from "@/lib/types";
 import { formatTime } from "@/lib/time";
 import { api } from "@/lib/client-api";
@@ -45,14 +46,14 @@ export function AlertBoard({ alerts, summary }: { alerts: AlertRow[]; summary: s
   }, [router]);
 
   const shown = useMemo(() => {
-    const needle = q.trim().toLowerCase();
+    const terms = searchTerms(q);
     return alerts
       .filter((alert) => {
         if (status === "open" && alert.status === "resolved") return false;
         if (status === "resolved" && alert.status !== "resolved") return false;
         if (severity && alert.severity !== severity) return false;
         if (source && alert.source !== source) return false;
-        return !needle || [alert.title, alert.detail, alert.assetTag, alert.assetSn].join(" ").toLowerCase().includes(needle);
+        return matchesSearch([alert.title, alert.detail, alert.assetTag, alert.assetSn].join(" "), terms);
       })
       .sort((a, b) => {
         const rank = (alert: Alert) => (alert.status === "active" ? 0 : alert.status === "acked" ? 1 : 2) * 2 + (alert.severity === "critical" ? 0 : 1);
@@ -163,7 +164,13 @@ export function AlertBoard({ alerts, summary }: { alerts: AlertRow[]; summary: s
         {summary}
       </Typography>
       <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center" }}>
-        <TextField placeholder="搜标题、资产、详情…" value={q} onChange={(event) => setQ(event.target.value)} sx={{ width: 224 }} />
+        <TextField
+          placeholder="搜标题、资产、详情…（多个用逗号隔开）"
+          value={q}
+          onChange={(event) => setQ(event.target.value)}
+          slotProps={{ htmlInput: { onPaste: pasteAsList(setQ) } }}
+          sx={{ width: 224 }}
+        />
         <TextField select slotProps={NATIVE} value={status} onChange={(event) => setStatus(event.target.value)}>
           <option value="open">没恢复的</option>
           <option value="resolved">已恢复的</option>

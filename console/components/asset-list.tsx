@@ -24,6 +24,7 @@ import type { AssetRow } from "@/lib/asset-view";
 import { ASSET_STATUS, ASSET_STATUS_TONE, ASSET_TYPES, WARRANTY_LABEL } from "@/lib/asset-labels";
 import type { AssetStatus, Customer, Datacenter, RemoteFile, Site } from "@/lib/types";
 import { SiteOptions } from "@/components/site-options";
+import { matchesSearch, pasteAsList, searchTerms } from "@/lib/search";
 import { formatTime } from "@/lib/time";
 
 const MONO = "var(--font-geist-mono), monospace";
@@ -47,18 +48,17 @@ function hardwareText(row: AssetRow): string {
   return formatTime(latest, "date");
 }
 
+function searchText(row: AssetRow): string {
+  return [row.tag, row.sn, row.vendor, row.model, row.customerName, row.owner, row.place, row.location, row.bmcIp, row.host, row.hostname, row.purchaseOrder, row.note].join(" ");
+}
+
 function matches(row: AssetRow, filters: Filters): boolean {
   if (filters.status && row.status !== filters.status) return false;
   if (filters.type && row.type !== filters.type) return false;
   if (filters.site === "none" ? row.rackId : filters.site.startsWith("dc:") ? row.datacenterId !== filters.site.slice(3) : filters.site && row.siteId !== filters.site) return false;
   if (filters.customer === "none" ? row.customerId : filters.customer && row.customerId !== filters.customer) return false;
   if (filters.warranty && !(row.warranty === "expired" || row.warranty === "expiring")) return false;
-  const needle = filters.q.trim().toLowerCase();
-  if (!needle) return true;
-  return [row.tag, row.sn, row.vendor, row.model, row.customerName, row.owner, row.place, row.location, row.bmcIp, row.host, row.hostname, row.purchaseOrder, row.note]
-    .join(" ")
-    .toLowerCase()
-    .includes(needle);
+  return matchesSearch(searchText(row), searchTerms(filters.q));
 }
 
 /** 单元格里的第二行小字。 */
@@ -176,6 +176,13 @@ export function AssetList({
 
   const shown = useMemo(() => rows.filter((row) => matches(row, filters)).sort((a, b) => tagCompare(a.tag, b.tag)), [rows, filters]);
   const filtering = Object.values(filters).some(Boolean);
+  // 一次搜了好几项（如贴了一串 SN）时，列出哪几项一台都没对上。
+  const terms = useMemo(() => searchTerms(filters.q), [filters.q]);
+  const missingTerms = useMemo(() => {
+    if (terms.length < 2) return [];
+    const texts = shown.map((row) => searchText(row).toLowerCase());
+    return terms.filter((term) => !texts.some((text) => text.includes(term)));
+  }, [terms, shown]);
   const sideRow = rows.find((row) => row.id === sideId) || null;
   const pickedRows = rows.filter((row) => picked.includes(row.id));
   const installed = rows.filter((row) => row.host).map((row) => row.id);
@@ -340,7 +347,13 @@ export function AssetList({
   return (
     <Stack spacing={2}>
       <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center" }}>
-        <TextField sx={{ width: 224 }} placeholder="搜编号、序列号、型号、IP…" value={filters.q} onChange={(event) => setFilter("q", event.target.value)} />
+        <TextField
+          sx={{ width: 224 }}
+          placeholder="搜编号、序列号、型号、IP…（多个用逗号隔开）"
+          value={filters.q}
+          onChange={(event) => setFilter("q", event.target.value)}
+          slotProps={{ htmlInput: { onPaste: pasteAsList((value) => setFilter("q", value)) } }}
+        />
         <TextField select slotProps={NATIVE} value={filters.status} onChange={(event) => setFilter("status", event.target.value)}>
           <option value="">全部状态</option>
           {Object.entries(ASSET_STATUS).map(([value, label]) => (
@@ -388,6 +401,11 @@ export function AssetList({
           </Button>
         </Stack>
       </Stack>
+      {terms.length > 1 ? (
+        <Typography variant="body2" sx={{ color: missingTerms.length ? "warning.main" : "text.secondary", wordBreak: "break-all" }}>
+          搜了 {terms.length} 项，{terms.length - missingTerms.length} 项找到{missingTerms.length ? `；没找到 ${missingTerms.length} 项：${missingTerms.join(", ")}` : ""}
+        </Typography>
+      ) : null}
 
       <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center" }}>
         <Typography variant="body2" sx={{ color: "text.secondary" }}>
