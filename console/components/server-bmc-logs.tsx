@@ -88,7 +88,7 @@ export function ServerBmcLogs({ assetId }: { assetId: string }) {
       const result = await api<{ services: LogServiceView[] }>(`/api/assets/${assetId}/redfish/logs`);
       if (!result.ok) return setError(result.error);
       setServices(result.data.services);
-      const first = result.data.services.find((item) => item.id === "SEL") || result.data.services.find((item) => item.count) || result.data.services[0];
+      const first = result.data.services.find((item) => item.id === "ipmi-sel") || result.data.services.find((item) => item.id === "SEL") || result.data.services.find((item) => item.count) || result.data.services[0];
       if (first) setService(first.path);
     })();
   }, [assetId]);
@@ -217,7 +217,7 @@ export function ServerBmcLogs({ assetId }: { assetId: string }) {
                   at={entry.created}
                   severity={entry.severity}
                   title={selSummary(entry)}
-                  detail={[entry.id && `#${entry.id}`, entry.device, entry.messageId !== "0x000000" ? entry.messageId : "", entry.sensor, entry.resolved === true ? "已恢复" : ""].filter(Boolean).join("  ")}
+                  detail={[entry.id && `#${entry.id}`, entry.device, entry.messageId !== "0x000000" ? entry.messageId : "", entry.sensor, entry.resolved === true ? "已恢复" : entry.resolved === false && entry.entryType === "SEL" ? "未恢复" : ""].filter(Boolean).join("  ")}
                   hint={entry.resolution}
                 />
               ))}

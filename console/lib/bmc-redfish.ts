@@ -872,6 +872,12 @@ export function newestFirst(a: LogEntryView, b: LogEntryView): number {
   return Number.isFinite(an) && Number.isFinite(bn) ? bn - an : b.id.localeCompare(a.id);
 }
 
+/** 整份读下来的日志按时间倒排、按需只留告警，取一页。 */
+export function pageLog(list: LogEntryView[], page: number, size: number, alerts: boolean): { total: number; entries: LogEntryView[]; sorted: true } {
+  const all = list.filter((entry) => !alerts || isAlertEntry(entry)).sort(newestFirst);
+  return { total: all.length, entries: all.slice(page * size, (page + 1) * size), sorted: true };
+}
+
 /** 整份读一个日志。BMC 一次给不全时按 nextLink 或 $skip 接着读；只给链接没给内容时返回 null。 */
 async function readWholeLog(session: BmcSession, entries: string, total: number): Promise<RedfishDoc[] | null> {
   const list: RedfishDoc[] = [];
@@ -907,8 +913,7 @@ export async function readLog(
   if (total && total <= LOG_FULL_READ) {
     const whole = await readWholeLog(session, entries, total);
     if (whole) {
-      const all = whole.map(entryView).filter((entry) => !alerts || isAlertEntry(entry)).sort(newestFirst);
-      return { total: all.length, entries: all.slice(page * size, (page + 1) * size), sorted: true };
+      return pageLog(whole.map(entryView), page, size, alerts);
     }
   }
   // BMC 按编号从旧到新给，倒着取一页。
