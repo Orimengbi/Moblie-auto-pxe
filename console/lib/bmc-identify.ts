@@ -20,10 +20,30 @@ export interface BmcIdentity {
   via: string;
 }
 
+/** 出厂没刷的序列号常见 0123456789…、123456789…、同一个字符重复，当没有。 */
+export function placeholderSerial(text: string): boolean {
+  const value = text.trim().toUpperCase();
+  if (value.length >= 6 && /^(.)\1+$/.test(value)) return true;
+  return value.length >= 6 && ("01234567890123456789".startsWith(value) || "12345678901234567890".startsWith(value) || "123456789ABCDEF".startsWith(value));
+}
+
 function clean(value: unknown): string {
   const text = typeof value === "string" ? value.trim() : "";
   // BMC 没填的字段常见这些占位值。
   return /^(n\/?a|none|null|unknown|default string|to be filled by o\.e\.m\.|0+|-|\.+)$/i.test(text) ? "" : text;
+}
+
+function serial(value: unknown): string {
+  const text = clean(value);
+  return placeholderSerial(text) ? "" : text;
+}
+
+/**
+ * Redfish 通了但序列号是空的或占位值：多半是 BIOS 的整机信息（SMBIOS）没刷，型号也常常是主板型号（技嘉 G894 报成 MZB3-PE2-000），
+ * 这时序列号、厂商、型号都以 IPMI FRU 的产品区为准，FRU 也没有的才用 Redfish 的。
+ */
+export function mergeIdentity(redfish: BmcIdentity, ipmi: BmcIdentity): BmcIdentity {
+  return { sn: ipmi.sn, vendor: ipmi.vendor || redfish.vendor, model: ipmi.model || redfish.model, bmcMac: redfish.bmcMac || ipmi.bmcMac, hostname: redfish.hostname, via: "Redfish + IPMI" };
 }
 
 async function viaRedfish(ip: string, user: string, password: string): Promise<BmcIdentity> {
@@ -43,7 +63,7 @@ async function viaRedfish(ip: string, user: string, password: string): Promise<B
       // 读不到 MAC 不影响序列号。
     }
   }
-  return { sn: clean(system.SerialNumber), vendor: clean(system.Manufacturer), model: clean(system.Model), bmcMac, hostname: clean(system.HostName), via: "Redfish" };
+  return { sn: serial(system.SerialNumber), vendor: clean(system.Manufacturer), model: clean(system.Model), bmcMac, hostname: clean(system.HostName), via: "Redfish" };
 }
 
 /** `ipmitool fru print 0` 的 冒号 字段。 */
@@ -67,7 +87,7 @@ async function viaIpmi(ip: string, user: string, password: string, exec: IpmiExe
   const lan = await exec(ip, user, password, ["lan", "print", "1"]).catch(() => ({ code: 1, stdout: "", stderr: "" }));
   const mac = parseFru(lan.stdout)["MAC Address"] || "";
   return {
-    sn: clean(fields["Product Serial"]) || clean(fields["Chassis Serial"]) || clean(fields["Board Serial"]),
+    sn: serial(fields["Product Serial"]) || serial(fields["Chassis Serial"]) || serial(fields["Board Serial"]),
     vendor: clean(fields["Product Manufacturer"]) || clean(fields["Board Mfg"]),
     model: clean(fields["Product Name"]) || clean(fields["Board Product"]),
     bmcMac: /^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/i.test(mac) ? mac.toLowerCase() : "",
@@ -94,10 +114,7 @@ export async function identifyBmc(ip: string, user: string, password: string, ex
   if (!value?.sn) {
     try {
       const ipmi = await viaIpmi(ip, user, password, exec);
-      // Redfish 通了但没报序列号：序列号用 IPMI 的，别的哪边有用哪边。
-      value = value
-        ? { sn: ipmi.sn, vendor: value.vendor || ipmi.vendor, model: value.model || ipmi.model, bmcMac: value.bmcMac || ipmi.bmcMac, hostname: value.hostname, via: "Redfish + IPMI" }
-        : ipmi;
+      value = value ? mergeIdentity(value, ipmi) : ipmi;
     } catch (error) {
       if (!value) throw new Error(redfishError || (error instanceof Error ? error.message : "读取失败"));
     }
