@@ -18,6 +18,7 @@ import Typography from "@mui/material/Typography";
 import { DataGrid, type GridColDef } from "@mui/x-data-grid";
 import { StatusChip } from "@/components/mui/status-chip";
 import { PART_KINDS, PART_SOURCE, PART_STATUS, partStatusTone } from "@/lib/asset-labels";
+import { matchesSearch, pasteAsList, searchTerms } from "@/lib/search";
 import type { CatalogEntry, Datacenter, Part, PartEvent, PartGroup, PartSet, PartStatus, Site } from "@/lib/types";
 import { modelKey, specText } from "@/lib/catalog-schema";
 import { SiteOptions } from "@/components/site-options";
@@ -92,12 +93,12 @@ export function PartsBoard({
   );
 
   const shown = useMemo(() => {
-    const needle = q.trim().toLowerCase();
+    const terms = searchTerms(q);
     return parts.filter((part) => {
       if (status && part.status !== status) return false;
       if (kind && part.kind !== kind) return false;
       if (setKey && setKeyOf(groups, part) !== setKey) return false;
-      return !needle || [part.model, part.vendor, part.sn, part.bin, part.purchaseOrder, part.note, where(part)].join(" ").toLowerCase().includes(needle);
+      return matchesSearch([part.model, part.vendor, part.sn, part.bin, part.purchaseOrder, part.note, where(part)].join(" "), terms);
     });
   }, [parts, q, status, kind, setKey, groups, where]);
   const summary = sets.filter((item) => item.stock || item.groupId);
@@ -257,7 +258,13 @@ export function PartsBoard({
       ) : null}
 
       <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center" }}>
-        <TextField placeholder="搜型号、序列号、库位、单号…" value={q} onChange={(event) => setQ(event.target.value)} sx={{ width: 224 }} />
+        <TextField
+          placeholder="搜型号、序列号、库位、单号…（多个用逗号隔开）"
+          value={q}
+          onChange={(event) => setQ(event.target.value)}
+          slotProps={{ htmlInput: { onPaste: pasteAsList(setQ) } }}
+          sx={{ width: 224 }}
+        />
         <TextField select slotProps={NATIVE} value={status} onChange={(event) => setStatus(event.target.value)}>
           <option value="">全部状态</option>
           {Object.entries(PART_STATUS).map(([value, label]) => (
