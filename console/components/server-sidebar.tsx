@@ -19,7 +19,6 @@ import { NetworkDevice } from "@/components/network-device";
 import { ServerBios } from "@/components/server-bios";
 import { ServerBmc } from "@/components/server-bmc";
 import { ServerBmcLogs } from "@/components/server-bmc-logs";
-import { ServerChanges } from "@/components/server-changes";
 import { ServerFirmware } from "@/components/server-firmware";
 import { ServerInventory } from "@/components/server-inventory";
 import { ServerOptics } from "@/components/server-optics";
@@ -38,7 +37,7 @@ interface Row {
   description: string;
 }
 
-export type Tab = "overview" | "netports" | "monitor" | "bmc" | "bios" | "firmware" | "bmclogs" | "tickets" | "hardware" | "changes" | "ports" | "topology" | "optics" | "history";
+export type Tab = "overview" | "netports" | "monitor" | "bmc" | "bios" | "firmware" | "bmclogs" | "tickets" | "hardware" | "ports" | "topology" | "optics" | "history";
 
 interface TabContext {
   row: Row;
@@ -60,7 +59,6 @@ const TABS: { id: Tab; label: string; where: "server" | "network" | "all"; rende
   { id: "bmclogs", label: "BMC 日志", where: "server", render: ({ row }) => <ServerBmcLogs assetId={row.id} /> },
   { id: "tickets", label: "工单", where: "all", render: ({ row, onChanged }) => <AssetTickets asset={{ id: row.id, tag: row.tag || row.sn, sn: row.sn, model: "" }} onChanged={onChanged} /> },
   { id: "hardware", label: "硬件配置", where: "server", render: ({ row, projectId }) => <ServerInventory projectId={projectId} row={row} /> },
-  { id: "changes", label: "变更记录", where: "all", render: ({ row }) => <ServerChanges row={row} /> },
   { id: "ports", label: "接口", where: "server", render: ({ row }) => <ServerPorts row={row} /> },
   { id: "topology", label: "GPU / 网卡拓扑", where: "server", render: ({ row }) => <ServerTopology row={row} /> },
   { id: "optics", label: "光模块", where: "server", render: ({ row }) => <ServerOptics row={row} /> },

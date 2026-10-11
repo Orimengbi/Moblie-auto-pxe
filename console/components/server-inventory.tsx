@@ -217,7 +217,7 @@ export function ServerInventory({ projectId, row }: { projectId?: string; row: {
       <Stack spacing={0.5}>
         <Typography variant="h3">硬件配置</Typography>
         <Typography variant="caption" color="text.secondary">
-          系统内是 SSH 进系统读的，BMC 是从 Redfish 读的。和上一次采集比出的变化在「变更记录」里。
+          系统内是 SSH 进系统读的，BMC 是从 Redfish 读的。和上一次采集比出的变化在「记录」里（可只看硬件变更）。
         </Typography>
       </Stack>
 
