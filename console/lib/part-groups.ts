@@ -1,6 +1,8 @@
 import { PART_KINDS } from "./asset-labels.ts";
 import { listAssets } from "./assets.ts";
 import { db, transaction, type SqlValue } from "./db.ts";
+import { catalogIndex } from "./catalog.ts";
+import { modelKey, specText } from "./catalog-schema.ts";
 import { assetOwners, leaseAllows, leaseTargets, listParts, partKindOf } from "./parts.ts";
 import { latestInventory } from "./store.ts";
 import { cleanText } from "./validate.ts";
@@ -223,6 +225,7 @@ export function partSetsForAsset(assetId: string): AssetPartSet[] {
   if (!host) return [];
   const parts = listParts();
   const { defs, setOf } = setDefs(listPartGroups(), parts);
+  const catalog = catalogIndex();
   const rows: AssetPartSet[] = [];
   for (const def of defs) {
     const installed = installedOn(def, host);
@@ -239,6 +242,7 @@ export function partSetsForAsset(assetId: string): AssetPartSet[] {
       usable: inStock.length - blocked.length,
       blocked: blocked.length,
       blockedBy: [...new Set(blocked.map((part) => part.lender))],
+      spec: specText(def.models.map((model) => catalog.get(`${def.kind}|${modelKey(model)}`)).find(Boolean)),
     });
   }
   return rows.sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name));

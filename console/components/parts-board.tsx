@@ -18,7 +18,8 @@ import Typography from "@mui/material/Typography";
 import { DataGrid, type GridColDef } from "@mui/x-data-grid";
 import { StatusChip } from "@/components/mui/status-chip";
 import { PART_KINDS, PART_SOURCE, PART_STATUS, partStatusTone } from "@/lib/asset-labels";
-import type { Datacenter, Part, PartEvent, PartGroup, PartSet, PartStatus, Site } from "@/lib/types";
+import type { CatalogEntry, Datacenter, Part, PartEvent, PartGroup, PartSet, PartStatus, Site } from "@/lib/types";
+import { modelKey, specText } from "@/lib/catalog-schema";
 import { SiteOptions } from "@/components/site-options";
 import { formatTime } from "@/lib/time";
 import { api } from "@/lib/client-api";
@@ -52,6 +53,7 @@ export function PartsBoard({
   parts,
   sets,
   groups,
+  catalog,
   admin,
   sites,
   datacenters,
@@ -60,6 +62,7 @@ export function PartsBoard({
   parts: Part[];
   sets: PartSet[];
   groups: PartGroup[];
+  catalog: CatalogEntry[];
   admin: boolean;
   sites: Site[];
   datacenters: Datacenter[];
@@ -75,6 +78,12 @@ export function PartsBoard({
   const [error, setError] = useState("");
   const siteById = useMemo(() => new Map(sites.map((site) => [site.id, site])), [sites]);
   const assetById = useMemo(() => new Map(assets.map((asset) => [asset.id, asset])), [assets]);
+  // 型号字典按「分类|型号大写」查规格，别名也算。
+  const specOf = useMemo(() => {
+    const index = new Map<string, string>();
+    for (const entry of catalog) for (const name of [entry.model, ...entry.aliases]) index.set(`${entry.category}|${modelKey(name)}`, specText(entry));
+    return (kind: string, model: string) => index.get(`${kind}|${modelKey(model)}`) || "";
+  }, [catalog]);
 
   const where = useCallback(
     (part: Part) =>
@@ -113,7 +122,11 @@ export function PartsBoard({
       renderCell: ({ row }) => (
         <Box sx={{ whiteSpace: "normal" }}>
           {row.model}
-          {row.vendor ? <Typography variant="caption" sx={{ display: "block", color: "text.secondary" }}>{row.vendor}</Typography> : null}
+          {row.vendor || specOf(row.kind, row.model) ? (
+            <Typography variant="caption" sx={{ display: "block", color: "text.secondary" }}>
+              {[row.vendor, specOf(row.kind, row.model)].filter(Boolean).join(" · ")}
+            </Typography>
+          ) : null}
         </Box>
       ),
     },
@@ -225,6 +238,11 @@ export function PartsBoard({
                 <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>
                   {item.name}
                 </Typography>
+                {item.models.map((model) => specOf(item.kind, model)).find(Boolean) ? (
+                  <Typography variant="caption" sx={{ display: "block", color: "text.secondary" }}>
+                    {item.models.map((model) => specOf(item.kind, model)).find(Boolean)}
+                  </Typography>
+                ) : null}
                 <Typography component="span" sx={{ fontSize: 18, fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
                   {item.stock}
                 </Typography>
@@ -295,13 +313,13 @@ export function PartsBoard({
 
       <GroupSection groups={groups} sets={sets} admin={admin} onChanged={() => router.refresh()} />
 
-      <ReceiveDialog open={receiving} sites={sites} datacenters={datacenters} onClose={() => setReceiving(false)} onDone={() => router.refresh()} />
+      <ReceiveDialog open={receiving} catalog={catalog} sites={sites} datacenters={datacenters} onClose={() => setReceiving(false)} onDone={() => router.refresh()} />
       <PartDialog part={detail} sites={sites} datacenters={datacenters} onClose={() => setDetail(null)} onChanged={() => router.refresh()} />
     </Stack>
   );
 }
 
-function ReceiveDialog({ open, sites, datacenters, onClose, onDone }: { open: boolean; sites: Site[]; datacenters: Datacenter[]; onClose: () => void; onDone: () => void }) {
+function ReceiveDialog({ open, catalog, sites, datacenters, onClose, onDone }: { open: boolean; catalog: CatalogEntry[]; sites: Site[]; datacenters: Datacenter[]; onClose: () => void; onDone: () => void }) {
   const blank = { kind: "gpu", model: "", vendor: "", siteId: "", bin: "", supplier: "", purchaseOrder: "", warrantyEnd: "", source: "purchase", lender: "", leaseFor: "", leaseEnd: "", note: "", sns: "", quantity: "1" };
   const [form, setForm] = useState(blank);
   const [error, setError] = useState("");
@@ -344,7 +362,24 @@ function ReceiveDialog({ open, sites, datacenters, onClose, onDone }: { open: bo
                 </TextField>
               </Grid>
               <Grid size={{ xs: 12, sm: 4 }}>
-                <TextField label="型号" {...field("model")} required placeholder="例如 NVIDIA B300" fullWidth />
+                <TextField
+                  label="型号"
+                  {...field("model")}
+                  required
+                  placeholder="例如 NVIDIA B300"
+                  fullWidth
+                  slotProps={{ htmlInput: { list: "receive-models" } }}
+                  helperText={specOfForm(catalog, form.kind, form.model) || "可以从型号字典里选"}
+                />
+                <datalist id="receive-models">
+                  {catalog
+                    .filter((entry) => entry.category === form.kind)
+                    .map((entry) => (
+                      <option key={entry.id} value={entry.model}>
+                        {[entry.vendor, specText(entry)].filter(Boolean).join(" · ")}
+                      </option>
+                    ))}
+                </datalist>
               </Grid>
               <Grid size={{ xs: 12, sm: 4 }}>
                 <TextField label="厂商" {...field("vendor")} fullWidth />
@@ -765,4 +800,12 @@ function GroupDialog({ group, onClose, onSaved }: { group: PartGroup | "new" | n
       </Box>
     </Dialog>
   );
+}
+
+/** 入库时填的型号在字典里的规格。 */
+function specOfForm(catalog: CatalogEntry[], kind: string, model: string): string {
+  const key = modelKey(model);
+  if (!key) return "";
+  const entry = catalog.find((item) => item.category === kind && [item.model, ...item.aliases].some((name) => modelKey(name) === key));
+  return entry ? [entry.vendor, specText(entry)].filter(Boolean).join(" · ") : "";
 }
