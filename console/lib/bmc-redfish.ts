@@ -4,7 +4,7 @@ import { assetBmcAccounts, getAsset } from "./assets.ts";
 import { dataDir } from "./paths.ts";
 import { link, members, RedfishAuthError, redfishError, redfishRequester, type RedfishDoc, type RedfishRequest, type RedfishResponse } from "./redfish.ts";
 import { BMC_SETTING_LABEL, isHgxFirmware } from "./asset-labels.ts";
-import type { Asset, BmcSettingKind } from "./types.ts";
+import type { Asset, BmcSettingKind, HealthProblem } from "./types.ts";
 
 /**
  * 经 BMC 的 Redfish 管这台机器：引导、资产编号、定位灯、虚拟介质、BIOS 设置、BMC 日志、功耗、固件升级。
@@ -1011,4 +1011,54 @@ export async function readTask(session: BmcSession, taskPath: string): Promise<{
     percent: num(doc.PercentComplete),
     messages: ((doc.Messages as { Message?: string }[] | undefined) || []).map((item) => str(item.Message)).filter(Boolean),
   };
+}
+
+// ---------- 健康状态 ----------
+
+const HEALTH_SEVERITY: Record<string, HealthProblem["severity"]> = { Warning: "warning", Critical: "critical" };
+
+/** 在位但没在工作的电源：AMI 拔了电源线时 Health 还是 OK，只有 State 变成 Disabled。 */
+const IDLE_STATES = new Set(["Disabled", "UnavailableOffline", "StandbyOffline", "Deferring"]);
+
+function statusOf(doc: RedfishDoc | null): { health: string; rollup: string; state: string } {
+  const status = (doc?.Status || {}) as { Health?: unknown; HealthRollup?: unknown; State?: unknown };
+  return { health: str(status.Health), rollup: str(status.HealthRollup), state: str(status.State) };
+}
+
+/**
+ * 和 BMC 网页一样按 Redfish 的 Status 看健康：整机、机箱（含汇总）、HGX 底板和 HGX 机箱的汇总，
+ * 电源和风扇逐个看。只列不健康的；HGX 底板的汇总里有出厂遗留的旧告警时也会算进来，以 BMC 自己给的为准。
+ */
+export async function readHealth(session: BmcSession): Promise<HealthProblem[]> {
+  const problems: HealthProblem[] = [];
+  const add = (name: string, doc: RedfishDoc | null) => {
+    const { health, rollup, state } = statusOf(doc);
+    const worst = health === "Critical" || rollup === "Critical" ? "Critical" : health === "Warning" || rollup === "Warning" ? "Warning" : "";
+    if (worst) problems.push({ name, severity: HEALTH_SEVERITY[worst], detail: [health && `Health ${health}`, rollup && rollup !== health ? `汇总 ${rollup}` : "", state && `State ${state}`].filter(Boolean).join("，"), source: "redfish" });
+  };
+  const system = session.paths.system ? await rfFind(session, session.paths.system) : null;
+  add("整机", system);
+  const chassis = session.paths.chassis ? await rfFind(session, session.paths.chassis) : null;
+  add("机箱", chassis);
+  for (const [collection, pattern, label] of [
+    ["/redfish/v1/Systems", /\/HGX_Baseboard_\d+$/, "HGX 底板"],
+    ["/redfish/v1/Chassis", /\/HGX_Chassis_\d+$/, "HGX 机箱"],
+  ] as const) {
+    for (const member of members(await rfFind(session, collection)).filter((item) => pattern.test(item))) add(label, await rfFind(session, member));
+  }
+  const power = chassis ? await rfFind(session, link(chassis, "Power")) : null;
+  for (const item of (power?.PowerSupplies as RedfishDoc[] | undefined) || []) {
+    const name = str(item.Name || item.MemberId).replace(/_Status$/, "");
+    const { health, state } = statusOf(item);
+    if (HEALTH_SEVERITY[health]) add(`电源 ${name}`, item);
+    else if (IDLE_STATES.has(state)) problems.push({ name: `电源 ${name}`, severity: "warning", detail: `在位但没在工作（State ${state}），多半是没接电`, source: "redfish" });
+  }
+  const thermal = chassis ? await rfFind(session, link(chassis, "Thermal")) : null;
+  for (const item of (thermal?.Fans as RedfishDoc[] | undefined) || []) add(`风扇 ${str(item.Name || item.MemberId)}`, item);
+  return problems;
+}
+
+/** 监控用：开一个会话读健康状态。 */
+export async function assetHealthProblems(asset: Asset): Promise<HealthProblem[]> {
+  return readHealth(await openSession(asset));
 }

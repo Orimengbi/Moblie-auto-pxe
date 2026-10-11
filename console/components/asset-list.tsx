@@ -9,6 +9,7 @@ import Checkbox from "@mui/material/Checkbox";
 import FormControlLabel from "@mui/material/FormControlLabel";
 import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
+import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import { DataGrid, type GridColDef, type GridRowProps, type GridRowSelectionModel } from "@mui/x-data-grid";
 import { AssetEditDialog } from "@/components/asset-edit-dialog";
@@ -21,8 +22,8 @@ import { RemoteConsole } from "@/components/remote-console";
 import { ServerPowerDialog } from "@/components/server-power-dialog";
 import { ServerSidebar, type Tab as SidebarTab } from "@/components/server-sidebar";
 import type { AssetRow } from "@/lib/asset-view";
-import { ASSET_STATUS, ASSET_STATUS_TONE, ASSET_TYPES, WARRANTY_LABEL } from "@/lib/asset-labels";
-import type { AssetStatus, Customer, Datacenter, RemoteFile, Site } from "@/lib/types";
+import { ASSET_STATUS, ASSET_STATUS_TONE, ASSET_TYPES, HEALTH_LABEL, HEALTH_TONE, WARRANTY_LABEL } from "@/lib/asset-labels";
+import type { AssetHealth, AssetStatus, Customer, Datacenter, RemoteFile, Site } from "@/lib/types";
 import { SiteOptions } from "@/components/site-options";
 import { matchesSearch, pasteAsList, searchTerms } from "@/lib/search";
 import { formatTime } from "@/lib/time";
@@ -38,9 +39,10 @@ interface Filters {
   customer: string;
   type: string;
   warranty: string;
+  health: string;
 }
 
-const EMPTY: Filters = { q: "", site: "", status: "", customer: "", type: "", warranty: "" };
+const EMPTY: Filters = { q: "", site: "", status: "", customer: "", type: "", warranty: "", health: "" };
 
 function hardwareText(row: AssetRow): string {
   const latest = [row.inventory.os?.at, row.inventory.bmc?.at].filter(Boolean).sort().pop();
@@ -58,7 +60,28 @@ function matches(row: AssetRow, filters: Filters): boolean {
   if (filters.site === "none" ? row.rackId : filters.site.startsWith("dc:") ? row.datacenterId !== filters.site.slice(3) : filters.site && row.siteId !== filters.site) return false;
   if (filters.customer === "none" ? row.customerId : filters.customer && row.customerId !== filters.customer) return false;
   if (filters.warranty && !(row.warranty === "expired" || row.warranty === "expiring")) return false;
+  if (filters.health) {
+    const level = row.health?.overall || "none";
+    if (filters.health === "bad" ? level === "ok" || level === "none" : level !== filters.health) return false;
+  }
   return matchesSearch(searchText(row), searchTerms(filters.q));
+}
+
+/** 「健康」一格：颜色同 BMC 网页，鼠标停上去列出哪几项不正常、什么时候查的。 */
+function HealthCell({ health }: { health: AssetHealth | null }) {
+  if (!health) return <Dash />;
+  const lines = [
+    ...health.problems.map((item) => `${item.name}：${item.detail}`),
+    ...(health.redfishError ? [`Redfish 没读到：${health.redfishError}`] : []),
+    `检查于 ${formatTime(health.at)}`,
+  ];
+  return (
+    <Tooltip title={<Box sx={{ whiteSpace: "pre-line" }}>{lines.join("\n")}</Box>}>
+      <span>
+        <StatusChip tone={HEALTH_TONE[health.overall]} label={health.problems.length && health.overall !== "unreachable" ? `${HEALTH_LABEL[health.overall]} ${health.problems.length}` : HEALTH_LABEL[health.overall]} />
+      </span>
+    </Tooltip>
+  );
 }
 
 /** 单元格里的第二行小字。 */
@@ -262,6 +285,15 @@ export function AssetList({
         renderCell: ({ row }) => <StatusChip tone={ASSET_STATUS_TONE[row.status]} label={ASSET_STATUS[row.status]} />,
       },
       {
+        field: "health",
+        headerName: "健康",
+        width: 96,
+        type: "singleSelect",
+        valueGetter: (_value, row) => row.health?.overall || "",
+        valueOptions: Object.entries(HEALTH_LABEL).map(([value, label]) => ({ value, label })),
+        renderCell: ({ row }) => <HealthCell health={row.health} />,
+      },
+      {
         field: "place",
         headerName: "位置",
         width: 140,
@@ -375,6 +407,16 @@ export function AssetList({
           <option value="">全部位置</option>
           <option value="none">没放进机柜的</option>
           <SiteOptions sites={sites} datacenters={datacenters} wholeDatacenter="整个数据中心" />
+        </TextField>
+        <TextField select slotProps={NATIVE} value={filters.health} onChange={(event) => setFilter("health", event.target.value)}>
+          <option value="">全部健康状态</option>
+          <option value="bad">有问题的（{rows.filter((row) => row.health && row.health.overall !== "ok").length}）</option>
+          {(["critical", "warning", "unreachable", "ok"] as const).map((value) => (
+            <option key={value} value={value}>
+              {HEALTH_LABEL[value]}（{rows.filter((row) => row.health?.overall === value).length}）
+            </option>
+          ))}
+          <option value="none">还没检查过（{rows.filter((row) => !row.health).length}）</option>
         </TextField>
         <TextField select slotProps={NATIVE} value={filters.type} onChange={(event) => setFilter("type", event.target.value)}>
           <option value="">全部类型</option>

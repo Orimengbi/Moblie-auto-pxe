@@ -1,8 +1,9 @@
 import { getCustomer, listAssets, listCustomers, publicAsset, warrantyState } from "./assets.ts";
 import { listRacks, listSites, placeLabel } from "./racks.ts";
 import { hostContext, resolveAssetHost, type HostContext } from "./remote.ts";
+import { healthByAsset } from "./monitor.ts";
 import { getBaseline, inventoryStatus, listProjects, listServers } from "./store.ts";
-import type { Asset, Baseline, InventoryStatus, PublicAsset, TaskHostSource } from "./types.ts";
+import type { Asset, AssetHealth, Baseline, InventoryStatus, PublicAsset, TaskHostSource } from "./types.ts";
 
 /** 资产列表和详情页用的一行：资产本身加上归属客户、保修状态、系统地址、硬件采集情况、最近一次装机。 */
 export type AssetRow = PublicAsset & {
@@ -16,6 +17,8 @@ export type AssetRow = PublicAsset & {
   hostSource: TaskHostSource;
   inventory: InventoryStatus;
   batch: { projectId: string; name: string; rowId: string; osName: string; installed: string } | null;
+  /** 监控最近一次读 BMC 得到的健康状态，没监控过是 null。 */
+  health: AssetHealth | null;
 };
 
 /**
@@ -34,6 +37,7 @@ export function assetRows(assets: Asset[] = listAssets(), context?: HostContext,
   const baselines = new Map<string, Baseline | null>();
   const racks = new Map(listRacks().map((item) => [item.id, item]));
   const sites = new Map(listSites().map((item) => [item.id, item]));
+  const health = light ? new Map<string, AssetHealth>() : healthByAsset();
   return assets.map((asset) => {
     const row = latest.get(asset.id);
     const found = hosts ? resolveAssetHost(asset, hosts) : { host: "", source: "" as const };
@@ -49,6 +53,7 @@ export function assetRows(assets: Asset[] = listAssets(), context?: HostContext,
       host: found.host,
       hostSource: found.source,
       inventory: light ? { issues: null } : inventoryStatus(asset.id, row ? baselines.get(row.projectId) || null : null),
+      health: health.get(asset.id) || null,
       batch: row ? { projectId: row.projectId, name: projects.get(row.projectId) || "", rowId: row.id, osName: row.osName, installed: row.installed } : null,
     };
   });
