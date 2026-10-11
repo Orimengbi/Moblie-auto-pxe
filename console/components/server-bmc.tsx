@@ -8,6 +8,7 @@ import Dialog from "@mui/material/Dialog";
 import DialogActions from "@mui/material/DialogActions";
 import DialogContent from "@mui/material/DialogContent";
 import DialogTitle from "@mui/material/DialogTitle";
+import FormControlLabel from "@mui/material/FormControlLabel";
 import IconButton from "@mui/material/IconButton";
 import List from "@mui/material/List";
 import ListItem from "@mui/material/ListItem";
@@ -16,6 +17,7 @@ import Menu from "@mui/material/Menu";
 import MenuItem from "@mui/material/MenuItem";
 import Paper from "@mui/material/Paper";
 import Stack from "@mui/material/Stack";
+import Switch from "@mui/material/Switch";
 import TextField from "@mui/material/TextField";
 import ToggleButton from "@mui/material/ToggleButton";
 import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
@@ -27,7 +29,7 @@ import type { Tone } from "@/lib/asset-labels";
 import type { BmcOverview } from "@/lib/bmc-redfish";
 import { api } from "@/lib/client-api";
 import type { StreamStatus } from "@/lib/redfish-events";
-import { formatTime } from "@/lib/time";
+import { formatTime, UTC_OFFSETS } from "@/lib/time";
 
 const MONO = "var(--font-geist-mono), monospace";
 
@@ -195,7 +197,8 @@ export function ServerBmc({ assetId }: { assetId: string }) {
         <EventStreamLine status={data.events} />
       </Stack>
     );
-  const view: View = { ...data.overview, isos: data.isos, events: data.events };
+  // 2026-10-11 以前存的快照没有 clock。
+  const view: View = { ...data.overview, clock: data.overview.clock || { offset: "", ntp: null }, isos: data.isos, events: data.events };
 
   return (
     <Stack spacing={2}>
@@ -218,7 +221,6 @@ export function ServerBmc({ assetId }: { assetId: string }) {
           <Fact label="序列号" value={view.serial} />
           <Fact label="BIOS" value={view.biosVersion} />
           <Fact label="BMC 固件" value={view.bmcVersion} />
-          <Fact label="BMC 时间" value={view.bmcTime ? formatTime(view.bmcTime) : ""} />
           <Fact label="Redfish 账号" value={`${view.user}@${view.host}`} />
         </Stack>
         {view.power ? (
@@ -238,6 +240,8 @@ export function ServerBmc({ assetId }: { assetId: string }) {
       </Section>
 
       <BootSection view={view} busy={busy} onSave={(body) => send(`/api/assets/${assetId}/redfish`, "PATCH", body)} />
+
+      <ClockSection key={data.readAt} view={view} busy={busy} onSave={(clock) => send(`/api/assets/${assetId}/redfish`, "PATCH", { clock })} />
 
       <Section title="定位灯和资产编号">
         <Stack direction="row" useFlexGap spacing={3} sx={{ flexWrap: "wrap", alignItems: "center" }}>
@@ -325,6 +329,57 @@ export function EventStreamLine({ status }: { status: StreamStatus }) {
         {text}
       </Box>
     </Typography>
+  );
+}
+
+/** BMC 自己的时区和 NTP。BMC 日志、SEL 的时间按它记；控制台页面上的时间换算成「设置」里的显示时区。 */
+function ClockSection({ view, busy, onSave }: { view: View; busy: boolean; onSave: (clock: { offset?: string; ntpEnabled?: boolean; ntpServers?: string[] }) => Promise<boolean> }) {
+  const [offset, setOffset] = useState(view.clock.offset.replace(/^-00:00$/, "+00:00"));
+  const [ntpEnabled, setNtpEnabled] = useState(view.clock.ntp?.enabled ?? false);
+  const [servers, setServers] = useState(view.clock.ntp?.servers.join(", ") || "");
+  const list = servers.split(/[,，\s]+/).filter(Boolean);
+  const current = view.clock.offset.replace(/^-00:00$/, "+00:00");
+  const changed =
+    offset !== current || (view.clock.ntp !== null && (ntpEnabled !== view.clock.ntp.enabled || list.join(",") !== view.clock.ntp.servers.join(",")));
+
+  function save() {
+    void onSave({
+      ...(offset !== current ? { offset } : {}),
+      ...(view.clock.ntp !== null && (ntpEnabled !== view.clock.ntp.enabled || list.join(",") !== view.clock.ntp.servers.join(",")) ? { ntpEnabled, ntpServers: list } : {}),
+    });
+  }
+
+  return (
+    <Section title="时间和时区">
+      <Stack direction="row" useFlexGap spacing={2.5} sx={{ flexWrap: "wrap", mb: 2 }}>
+        <Fact label="BMC 时间（按显示时区）" value={view.bmcTime ? formatTime(view.bmcTime) : ""} />
+        <Fact label="BMC 原样" value={view.bmcTime} />
+        <Fact label="BMC 时区" value={current ? `UTC${current}` : ""} />
+        <Fact label="NTP" value={view.clock.ntp ? (view.clock.ntp.enabled ? `开 · ${view.clock.ntp.servers.join(", ")}` : "关") : "读不到"} />
+      </Stack>
+      <Stack direction="row" useFlexGap spacing={1.5} sx={{ flexWrap: "wrap", alignItems: "center" }}>
+        <TextField select label="时区" value={offset} onChange={(event) => setOffset(event.target.value)} sx={{ width: 140 }} slotProps={{ select: { native: true } }}>
+          {!UTC_OFFSETS.includes(offset) ? <option value={offset}>UTC{offset || "?"}</option> : null}
+          {UTC_OFFSETS.map((value) => (
+            <option key={value} value={value}>
+              UTC{value}
+            </option>
+          ))}
+        </TextField>
+        {view.clock.ntp ? (
+          <>
+            <FormControlLabel control={<Switch checked={ntpEnabled} onChange={(event) => setNtpEnabled(event.target.checked)} />} label={<Typography variant="body2">NTP 自动对时</Typography>} />
+            <TextField label="NTP 服务器" value={servers} onChange={(event) => setServers(event.target.value)} placeholder="ntp.aliyun.com, 192.168.68.1" sx={{ minWidth: 260, flex: 1 }} />
+          </>
+        ) : null}
+        <Button variant="contained" disabled={busy || !changed} onClick={save}>
+          保存
+        </Button>
+      </Stack>
+      <Typography variant="caption" sx={{ display: "block", mt: 1, color: "text.secondary" }}>
+        BMC 的日志、SEL 按 BMC 自己的时间记。NTP 服务器要 BMC 网络能访问到。多台一起改：资产列表多选后在「电源、引导和 BMC」里设。
+      </Typography>
+    </Section>
   );
 }
 

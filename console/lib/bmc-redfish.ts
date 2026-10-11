@@ -181,6 +181,8 @@ export interface BmcOverview {
   biosVersion: string;
   bmcVersion: string;
   bmcTime: string;
+  /** BMC 的时区（DateTimeLocalOffset，如 +08:00）和 NTP。读不到 NetworkProtocol 时 ntp 为 null。 */
+  clock: { offset: string; ntp: { enabled: boolean; servers: string[] } | null };
   assetTag: string;
   /** IndicatorLED 的值（Off / Lit / Blinking），BMC 不支持时为空。 */
   led: string;
@@ -271,6 +273,8 @@ export async function bmcOverview(session: BmcSession): Promise<BmcOverview> {
   const system = await rfGet(session, session.paths.system);
   const manager = session.paths.manager ? await soft("BMC", () => rfGet(session, session.paths.manager), null) : null;
   const boot = (system.Boot || {}) as Record<string, unknown>;
+  const protocol = manager ? await soft("NTP", () => rfFind(session, link(manager, "NetworkProtocol")), null) : null;
+  const ntp = (protocol?.NTP || null) as { ProtocolEnabled?: unknown; NTPServers?: unknown } | null;
 
   const options = await soft("启动项", () => expandMembers(session, link(boot, "BootOptions")), []);
   const names = new Map(options.map((option) => [str(option.BootOptionReference || option.Id), { name: str(option.DisplayName || option.Name), enabled: option.BootOptionEnabled !== false }]));
@@ -310,6 +314,7 @@ export async function bmcOverview(session: BmcSession): Promise<BmcOverview> {
     biosVersion: str(system.BiosVersion),
     bmcVersion: str(manager?.FirmwareVersion),
     bmcTime: str(manager?.DateTime),
+    clock: { offset: str(manager?.DateTimeLocalOffset), ntp: ntp ? { enabled: ntp.ProtocolEnabled === true, servers: strings(ntp.NTPServers).filter(Boolean) } : null },
     assetTag: str(system.AssetTag),
     led: str(system.IndicatorLED),
     ledValues: strings(system["IndicatorLED@Redfish.AllowableValues"]).length ? strings(system["IndicatorLED@Redfish.AllowableValues"]) : system.IndicatorLED !== undefined ? ["Off", "Lit", "Blinking"] : [],
@@ -370,6 +375,47 @@ export interface SystemChange {
   bootOrder?: string[];
   assetTag?: string;
   led?: string;
+  clock?: ClockChange;
+}
+
+/** BMC 的时区和 NTP。给了哪项改哪项。 */
+export interface ClockChange {
+  /** 和 UTC 的差，如 +08:00、-05:00。 */
+  offset?: string;
+  ntpEnabled?: boolean;
+  ntpServers?: string[];
+}
+
+export function validOffset(value: string): boolean {
+  const match = value.match(/^([+-])(\d{2}):(\d{2})$/);
+  if (!match) return false;
+  const minutes = Number(match[2]) * 60 + Number(match[3]);
+  return Number(match[3]) < 60 && (match[1] === "+" ? minutes <= 14 * 60 : minutes <= 12 * 60);
+}
+
+/** 改 BMC 的时区（Manager.DateTimeLocalOffset）和 NTP（NetworkProtocol.NTP）。返回做了什么。 */
+export async function changeClock(session: BmcSession, change: ClockChange): Promise<string[]> {
+  const done: string[] = [];
+  if (!session.paths.manager) throw new RedfishFailure("找不到 BMC 的 Manager");
+  if (change.offset !== undefined) {
+    if (!validOffset(change.offset)) throw new RedfishFailure(`时区要写成 +08:00 这样，「${change.offset}」不对`);
+    await patch(session, session.paths.manager, { DateTimeLocalOffset: change.offset }, "改时区失败");
+    done.push(`BMC 时区改成 UTC${change.offset}`);
+  }
+  if (change.ntpEnabled !== undefined || change.ntpServers !== undefined) {
+    const servers = (change.ntpServers || []).map((item) => item.trim()).filter(Boolean);
+    if (servers.some((item) => !/^[A-Za-z0-9.:_-]{1,253}$/.test(item))) throw new RedfishFailure("NTP 服务器只能填域名或 IP");
+    if (change.ntpEnabled && change.ntpServers !== undefined && !servers.length) throw new RedfishFailure("打开 NTP 要填至少一个服务器");
+    const manager = await rfGet(session, session.paths.manager);
+    const protocol = link(manager, "NetworkProtocol");
+    if (!protocol) throw new RedfishFailure("这台 BMC 没有 NetworkProtocol，改不了 NTP");
+    const ntp: Record<string, unknown> = {};
+    if (change.ntpEnabled !== undefined) ntp.ProtocolEnabled = change.ntpEnabled;
+    if (change.ntpServers !== undefined) ntp.NTPServers = servers;
+    await patch(session, protocol, { NTP: ntp }, "改 NTP 失败");
+    done.push([change.ntpEnabled === undefined ? "" : change.ntpEnabled ? "打开 NTP" : "关闭 NTP", change.ntpServers !== undefined ? `NTP 服务器 ${servers.join(", ") || "（空）"}` : ""].filter(Boolean).join("，"));
+  }
+  return done;
 }
 
 /** 返回做了什么，给审计和提示用。 */
@@ -402,6 +448,7 @@ export async function changeSystem(session: BmcSession, change: SystemChange): P
     done.push(change.led === "Off" ? "关定位灯" : change.led === "Blinking" ? "定位灯闪烁" : "开定位灯");
   }
   if (Object.keys(body).length) await patch(session, session.paths.system, body, "修改失败");
+  if (change.clock) done.push(...(await changeClock(session, change.clock)));
 
   if (change.bootOrder) {
     const current = strings(boot.BootOrder);

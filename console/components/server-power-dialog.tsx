@@ -12,10 +12,12 @@ import DialogContentText from "@mui/material/DialogContentText";
 import DialogTitle from "@mui/material/DialogTitle";
 import FormControlLabel from "@mui/material/FormControlLabel";
 import Stack from "@mui/material/Stack";
+import TextField from "@mui/material/TextField";
 import ToggleButton from "@mui/material/ToggleButton";
 import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
 import Typography from "@mui/material/Typography";
 import { api } from "@/lib/client-api";
+import { UTC_OFFSETS } from "@/lib/time";
 
 type PowerAction = "on" | "soft" | "off" | "reset" | "cycle";
 type BootDevice = "pxe" | "usb" | "cdrom" | "disk" | "bios";
@@ -53,6 +55,9 @@ export function ServerPowerDialog({ targets, onClose }: { targets: Target[]; onC
   const [legacy, setLegacy] = useState(false);
   const [restart, setRestart] = useState(true);
   const [pending, setPending] = useState(false);
+  const [clockOffset, setClockOffset] = useState("+08:00");
+  const [ntpMode, setNtpMode] = useState<"keep" | "on" | "off">("keep");
+  const [ntpServers, setNtpServers] = useState("");
   const [results, setResults] = useState<{ sn: string; ok: boolean; text: string }[]>([]);
   const names = targets.length === 1 ? targets[0].sn : `${targets.length} 台机器`;
 
@@ -96,6 +101,20 @@ export function ServerPowerDialog({ targets, onClose }: { targets: Target[]; onC
       concurrency: 10,
       timeoutSec: 120,
     });
+    setPending(false);
+    setResults([result.ok ? { sn: "", ok: true, text: `已建任务「${result.data.name}」，在右上角「任务」里看每台的结果` } : { sn: "", ok: false, text: result.error }]);
+  }
+
+  /** 设 BMC 时区和 NTP 也建成一个任务。时区选「不改」、NTP 选「不改」的项不动。 */
+  async function applyClock() {
+    const clock = {
+      ...(clockOffset ? { offset: clockOffset } : {}),
+      ...(ntpMode === "on" ? { ntpEnabled: true, ntpServers: ntpServers.split(/[,，\s]+/).filter(Boolean) } : ntpMode === "off" ? { ntpEnabled: false } : {}),
+    };
+    if (!Object.keys(clock).length) return;
+    setPending(true);
+    setResults([]);
+    const result = await api<{ name: string }>("/api/tasks", "POST", { kind: "bmc-clock", bmcClock: clock, assetIds: targets.map((target) => target.id), concurrency: 10, timeoutSec: 120 });
     setPending(false);
     setResults([result.ok ? { sn: "", ok: true, text: `已建任务「${result.data.name}」，在右上角「任务」里看每台的结果` } : { sn: "", ok: false, text: result.error }]);
   }
@@ -151,8 +170,27 @@ export function ServerPowerDialog({ targets, onClose }: { targets: Target[]; onC
               重启 BMC（带内）
             </Button>
           </Stack>
+          <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center", pt: 1 }}>
+            <TextField select size="small" label="BMC 时区" value={clockOffset} onChange={(event) => setClockOffset(event.target.value)} slotProps={{ select: { native: true } }} sx={{ width: 130 }}>
+              <option value="">不改</option>
+              {UTC_OFFSETS.map((value) => (
+                <option key={value} value={value}>
+                  UTC{value}
+                </option>
+              ))}
+            </TextField>
+            <TextField select size="small" label="NTP" value={ntpMode} onChange={(event) => setNtpMode(event.target.value as "keep" | "on" | "off")} slotProps={{ select: { native: true } }} sx={{ width: 100 }}>
+              <option value="keep">不改</option>
+              <option value="on">打开</option>
+              <option value="off">关闭</option>
+            </TextField>
+            {ntpMode === "on" ? <TextField size="small" label="NTP 服务器" placeholder="ntp.aliyun.com, 192.168.68.1" value={ntpServers} onChange={(event) => setNtpServers(event.target.value)} sx={{ minWidth: 220 }} /> : null}
+            <Button variant="outlined" disabled={pending || (!clockOffset && ntpMode === "keep") || (ntpMode === "on" && !ntpServers.trim())} onClick={() => void applyClock()}>
+              设置时区
+            </Button>
+          </Stack>
           <Typography variant="caption" color="text.secondary">
-            冷重启 BMC，服务器系统照常运行。带外经 BMC 网口发 IPMI；带内 SSH 进系统用系统里的 ipmitool 发，BMC 网络不通或账号不对时用。重启后 1~3 分钟连不上 BMC。
+            重启 BMC 是冷重启，服务器系统照常运行：带外经 BMC 网口发 IPMI；带内 SSH 进系统用系统里的 ipmitool 发，BMC 网络不通或账号不对时用，重启后 1~3 分钟连不上 BMC。时区和 NTP 经 Redfish 改。都建成任务，在右上角「任务」里看结果。
           </Typography>
         </Stack>
 

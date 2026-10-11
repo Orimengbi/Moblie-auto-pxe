@@ -4,11 +4,13 @@ import CardContent from "@mui/material/CardContent";
 import CardHeader from "@mui/material/CardHeader";
 import Stack from "@mui/material/Stack";
 import { PageHeader } from "@/components/page-header";
+import { DisplaySettingsForm } from "@/components/display-settings-form";
 import { MonitorSettingsForm } from "@/components/monitor-settings-form";
 import { SnmpProfileManager } from "@/components/snmp-profile-manager";
 import { TagSettingsForm } from "@/components/tag-settings-form";
 import { getTagSettings, listAssets, listCustomers } from "@/lib/assets";
 import { authenticate } from "@/lib/auth";
+import { getDisplaySettings } from "@/lib/display-settings";
 import { getMonitorSettings } from "@/lib/monitor";
 import { listSnmpProfiles, publicSnmpProfile } from "@/lib/snmp";
 
@@ -25,6 +27,12 @@ export default async function SettingsPage() {
   return (
     <Stack spacing={2}>
       <PageHeader title="设置" description="全局设置，改了马上生效。" />
+      <Card>
+        <CardHeader title="显示时区" />
+        <CardContent>
+          <DisplaySettingsForm timeZone={getDisplaySettings().timeZone} />
+        </CardContent>
+      </Card>
       <Card>
         <CardHeader title="资产编号" />
         <CardContent>
