@@ -54,7 +54,7 @@ export async function PATCH(request: Request, context: Context) {
     const body = await readJson<SystemChange>(request);
     const { asset, session } = await assetSession(id);
     const done = await audited(request, (result: string[] | null) => ({ action: "BMC 设置", targetType: "asset", targetId: id, targetLabel: `${asset.tag} ${asset.sn}`, detail: result ? result.join("，") : JSON.stringify(body).slice(0, 300) }), () => changeSystem(session, body));
-    if (body.bootOrder || body.assetTag !== undefined) addEvent(id, "bmc", done.join("，"), identity.user.username);
+    if (body.bootOrder || body.assetTag !== undefined || body.clock) addEvent(id, "bmc", done.join("，"), identity.user.username);
     return Response.json({ message: done.join("，") });
   } catch (error) {
     return jsonError(error);

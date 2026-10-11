@@ -7,6 +7,7 @@ import { Providers } from "@/components/mui/providers";
 import { UploadProvider } from "@/components/upload-provider";
 import { alertCounts } from "@/lib/alerts";
 import { authenticate } from "@/lib/auth";
+import { applyDisplaySettings } from "@/lib/display-settings";
 import { openTicketCount } from "@/lib/tickets";
 
 const geistSans = Geist({
@@ -29,10 +30,13 @@ export const dynamic = "force-dynamic";
 export default async function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   // 没登录时 middleware 只放行登录页，这时不显示侧栏。
   const identity = authenticate(await headers());
+  // 服务端按设置里的时区渲染；浏览器在页面脚本之前由下面的内联脚本设成同一个，两边时间一致。
+  const { timeZone } = applyDisplaySettings();
   return (
     <html lang="zh-CN" className={`${geistSans.variable} ${geistMono.variable}`} suppressHydrationWarning>
       <body>
         <InitColorSchemeScript attribute="class" defaultMode="light" />
+        <script dangerouslySetInnerHTML={{ __html: `globalThis.pxeTimeZone=${JSON.stringify(timeZone).replace(/</g, "\\u003c")};` }} />
         <Providers>
           {identity ? (
             <UploadProvider>

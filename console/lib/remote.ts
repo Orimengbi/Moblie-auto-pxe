@@ -13,7 +13,7 @@ import { crawlRedfish, RedfishAuthError, redfishGetter, type RedfishGet } from "
 import { renderRevokeScript } from "./render.ts";
 import { addEvent, assetBmcAccounts, getAsset } from "./assets.ts";
 import { BMC_SETTING_LABEL } from "./asset-labels.ts";
-import { collectSettings } from "./bmc-redfish.ts";
+import { changeClock, collectSettings, openSession, validOffset, type ClockChange } from "./bmc-redfish.ts";
 import { filePayloadPath, getFile, getProject, getTask, listMachines, listNicPlans, readLeasesText, saveInventory, saveOptics, writeTask } from "./store.ts";
 import type { Asset, BmcResetVia, BmcSettingKind, HwChange, HwPort, InventorySource, OpticsReading, Machine, NicPlan, RemoteTask, ServerRow, TaskHostSource, TaskKind, TaskTarget, TaskTargetStatus } from "./types.ts";
 
@@ -88,6 +88,8 @@ export interface TaskInput {
   settings?: BmcSettingKind[];
   /** 重启 BMC 任务走带外还是带内，默认带外。 */
   bmcReset?: BmcResetVia;
+  /** 设 BMC 时区和 NTP 任务要改成什么。 */
+  bmcClock?: ClockChange;
   name?: string;
   script?: string;
   /** 资产 id。 */
@@ -109,7 +111,8 @@ function boundedInt(value: unknown, fallback: number, min: number, max: number, 
 export function createTask(input: TaskInput, context: HostContext = hostContext()): RemoteTask {
   const project = input.projectId ? getProject(input.projectId) : null;
   if (input.projectId && !project) throw new Error("装机批次不存在");
-  const kind: TaskKind = input.kind === "revoke" || input.kind === "inventory" || input.kind === "bmc-reset" ? input.kind : "script";
+  const kind: TaskKind = input.kind === "revoke" || input.kind === "inventory" || input.kind === "bmc-reset" || input.kind === "bmc-clock" ? input.kind : "script";
+  const clock = kind === "bmc-clock" ? cleanClock(input.bmcClock) : undefined;
   const via: BmcResetVia = input.bmcReset === "inband" ? "inband" : "outband";
   const script =
     kind === "revoke"
@@ -120,7 +123,9 @@ export function createTask(input: TaskInput, context: HostContext = hostContext(
           ? via === "inband"
             ? BMC_RESET_SCRIPT
             : "# 带外：控制台用资产上的 BMC 账号执行\nipmitool -I lanplus -H <BMC 地址> mc reset cold\n"
-          : (input.script || "").replace(/\r\n/g, "\n");
+          : kind === "bmc-clock"
+            ? `# 经 Redfish 改 BMC\n${JSON.stringify(clock, null, 2)}\n`
+            : (input.script || "").replace(/\r\n/g, "\n");
   if (!script.trim()) throw new Error("脚本是空的");
   if (script.length > 200000) throw new Error("脚本超过 200KB");
   const sources = kind === "inventory" ? (["os", "bmc"] as const).filter((source) => !input.sources || input.sources.includes(source)) : [];
@@ -129,7 +134,7 @@ export function createTask(input: TaskInput, context: HostContext = hostContext(
   const settingsName = settings.map((item) => BMC_SETTING_LABEL[item]).join("、");
   const inventoryName = sources.length ? `采集硬件配置${settings.length ? `、${settingsName}` : ""}` : `读取 ${settingsName}`;
   const defaultName =
-    kind === "revoke" ? "交付清理：撤掉控制台公钥" : kind === "inventory" ? inventoryName : kind === "bmc-reset" ? `重启 BMC（${via === "inband" ? "带内" : "带外"}）` : script.trim().split("\n")[0].slice(0, 80);
+    kind === "revoke" ? "交付清理：撤掉控制台公钥" : kind === "inventory" ? inventoryName : kind === "bmc-reset" ? `重启 BMC（${via === "inband" ? "带内" : "带外"}）` : kind === "bmc-clock" ? clockName(clock!) : script.trim().split("\n")[0].slice(0, 80);
   const name = (input.name || "").trim().slice(0, 80) || defaultName;
   const fileIds = kind === "script" ? [...new Set(input.fileIds || [])] : [];
   for (const id of fileIds) {
@@ -141,7 +146,7 @@ export function createTask(input: TaskInput, context: HostContext = hostContext(
   const targets: TaskTarget[] = wanted.map((id) => {
     const row = getAsset(id);
     if (!row) throw new Error("选中的机器已经不在资产里，刷新页面再选");
-    if (kind === "bmc-reset" && via === "outband") {
+    if ((kind === "bmc-reset" && via === "outband") || kind === "bmc-clock") {
       // 带外连的是 BMC，任务里「地址」一栏显示 BMC 地址。
       const ready = Boolean(row.bmcIp && assetBmcAccounts(row).length);
       return {
@@ -151,7 +156,7 @@ export function createTask(input: TaskInput, context: HostContext = hostContext(
         hostSource: "",
         status: ready ? "pending" : "unreachable",
         exitCode: null,
-        output: ready ? "" : row.bmcIp ? "资产上没有 BMC 账号密码，可以试带内" : "还没有 BMC 地址，可以试带内",
+        output: ready ? "" : `${row.bmcIp ? "资产上没有 BMC 账号密码" : "还没有 BMC 地址"}${kind === "bmc-reset" ? "，可以试带内" : ""}`,
       } satisfies TaskTarget;
     }
     const found = resolveAssetHost(row, context);
@@ -186,6 +191,7 @@ export function createTask(input: TaskInput, context: HostContext = hostContext(
     ...(kind === "inventory" ? { inventorySources: [...sources] } : {}),
     ...(settings.length ? { inventorySettings: [...settings] } : {}),
     ...(kind === "bmc-reset" ? { bmcReset: via } : {}),
+    ...(clock ? { bmcClock: clock } : {}),
     createdAt: new Date().toISOString(),
   };
   if (task.status === "done") task.finishedAt = task.createdAt;
@@ -503,6 +509,43 @@ export async function resetBmc(
   return { message: `${asset.sn}：已经系统 ${host} 让 BMC 冷重启（带内）。${after}` };
 }
 
+/** 设 BMC 时区任务的参数：只留给了的项，检查格式。 */
+function cleanClock(input: ClockChange | undefined): ClockChange {
+  const clock: ClockChange = {};
+  if (input?.offset) {
+    if (!validOffset(input.offset)) throw new Error(`时区要写成 +08:00 这样，「${input.offset}」不对`);
+    clock.offset = input.offset;
+  }
+  if (typeof input?.ntpEnabled === "boolean") clock.ntpEnabled = input.ntpEnabled;
+  if (Array.isArray(input?.ntpServers)) clock.ntpServers = input.ntpServers.map((item) => String(item).trim()).filter(Boolean);
+  if (!Object.keys(clock).length) throw new Error("没有要改的：时区和 NTP 至少改一项");
+  if (clock.ntpEnabled && clock.ntpServers && !clock.ntpServers.length) throw new Error("打开 NTP 要填至少一个服务器");
+  return clock;
+}
+
+function clockName(clock: ClockChange): string {
+  const parts = [
+    clock.offset ? `时区 UTC${clock.offset}` : "",
+    clock.ntpEnabled === undefined ? "" : clock.ntpEnabled ? "开 NTP" : "关 NTP",
+    clock.ntpServers?.length ? clock.ntpServers.join(", ") : "",
+  ].filter(Boolean);
+  return `设 BMC ${parts.join("，")}`.slice(0, 80);
+}
+
+/** 设 BMC 时区任务里的一台：经 Redfish 改，成功后在资产记录里记一笔。 */
+async function clockTarget(task: RemoteTask, target: TaskTarget): Promise<Pick<TaskTarget, "status" | "exitCode" | "output">> {
+  const asset = getAsset(target.serverId);
+  if (!asset) return { status: "failed", exitCode: null, output: "资产已经删掉了\n" };
+  try {
+    const done = await changeClock(await openSession(asset), task.bmcClock || {});
+    addEvent(asset.id, "bmc", `${done.join("，")}（任务「${task.name}」）`, "批量任务");
+    return { status: "ok", exitCode: 0, output: `${done.join("\n")}\n` };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "修改失败";
+    return { status: /连不上|没有回应|不接受/.test(message) ? "unreachable" : "failed", exitCode: null, output: `${message}\n` };
+  }
+}
+
 /** 重启 BMC 任务里的一台：成功后在资产记录里记一笔。 */
 async function resetBmcTarget(task: RemoteTask, target: TaskTarget, exec: Exec): Promise<Pick<TaskTarget, "status" | "exitCode" | "output">> {
   const via = task.bmcReset || "outband";
@@ -540,7 +583,9 @@ export async function runTask(id: string, exec: Exec = defaultExec, redfish: Red
             ? await collectInventory(task, target, exec, redfish)
             : task.kind === "bmc-reset"
               ? await resetBmcTarget(task, target, exec)
-              : await runOnHost(task, target, files, exec),
+              : task.kind === "bmc-clock"
+                ? await clockTarget(task, target)
+                : await runOnHost(task, target, files, exec),
         );
       } catch (error) {
         target.status = "failed";

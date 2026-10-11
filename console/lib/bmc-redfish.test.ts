@@ -253,6 +253,23 @@ test("health follows Redfish Status, unpowered PSUs count as warnings", async ()
   );
 });
 
+test("bmc clock: offset and NTP are patched with If-Match", async () => {
+  const bmcs = setup();
+  const session = await bmc.openSession(asset);
+  const fake = bmcs.get(asset.bmcIp)!;
+  fake.docs.set("/redfish/v1/Managers/Self", { "@odata.etag": 'W/"5"', DateTime: "2026-10-11T08:31:51-00:00", DateTimeLocalOffset: "-00:00", NetworkProtocol: { "@odata.id": "/redfish/v1/Managers/Self/NetworkProtocol" } });
+  fake.docs.set("/redfish/v1/Managers/Self/NetworkProtocol", { "@odata.etag": 'W/"6"', NTP: { ProtocolEnabled: false, NTPServers: ["pool.ntp.org"] } });
+  const done = await bmc.changeClock(session, { offset: "+08:00", ntpEnabled: true, ntpServers: ["ntp.aliyun.com"] });
+  assert.deepEqual(done, ["BMC 时区改成 UTC+08:00", "打开 NTP，NTP 服务器 ntp.aliyun.com"]);
+  assert.deepEqual(fake.calls.slice(-2), [
+    { method: "PATCH", path: "/redfish/v1/Managers/Self", body: { DateTimeLocalOffset: "+08:00" }, headers: { "If-Match": 'W/"5"' } },
+    { method: "PATCH", path: "/redfish/v1/Managers/Self/NetworkProtocol", body: { NTP: { ProtocolEnabled: true, NTPServers: ["ntp.aliyun.com"] } }, headers: { "If-Match": 'W/"6"' } },
+  ]);
+  await assert.rejects(bmc.changeClock(session, { offset: "+15:00" }), /\+08:00/);
+  assert.equal(bmc.validOffset("+05:30"), true);
+  assert.equal(bmc.validOffset("-13:00"), false);
+});
+
 test("sse frames are split and AMI event payloads parsed", () => {
   const raw =
     'id:1\ndata:{"Events":[{"EventTimestamp":"1791618011","MessageId":"Task.1.0.New","Severity":"OK","Message":"task","OriginOfCondition":{"@odata.id":"/redfish/v1/TaskService/Tasks/2"}}]}\n\n' +

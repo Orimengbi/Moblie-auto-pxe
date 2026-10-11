@@ -64,3 +64,13 @@ test("bmc reset runs as a task, out-of-band targets show the BMC address", async
   assert.match(done.targets[0].output, /带内/);
   assert.ok(assets.listEvents(os.id).some((event) => /重启 BMC（带内/.test(event.text)));
 });
+
+test("bmc clock task needs a BMC and validates the offset", async () => {
+  const withBmc = assets.createAsset({ sn: "clk-1", bmcIp: "10.0.1.9", bmcUser: "admin", bmcPassword: "secret" }, "tester");
+  const task = createTask({ kind: "bmc-clock", bmcClock: { offset: "+08:00", ntpEnabled: true, ntpServers: ["ntp.aliyun.com", " "] }, assetIds: [withBmc.id] }, context);
+  assert.equal(task.name, "设 BMC 时区 UTC+08:00，开 NTP，ntp.aliyun.com");
+  assert.deepEqual(task.bmcClock, { offset: "+08:00", ntpEnabled: true, ntpServers: ["ntp.aliyun.com"] });
+  assert.equal(task.targets[0].host, "10.0.1.9");
+  assert.throws(() => createTask({ kind: "bmc-clock", bmcClock: { offset: "+8" }, assetIds: [withBmc.id] }, context), /\+08:00/);
+  assert.throws(() => createTask({ kind: "bmc-clock", bmcClock: {}, assetIds: [withBmc.id] }, context), /至少改一项/);
+});
