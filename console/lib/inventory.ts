@@ -122,6 +122,7 @@ sec net
 for n in /sys/class/net/*; do
   [ -e "$n/device" ] || continue
   [ -e "$n/device/physfn" ] && continue
+  case "$(cat "$n/phys_port_name" 2>/dev/null)" in pf*vf*|pf*sf*) continue ;; esac
   i=$(basename "$n")
   echo "--- $i"
   echo "mac: $(cat "$n/address" 2>/dev/null)"

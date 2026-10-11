@@ -896,6 +896,25 @@ export interface AssetPartSet {
   usable: number;
   blocked: number;
   blockedBy: string[];
+  /** 型号字典里的规格，组里第一个查得到的型号。 */
+  spec: string;
+}
+
+/** 型号字典的分类：整机（服务器、交换机、PDU）和各种配件。 */
+export type CatalogCategory = "server" | "switch" | "pdu" | "cpu" | "memory" | "disk" | "gpu" | "nic" | "transceiver" | "psu" | "fan" | "board" | "cable" | "other";
+
+/** 型号字典里的一个型号：厂商、型号和这一类的属性（内存的代数、容量、频率等）。 */
+export interface CatalogEntry {
+  id: string;
+  category: CatalogCategory;
+  vendor: string;
+  model: string;
+  /** 同一个型号在别处的写法，例如硬件采集读到的「SOLIDIGM SB5PH27X076T」。 */
+  aliases: string[];
+  attrs: Record<string, string | number>;
+  note: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface PartEvent {

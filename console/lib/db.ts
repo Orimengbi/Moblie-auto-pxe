@@ -322,6 +322,22 @@ const MIGRATIONS: string[] = [
     updated_at TEXT NOT NULL
   );
   `,
+  // 型号字典：服务器、交换机和各种配件的型号和属性。同一分类里型号不分大小写唯一。
+  `
+  CREATE TABLE catalog_models (
+    id TEXT PRIMARY KEY,
+    category TEXT NOT NULL,
+    vendor TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL,
+    model_key TEXT NOT NULL,
+    aliases TEXT NOT NULL DEFAULT '[]',
+    attrs TEXT NOT NULL DEFAULT '{}',
+    note TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (category, model_key)
+  );
+  `,
 ];
 
 let opened: { file: string; db: Database } | null = null;

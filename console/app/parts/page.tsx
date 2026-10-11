@@ -3,6 +3,7 @@ import { PageHeader } from "@/components/page-header";
 import { PartsBoard } from "@/components/parts-board";
 import { listAssets } from "@/lib/assets";
 import { authenticate } from "@/lib/auth";
+import { listCatalog } from "@/lib/catalog";
 import { listPartGroups, partSets } from "@/lib/part-groups";
 import { listParts } from "@/lib/parts";
 import { listDatacenters, listSites } from "@/lib/racks";
@@ -18,6 +19,7 @@ export default async function PartsPage() {
         parts={listParts()}
         sets={partSets()}
         groups={listPartGroups()}
+        catalog={listCatalog()}
         admin={identity?.user.role === "admin"}
         sites={listSites()}
         datacenters={listDatacenters()}

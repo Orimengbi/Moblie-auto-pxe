@@ -86,7 +86,7 @@ export function AssetTickets({ asset, onChanged }: { asset: { id: string; tag: s
                   {set.groupId && set.models.length > 1 ? `（${set.models.length} 种型号可互换）` : ""}
                 </Typography>
                 <Typography variant="caption" sx={{ color: "text.secondary" }}>
-                  这台装了 {set.installed} 个
+                  {set.spec ? `${set.spec} · ` : ""}这台装了 {set.installed} 个
                 </Typography>
                 <Typography variant="body2" sx={{ ml: "auto", fontWeight: 600, color: set.usable ? "text.primary" : "error.main", fontVariantNumeric: "tabular-nums" }}>
                   在库可用 {set.usable}
