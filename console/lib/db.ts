@@ -338,6 +338,10 @@ const MIGRATIONS: string[] = [
     UNIQUE (category, model_key)
   );
   `,
+  // 资产的健康状态（Redfish Status 加 IPMI 传感器），监控每次读 BMC 时更新。
+  `
+  ALTER TABLE monitor_state ADD COLUMN health TEXT NOT NULL DEFAULT 'null';
+  `,
 ];
 
 let opened: { file: string; db: Database } | null = null;

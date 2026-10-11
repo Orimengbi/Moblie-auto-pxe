@@ -6,7 +6,8 @@ import { db, getSetting, putSetting } from "./db.ts";
 import { defaultIpmiExec, firstWorkingAccount, ipmiFailure, type IpmiExec } from "./ipmi-remote.ts";
 import { dataDir } from "./paths.ts";
 import { markedSections } from "./sections.ts";
-import type { Asset, AssetStatus, DiskHealth, GpuHealth, MonitorSettings, MonitorState, SelEntry, SensorReading } from "./types.ts";
+import { assetHealthProblems } from "./bmc-redfish.ts";
+import type { Asset, AssetHealth, AssetStatus, DiskHealth, GpuHealth, HealthLevel, HealthProblem, MonitorSettings, MonitorState, SelEntry, SensorReading } from "./types.ts";
 
 /**
  * 监控：用 ipmitool 读 BMC 的传感器（sdr elist）和事件日志（sel elist），SSH 进系统查 GPU（nvidia-smi、Xid）和硬盘健康。
@@ -208,7 +209,7 @@ export function parseDisks(text: string): DiskHealth[] {
 // ---------- 状态 ----------
 
 function emptyState(assetId: string): MonitorState {
-  return { assetId, bmcAt: "", bmcOk: false, bmcError: "", bmcFailures: 0, sensors: [], selLast: "", selRecent: [], osAt: "", osOkAt: "", osOk: false, osError: "", gpus: [], disks: [], ports: [] };
+  return { assetId, bmcAt: "", bmcOk: false, bmcError: "", bmcFailures: 0, sensors: [], selLast: "", selRecent: [], osAt: "", osOkAt: "", osOk: false, osError: "", gpus: [], disks: [], ports: [], health: null };
 }
 
 function parseJson<T>(value: unknown, fallback: T): T {
@@ -238,7 +239,18 @@ export function getMonitorState(assetId: string): MonitorState {
     gpus: parseJson(row.gpus, []),
     disks: parseJson(row.disks, []),
     ports: parseJson(row.ports, []),
+    health: parseJson(row.health, null),
   };
+}
+
+/** 资产列表用：每台最近一次的健康状态，一次查完。 */
+export function healthByAsset(): Map<string, AssetHealth> {
+  const out = new Map<string, AssetHealth>();
+  for (const row of db().prepare("SELECT asset_id, health FROM monitor_state").all()) {
+    const health = parseJson<AssetHealth | null>(row.health, null);
+    if (health) out.set(String(row.asset_id), health);
+  }
+  return out;
 }
 
 export function listMonitorStates(): MonitorState[] {
@@ -255,11 +267,11 @@ export function saveMonitorState(state: MonitorState): void {
 function saveState(state: MonitorState): void {
   db()
     .prepare(
-      `INSERT INTO monitor_state (asset_id, bmc_at, bmc_ok, bmc_error, bmc_failures, sensors, sel_last, sel_recent, os_at, os_ok, os_error, gpus, disks, ports, os_ok_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO monitor_state (asset_id, bmc_at, bmc_ok, bmc_error, bmc_failures, sensors, sel_last, sel_recent, os_at, os_ok, os_error, gpus, disks, ports, os_ok_at, health)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(asset_id) DO UPDATE SET bmc_at = excluded.bmc_at, bmc_ok = excluded.bmc_ok, bmc_error = excluded.bmc_error, bmc_failures = excluded.bmc_failures,
          sensors = excluded.sensors, sel_last = excluded.sel_last, sel_recent = excluded.sel_recent, os_at = excluded.os_at, os_ok = excluded.os_ok,
-         os_error = excluded.os_error, gpus = excluded.gpus, disks = excluded.disks, ports = excluded.ports, os_ok_at = excluded.os_ok_at`,
+         os_error = excluded.os_error, gpus = excluded.gpus, disks = excluded.disks, ports = excluded.ports, os_ok_at = excluded.os_ok_at, health = excluded.health`,
     )
     .run(
       state.assetId,
@@ -277,6 +289,7 @@ function saveState(state: MonitorState): void {
       JSON.stringify(state.disks),
       JSON.stringify(state.ports),
       state.osOkAt,
+      JSON.stringify(state.health),
     );
 }
 
@@ -287,10 +300,21 @@ function sdrCachePath(assetId: string): string {
   return path.join(dataDir(), "monitor", `${assetId}.sdr`);
 }
 
-export type MonitorIpmiExec = (host: string, user: string, password: string, args: string[], timeoutMs?: number) => ReturnType<IpmiExec>;
+/** verbose 为 false 时不带 -v：sdr elist、sel elist 带 -v 会把每条拆成多行，解析不出来（2026-10-11 以前监控因此一条都没读到）。 */
+export type MonitorIpmiExec = (host: string, user: string, password: string, args: string[], timeoutMs?: number, verbose?: boolean) => ReturnType<IpmiExec>;
 
-/** 读 BMC：传感器和事件日志。返回这次发现的问题。 */
-export async function checkBmc(asset: Asset, settings: MonitorSettings, exec: MonitorIpmiExec = defaultIpmiExec): Promise<MonitorState> {
+/** 读 Redfish 上不健康的部件。测试里换成假的。 */
+export type HealthReader = (asset: Asset) => Promise<HealthProblem[]>;
+
+const SEVERITY_RANK: Record<HealthLevel, number> = { ok: 0, warning: 1, critical: 2, unreachable: 3 };
+
+/** 最严重的一级；连不上另算，不在这里。 */
+export function overallHealth(problems: HealthProblem[]): HealthLevel {
+  return problems.reduce<HealthLevel>((worst, item) => (SEVERITY_RANK[item.severity] > SEVERITY_RANK[worst] ? item.severity : worst), "ok");
+}
+
+/** 读 BMC：传感器、事件日志和 Redfish 健康状态。返回这次发现的问题。 */
+export async function checkBmc(asset: Asset, settings: MonitorSettings, exec: MonitorIpmiExec = defaultIpmiExec, health: HealthReader = assetHealthProblems): Promise<MonitorState> {
   const state = getMonitorState(asset.id);
   const now = new Date().toISOString();
   state.bmcAt = now;
@@ -311,6 +335,7 @@ export async function checkBmc(asset: Asset, settings: MonitorSettings, exec: Mo
     state.bmcOk = false;
     state.bmcError = failure;
     state.bmcFailures += 1;
+    state.health = asset.bmcIp && accounts.length ? { at: now, overall: "unreachable", problems: [], redfishError: failure } : null;
     if (asset.bmcIp && accounts.length && state.bmcFailures >= settings.bmcFailuresToAlert) {
       findings.push({ key: "bmc:down", source: "bmc", severity: "warning", title: "BMC 连不上", detail: `${failure}，连续 ${state.bmcFailures} 次` });
     }
@@ -324,12 +349,12 @@ export async function checkBmc(asset: Asset, settings: MonitorSettings, exec: Mo
   state.bmcFailures = 0;
   const cache = sdrCachePath(asset.id);
   fs.mkdirSync(path.dirname(cache), { recursive: true });
-  if (!fs.existsSync(cache)) await exec(asset.bmcIp, account.user, account.password, ["sdr", "dump", cache], 120_000);
-  let sdr = await exec(asset.bmcIp, account.user, account.password, fs.existsSync(cache) ? ["-S", cache, "sdr", "elist"] : ["sdr", "elist"], 120_000);
+  if (!fs.existsSync(cache)) await exec(asset.bmcIp, account.user, account.password, ["sdr", "dump", cache], 120_000, false);
+  let sdr = await exec(asset.bmcIp, account.user, account.password, fs.existsSync(cache) ? ["-S", cache, "sdr", "elist"] : ["sdr", "elist"], 120_000, false);
   if (sdr.code !== 0 && fs.existsSync(cache)) {
     // 缓存过期（BMC 升级、换了板子）：删掉直接读。
     fs.rmSync(cache, { force: true });
-    sdr = await exec(asset.bmcIp, account.user, account.password, ["sdr", "elist"], 120_000);
+    sdr = await exec(asset.bmcIp, account.user, account.password, ["sdr", "elist"], 120_000, false);
   }
   if (sdr.stdout.trim()) {
     scopes.push("sensor:");
@@ -340,7 +365,7 @@ export async function checkBmc(asset: Asset, settings: MonitorSettings, exec: Mo
     }
   }
 
-  const sel = await exec(asset.bmcIp, account.user, account.password, ["sel", "elist", "last", "100"], 60_000);
+  const sel = await exec(asset.bmcIp, account.user, account.password, ["sel", "elist", "last", "100"], 60_000, false);
   if (sel.code === 0 || sel.stdout.trim()) {
     const entries = parseSel(sel.stdout);
     const fresh = newSelEntries(entries, state.selLast);
@@ -358,6 +383,21 @@ export async function checkBmc(asset: Asset, settings: MonitorSettings, exec: Mo
       });
     }
   }
+
+  // 健康状态：Redfish 的 Status（BMC 网页看的也是这个）加上越限的 IPMI 传感器。Redfish 读不到时只按传感器算，健康告警保持原样。
+  const problems: HealthProblem[] = state.sensors
+    .filter((sensor) => sensor.severity && !ignoredSensor(sensor.name, settings.ignoreSensors))
+    .map((sensor) => ({ name: `传感器 ${sensor.name}`, severity: sensor.severity!, detail: `状态 ${sensor.status}，读数 ${sensor.reading}`, source: "sensor" as const }));
+  let redfishError = "";
+  try {
+    const found = await health(asset);
+    scopes.push("health:");
+    problems.push(...found);
+    for (const item of found) findings.push({ key: `health:${item.name}`, source: "bmc", severity: item.severity, title: `${item.name} ${item.severity === "critical" ? "严重" : "异常"}`, detail: item.detail });
+  } catch (error) {
+    redfishError = error instanceof Error ? error.message : "Redfish 读取失败";
+  }
+  state.health = { at: now, overall: overallHealth(problems), problems, redfishError };
   saveState(state);
   applyFindings(asset.id, findings, scopes);
   return state;

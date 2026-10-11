@@ -7,11 +7,11 @@ import { latestInventory } from "./store.ts";
 import type { Asset, MonitorSettings, MonitorState } from "./types.ts";
 
 /**
- * 定时监控：每 30 秒看一眼哪些资产到了检查时间，同时最多查 4 台。随控制台进程起停（instrumentation.ts）。
+ * 定时监控：每 30 秒看一眼哪些资产到了检查时间，同时最多查 12 台（254 台 5 分钟要轮一遍）。随控制台进程起停（instrumentation.ts）。
  * 同一台同时只查一次，手动「立即检查」和定时的不会撞在一起。
  */
 
-const CONCURRENCY = 4;
+const CONCURRENCY = 12;
 const running = new Set<string>();
 
 /** 最近一次系统内采集里 NVIDIA GPU 的张数，用来发现掉卡。 */

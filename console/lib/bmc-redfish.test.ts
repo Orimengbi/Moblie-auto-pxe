@@ -227,6 +227,32 @@ test("HGX logs are listed and sorted by time, alerts can be filtered", async () 
   assert.equal(alerts.entries.at(-1)?.message, "factory 0");
 });
 
+test("health follows Redfish Status, unpowered PSUs count as warnings", async () => {
+  const bmcs = setup();
+  const session = await bmc.openSession(asset);
+  const fake = bmcs.get(asset.bmcIp)!;
+  fake.docs.set("/redfish/v1/Chassis", { Members: [{ "@odata.id": "/redfish/v1/Chassis/Self" }, { "@odata.id": "/redfish/v1/Chassis/HGX_Chassis_0" }] });
+  fake.docs.set("/redfish/v1/Chassis/Self", { Status: { Health: "OK", HealthRollup: "OK", State: "Enabled" }, Power: { "@odata.id": "/redfish/v1/Chassis/Self/Power" }, Thermal: { "@odata.id": "/redfish/v1/Chassis/Self/Thermal" } });
+  fake.docs.set("/redfish/v1/Chassis/HGX_Chassis_0", { Status: { Health: "OK", HealthRollup: "Critical", State: "Enabled" } });
+  fake.docs.set("/redfish/v1/Chassis/Self/Power", {
+    PowerSupplies: [
+      { MemberId: "0", Name: "PS1_Status", Status: { Health: "OK", State: "Enabled" } },
+      { MemberId: "5", Name: "PS6_Status", Status: { Health: "OK", State: "Disabled" } },
+      { MemberId: "7", Name: "PS8_Status", Status: { State: "Absent" } },
+    ],
+  });
+  fake.docs.set("/redfish/v1/Chassis/Self/Thermal", { Fans: [{ Name: "FAN3", Status: { Health: "Warning", State: "Enabled" } }] });
+  const problems = await bmc.readHealth(session);
+  assert.deepEqual(
+    problems.map((item) => [item.name, item.severity]),
+    [
+      ["HGX 机箱", "critical"],
+      ["电源 PS6", "warning"],
+      ["风扇 FAN3", "warning"],
+    ],
+  );
+});
+
 test("sse frames are split and AMI event payloads parsed", () => {
   const raw =
     'id:1\ndata:{"Events":[{"EventTimestamp":"1791618011","MessageId":"Task.1.0.New","Severity":"OK","Message":"task","OriginOfCondition":{"@odata.id":"/redfish/v1/TaskService/Tasks/2"}}]}\n\n' +

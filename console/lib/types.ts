@@ -1028,6 +1028,25 @@ export interface DiskHealth {
   ok: boolean;
 }
 
+export type HealthLevel = "ok" | "warning" | "critical" | "unreachable";
+
+/** 一项不健康的：Redfish 上 Status 不是 OK 的整机、机箱、电源、风扇，或 IPMI 传感器越限。 */
+export interface HealthProblem {
+  name: string;
+  severity: AlertSeverity;
+  detail: string;
+  source: "redfish" | "sensor";
+}
+
+/** 资产列表「健康」一列：和 BMC 网页同一个来源（Redfish Status），再加上 IPMI 传感器。 */
+export interface AssetHealth {
+  at: string;
+  overall: HealthLevel;
+  problems: HealthProblem[];
+  /** Redfish 读不到时的原因，这时只按 IPMI 传感器算。 */
+  redfishError: string;
+}
+
 export interface MonitorState {
   assetId: string;
   bmcAt: string;
@@ -1046,6 +1065,7 @@ export interface MonitorState {
   disks: DiskHealth[];
   /** 网络设备上次读到的端口状态和错包数，用来比出掉线和错包增长。 */
   ports: { name: string; admin: string; oper: string; inErrors: number | null; outErrors: number | null; neighbor: string }[];
+  health: AssetHealth | null;
 }
 
 export interface MonitorSettings {

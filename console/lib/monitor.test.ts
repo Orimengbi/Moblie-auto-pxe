@@ -77,8 +77,12 @@ test("bmc checks open, update and resolve alerts", async () => {
   let sdr = SDR_OK;
   let sel = "   1 | 10/08/2026 | 09:00:00 | Temperature CPU0_TEMP | Upper Critical going high | Asserted\n";
   const calls: string[] = [];
-  const exec = async (_host: string, _user: string, _password: string, args: string[]) => {
+  let unhealthy: import("./types.ts").HealthProblem[] = [];
+  const health = async () => unhealthy;
+  const exec = async (_host: string, _user: string, _password: string, args: string[], _timeout?: number, verbose?: boolean) => {
     calls.push(args.join(" "));
+    // sdr / sel 带 -v 输出是多行的，解析不了，必须不带。
+    if ((args[0] === "sel" || args.includes("sdr")) && verbose !== false) return { code: 0, stdout: "SEL Record ID : 0001\n Record Type : 02\n", stderr: "" };
     if (!up) return { code: 1, stdout: "", stderr: "Error: Unable to establish IPMI v2 / RMCP+ session" };
     if (args[0] === "chassis") return { code: 0, stdout: "Chassis Power is on\n", stderr: "" };
     if (args.includes("dump")) {
@@ -91,36 +95,48 @@ test("bmc checks open, update and resolve alerts", async () => {
   };
 
   // 第一次：SEL 里的旧事件不报，传感器都正常。
-  await monitor.checkBmc(asset, settings, exec);
+  await monitor.checkBmc(asset, settings, exec, health);
   assert.equal(alerts.listAlerts({ assetId: asset.id }).length, 0);
+  assert.equal(monitor.getMonitorState(asset.id).health?.overall, "ok");
+
+  // Redfish 说电源没供电：健康变成警告并开告警，恢复后告警自动关。
+  unhealthy = [{ name: "电源 PS6", severity: "warning", detail: "在位但没在工作（State Disabled），多半是没接电", source: "redfish" }];
+  await monitor.checkBmc(asset, settings, exec, health);
+  assert.equal(monitor.getMonitorState(asset.id).health?.overall, "warning");
+  assert.equal(monitor.healthByAsset().get(asset.id)?.problems[0].name, "电源 PS6");
+  assert.ok(alerts.listAlerts({ assetId: asset.id }).some((alert) => alert.key === "health:电源 PS6" && alert.status === "active"));
+  unhealthy = [];
+  await monitor.checkBmc(asset, settings, exec, health);
+  assert.ok(!alerts.listAlerts({ assetId: asset.id }).some((alert) => alert.key === "health:电源 PS6" && alert.status === "active"));
   assert.ok(calls.some((call) => call.startsWith("-S ")), "用 SDR 缓存读传感器");
 
   sdr = SDR_BAD;
   sel += "   2 | 10/08/2026 | 10:03:00 | Power Supply PSU2_Status | Power Supply AC lost | Asserted\n";
-  await monitor.checkBmc(asset, settings, exec);
+  await monitor.checkBmc(asset, settings, exec, health);
   let open = alerts.listAlerts({ assetId: asset.id }).filter((alert) => alert.status === "active");
   assert.deepEqual(open.map((alert) => alert.key).sort(), ["sel:Power Supply PSU2_Status:Power Supply AC lost", "sensor:CPU0_TEMP", "sensor:PSU2_Status"]);
   assert.ok(assets.listEvents(asset.id).some((event) => event.kind === "alert" && /严重告警：传感器 CPU0_TEMP/.test(event.text)));
 
   // 再查一次：不重复开；温度恢复了自动恢复，SEL 事件类不会自己恢复。
   sdr = SDR_OK;
-  await monitor.checkBmc(asset, settings, exec);
+  await monitor.checkBmc(asset, settings, exec, health);
   open = alerts.listAlerts({ assetId: asset.id }).filter((alert) => alert.status !== "resolved");
   assert.deepEqual(open.map((alert) => alert.key), ["sel:Power Supply PSU2_Status:Power Supply AC lost"]);
   assert.equal(alerts.alertCounts().critical, 1);
 
   // BMC 连不上：第二次才报，传感器告警不因为没读到就当恢复。
   sdr = SDR_BAD;
-  await monitor.checkBmc(asset, settings, exec);
+  await monitor.checkBmc(asset, settings, exec, health);
   up = false;
-  await monitor.checkBmc(asset, settings, exec);
+  await monitor.checkBmc(asset, settings, exec, health);
   assert.ok(!alerts.listAlerts({ assetId: asset.id }).some((alert) => alert.key === "bmc:down" && alert.status === "active"));
-  await monitor.checkBmc(asset, settings, exec);
+  await monitor.checkBmc(asset, settings, exec, health);
+  assert.equal(monitor.getMonitorState(asset.id).health?.overall, "unreachable");
   const keys = alerts.listAlerts({ assetId: asset.id }).filter((alert) => alert.status === "active").map((alert) => alert.key);
   assert.ok(keys.includes("bmc:down"));
   assert.ok(keys.includes("sensor:CPU0_TEMP"), "连不上时传感器告警保持原样");
   up = true;
-  await monitor.checkBmc(asset, settings, exec);
+  await monitor.checkBmc(asset, settings, exec, health);
   assert.ok(!alerts.listAlerts({ assetId: asset.id }).some((alert) => alert.key === "bmc:down" && alert.status === "active"));
 
   // 确认、转工单、处理完。

@@ -1,4 +1,4 @@
-import type { AlertSeverity, AlertSource, AlertStatus, Asset, AssetStatus, BmcSettingKind, AssetType, Customer, FloorItemKind, PartKind, PartSource, PartStatus, RackFacing, TagSettings, TicketKind, TicketPriority, TicketStatus } from "./types.ts";
+import type { AlertSeverity, AlertSource, AlertStatus, Asset, AssetStatus, HealthLevel, BmcSettingKind, AssetType, Customer, FloorItemKind, PartKind, PartSource, PartStatus, RackFacing, TagSettings, TicketKind, TicketPriority, TicketStatus } from "./types.ts";
 
 /** 页面和服务端共用的名称。这个文件不碰数据库，客户端组件可以直接引用。 */
 /** HGX 底板（GPU、NVSwitch、HMC、ConnectX 等）的固件，Id 都以 HGX_ 开头。 */
@@ -121,6 +121,10 @@ export function priorityTone(priority: TicketPriority): Tone {
 export function taskTargetTone(status: string): Tone {
   return status === "ok" ? "success" : status === "running" ? "info" : status === "pending" ? "neutral" : "error";
 }
+
+/** 资产「健康」一列，和 BMC 网页的健康状态同源。 */
+export const HEALTH_LABEL: Record<HealthLevel, string> = { ok: "正常", warning: "警告", critical: "严重", unreachable: "连不上" };
+export const HEALTH_TONE: Record<HealthLevel, Tone> = { ok: "success", warning: "warning", critical: "error", unreachable: "error" };
 
 export const ASSET_STATUS_TONE: Record<AssetStatus, Tone> = {
   stock: "neutral",
