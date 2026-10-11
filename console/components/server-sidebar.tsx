@@ -137,7 +137,11 @@ export function ServerSidebar({ projectId, row, initialTab = "overview", onClose
         }}
       >
         {row ? (
+          // 按「按下」的位置判断，不按 click：MUI 的下拉框按下就弹出菜单，松开时指针在菜单上，
+          // 浏览器把这次 click 派给按下和松开处的共同祖先 body，会被当成点了外面而关掉侧边栏。
           <ClickAwayListener
+            mouseEvent="onPointerDown"
+            touchEvent="onTouchStart"
             onClickAway={(event) => {
               if (keepsOpen(event.target)) return;
               onClose();
