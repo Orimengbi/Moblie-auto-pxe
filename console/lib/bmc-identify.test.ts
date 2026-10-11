@@ -7,7 +7,7 @@ import test from "node:test";
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pxe-identify-test-"));
 process.env.PXE_DATA_DIR = temp;
 
-const { enrichRecords, enrichRow, parseFru } = await import("./bmc-identify.ts");
+const { enrichRecords, enrichRow, mergeIdentity, parseFru, placeholderSerial } = await import("./bmc-identify.ts");
 const assets = await import("./assets.ts");
 const { parseAssetTable } = await import("./asset-sheet.ts");
 
@@ -69,4 +69,15 @@ test("ipmitool fru output is read field by field", () => {
   const fields = parseFru(" Chassis Serial        : NA\n Board Mfg             : GIGA-BYTE\n Product Manufacturer  : Giga Computing\n Product Name          : G894-ZD3\n Product Serial        : 6QM8N72HMA0065\n");
   assert.equal(fields["Product Serial"], "6QM8N72HMA0065");
   assert.equal(fields["Board Mfg"], "GIGA-BYTE");
+});
+
+test("factory placeholder serials are not taken, and FRU product data wins over unflashed SMBIOS", () => {
+  for (const sn of ["01234567890123", "0123456789", "123456789", "FFFFFFFF", "000000000001".replace("1", "0")]) assert.ok(placeholderSerial(sn), sn);
+  for (const sn of ["6QL8N72HMA0063", "QH8N2500035", "2617G89401R10U1E0C", "12345"]) assert.equal(placeholderSerial(sn), false, sn);
+  // 技嘉 G894 有一批 SMBIOS 没刷：Redfish 报 01234567890123 / MZB3-PE2-000，FRU 产品区才是整机。
+  const redfish = { sn: "", vendor: "Giga Computing", model: "MZB3-PE2-000", bmcMac: "30:56:0f:dd:3b:3e", hostname: "", via: "Redfish" };
+  const ipmi = { sn: "6QL8N72HMA0063", vendor: "Giga Computing", model: "G894-ZD3-AAX7-000", bmcMac: "", hostname: "", via: "IPMI" };
+  assert.deepEqual(mergeIdentity(redfish, ipmi), { ...ipmi, bmcMac: redfish.bmcMac, via: "Redfish + IPMI" });
+  const fields = parseFru(" Board Product         : MZB3-PE2-000\n Board Serial          : QH8N2500035\n Product Name          : G894-ZD3-AAX7-000\n Product Serial        : 6QL8N72HMA0063\n");
+  assert.equal(fields["Product Name"], "G894-ZD3-AAX7-000");
 });
