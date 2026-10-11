@@ -7,12 +7,15 @@ import { PageHeader } from "@/components/page-header";
 import { DisplaySettingsForm } from "@/components/display-settings-form";
 import { MonitorSettingsForm } from "@/components/monitor-settings-form";
 import { SnmpProfileManager } from "@/components/snmp-profile-manager";
+import { SshJumpSettingsForm } from "@/components/ssh-jump-settings-form";
 import { TagSettingsForm } from "@/components/tag-settings-form";
 import { getTagSettings, listAssets, listCustomers } from "@/lib/assets";
 import { authenticate } from "@/lib/auth";
 import { getDisplaySettings } from "@/lib/display-settings";
 import { getMonitorSettings } from "@/lib/monitor";
+import { consolePublicKey } from "@/lib/remote";
 import { listSnmpProfiles, publicSnmpProfile } from "@/lib/snmp";
+import { listJumpHosts } from "@/lib/ssh-jump";
 
 export const dynamic = "force-dynamic";
 
@@ -43,6 +46,12 @@ export default async function SettingsPage() {
         <CardHeader title="监控" />
         <CardContent>
           <MonitorSettingsForm settings={getMonitorSettings()} />
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader title="SSH 跳板机" />
+        <CardContent>
+          <SshJumpSettingsForm jumps={listJumpHosts()} publicKey={consolePublicKey()} />
         </CardContent>
       </Card>
       <Card>

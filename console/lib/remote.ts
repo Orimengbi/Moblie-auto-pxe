@@ -11,6 +11,7 @@ import { OPTICS_SCRIPT, parseOptics } from "./optics.ts";
 import { bmcColdReset, defaultIpmiExec, firstWorkingAccount, ipmiFailure, type IpmiExec } from "./ipmi-remote.ts";
 import { crawlRedfish, RedfishAuthError, redfishGetter, type RedfishGet } from "./redfish.ts";
 import { renderRevokeScript } from "./render.ts";
+import { jumpFor, jumpLabel, listJumpHosts, type JumpHost } from "./ssh-jump.ts";
 import { addEvent, assetBmcAccounts, getAsset } from "./assets.ts";
 import { BMC_SETTING_LABEL } from "./asset-labels.ts";
 import { changeClock, collectSettings, openSession, validOffset, type ClockChange } from "./bmc-redfish.ts";
@@ -254,9 +255,35 @@ function sshOptions(): string[] {
   ];
 }
 
-/** 用控制台的密钥以 root SSH 进一台机器跑一段 bash。监控用。 */
+/** 跳板机上登目标用的选项：和直连一样不记主机密钥、连不上 8 秒就放弃。 */
+const JUMP_INNER_OPTIONS = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR", "-o", "ConnectTimeout=8", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"];
+
+/** 只登跳板机本身跑一条命令。 */
+export function jumpSshArgs(jump: JumpHost, command: string): string[] {
+  return [...sshOptions(), "-p", String(jump.port), `${jump.user}@${jump.host}`, command];
+}
+
+/**
+ * 登一台机器跑一条命令的 ssh 参数。目标网段配了跳板机时，先用控制台的密钥登跳板机，
+ * 再在跳板机上用它自己的密钥登目标；stdin 和退出码穿过两跳，哪一跳连不上都是 255。
+ */
+export function sshArgs(host: string, command: string, jumps: JumpHost[] = listJumpHosts()): string[] {
+  const jump = jumpFor(host, jumps);
+  if (!jump) return [...sshOptions(), `root@${host}`, command];
+  const inner = ["ssh", ...JUMP_INNER_OPTIONS, "-p", String(jump.targetPort), ...(jump.targetKey ? ["-i", jump.targetKey] : []), `${jump.targetUser}@${host}`, command];
+  return jumpSshArgs(jump, inner.map(shq).join(" "));
+}
+
+/** SSH 登不上时的提示，经跳板机的说明是哪一台。 */
+export function sshFailure(host: string, jumps: JumpHost[] = listJumpHosts()): string {
+  const jump = jumpFor(host, jumps);
+  if (jump) return `经跳板机 ${jumpLabel(jump)} 登录 ${host} 失败。跳板机上没放控制台公钥、跳板机连不上目标，或者目标端口、私钥不对`;
+  return `SSH 登录 ${host} 失败。机器没开、地址不对，或者装机时没写入控制台公钥`;
+}
+
+/** 用控制台的密钥以 root SSH 进一台机器跑一段 bash（目标网段配了跳板机就经跳板机）。监控用。 */
 export function runSsh(host: string, script: string, timeoutMs = 120_000, exec: Exec = defaultExec): Promise<ExecResult> {
-  return exec("ssh", [...sshOptions(), `root@${host}`, "bash -s"], script, Date.now() + timeoutMs, INVENTORY_OUTPUT_LIMIT);
+  return exec("ssh", sshArgs(host, "bash -s"), script, Date.now() + timeoutMs, INVENTORY_OUTPUT_LIMIT);
 }
 
 function shq(value: string): string {
@@ -279,13 +306,22 @@ export async function runOnHost(
   let log = "";
   const timedOut = () => ({ status: "timeout" as const, exitCode: null, output: tail(`${log}超过 ${task.timeoutSec} 秒，已中止\n`) });
 
-  const prepared = await exec("ssh", [...sshOptions(), remote, `mkdir -p ${shq(dir)}`], null, deadline);
+  const jumps = listJumpHosts();
+  const prepared = await exec("ssh", sshArgs(target.host, `mkdir -p ${shq(dir)}`, jumps), null, deadline);
   if (prepared.timedOut) return timedOut();
   if (prepared.code !== 0) {
-    return { status: "unreachable", exitCode: prepared.code, output: tail(`${prepared.output}SSH 登录 ${target.host} 失败。机器没开、地址不对，或者装机时没写入控制台公钥\n`) };
+    return { status: "unreachable", exitCode: prepared.code, output: tail(`${prepared.output}${sshFailure(target.host, jumps)}\n`) };
   }
   if (files.length) {
-    const copied = await exec("scp", [...sshOptions(), "-q", "-p", ...files, `${remote}:${dir}/`], null, deadline);
+    // 经跳板机时 scp 用不了（目标上没有控制台公钥），打成 tar 流穿过两跳再解开。
+    const copied = jumpFor(target.host, jumps)
+      ? await exec(
+          "sh",
+          ["-c", `${["tar", "-cf", "-", ...files.flatMap((file) => ["-C", path.dirname(file), path.basename(file)])].map(shq).join(" ")} | ${["ssh", ...sshArgs(target.host, `tar -xpf - -C ${shq(dir)}`, jumps)].map(shq).join(" ")}`],
+          null,
+          deadline,
+        )
+      : await exec("scp", [...sshOptions(), "-q", "-p", ...files, `${remote}:${dir}/`], null, deadline);
     log += copied.output;
     if (copied.timedOut) return timedOut();
     if (copied.code !== 0) return { status: "failed", exitCode: copied.code, output: tail(`${log}上传文件失败\n`) };
@@ -297,7 +333,7 @@ export async function runOnHost(
     'cd "$PXE_FILES"',
     "",
   ].join("\n");
-  const ran = await exec("ssh", [...sshOptions(), remote, "bash -s"], `${header}${task.script}\n`, deadline);
+  const ran = await exec("ssh", sshArgs(target.host, "bash -s", jumps), `${header}${task.script}\n`, deadline);
   log += ran.output;
   if (ran.timedOut) return timedOut();
   if (ran.code === 255) return { status: "unreachable", exitCode: 255, output: tail(`${log}SSH 连接中断\n`) };
@@ -356,11 +392,11 @@ export async function collectInventory(
       lines.push("系统内：找不到系统地址，跳过");
     } else {
       tried++;
-      const ran = await exec("ssh", [...sshOptions(), `root@${target.host}`, "bash -s"], INVENTORY_SCRIPT, deadline, INVENTORY_OUTPUT_LIMIT);
+      const ran = await exec("ssh", sshArgs(target.host, "bash -s"), INVENTORY_SCRIPT, deadline, INVENTORY_OUTPUT_LIMIT);
       if (ran.timedOut) {
         lines.push(`系统内（${target.host}）：超过 ${task.timeoutSec} 秒，已中止`);
       } else if (ran.code === 255 || !ran.output.includes("===PXEINV ")) {
-        lines.push(`系统内（${target.host}）：SSH 登录失败。机器没开、地址不对，或者装机时没写入控制台公钥`, tail(ran.output).trim());
+        lines.push(`系统内：${sshFailure(target.host)}`, tail(ran.output).trim());
       } else {
         reached = true;
         const parsed = parseOsInventory(ran.output);
@@ -447,10 +483,10 @@ export async function queryOptics(assetId: string, exec: Exec = defaultExec, con
   if (!row) throw new Error("资产不存在");
   const { host } = resolveAssetHost(row, context);
   if (!host) throw new Error(`${row.sn} 找不到系统地址，查不了光模块。收发光只能在系统里读`);
-  const ran = await exec("ssh", [...sshOptions(), `root@${host}`, "bash -s"], OPTICS_SCRIPT, Date.now() + 120_000, INVENTORY_OUTPUT_LIMIT);
+  const ran = await exec("ssh", sshArgs(host, "bash -s"), OPTICS_SCRIPT, Date.now() + 120_000, INVENTORY_OUTPUT_LIMIT);
   if (ran.timedOut) throw new Error(`${row.sn}（${host}）查询超过 2 分钟，已中止`);
   if (ran.code === 255 || !ran.output.includes("===PXEOPT end===")) {
-    throw new Error(`SSH 登录 ${host} 失败。机器没开、地址不对，或者装机时没写入控制台公钥`);
+    throw new Error(sshFailure(host));
   }
   return saveOptics({ serverId: row.id, at: new Date().toISOString(), host, ports: parseOptics(ran.output) });
 }
@@ -500,10 +536,10 @@ export async function resetBmc(
   if (via !== "inband") throw new Error("不支持的重启方式");
   const host = deps.host || resolveAssetHost(asset, deps.context || hostContext()).host;
   if (!host) throw new Error(`${asset.sn} 找不到系统地址，带内重启不了`);
-  const ran = await (deps.exec || defaultExec)("ssh", [...sshOptions(), `root@${host}`, "bash -s"], BMC_RESET_SCRIPT, Date.now() + 90_000);
+  const ran = await (deps.exec || defaultExec)("ssh", sshArgs(host, "bash -s"), BMC_RESET_SCRIPT, Date.now() + 90_000);
   const said = ran.output.trim().split("\n").slice(-3).join(" ").slice(0, 200);
   if (ran.timedOut) throw new Error(`${asset.sn}（${host}）超过 90 秒没完成，已中止`);
-  if (ran.code === 255) throw new Error(`SSH 登录 ${host} 失败。机器没开、地址不对，或者装机时没写入控制台公钥`);
+  if (ran.code === 255) throw new Error(sshFailure(host));
   if (ran.code === 3) throw new Error(`${asset.sn}（${host}）的系统里没有 ipmitool，先装上（apt/yum install ipmitool）`);
   if (ran.code !== 0) throw new Error(`${asset.sn}（${host}）重启 BMC 失败${said ? `：${said}` : ""}`);
   return { message: `${asset.sn}：已经系统 ${host} 让 BMC 冷重启（带内）。${after}` };
