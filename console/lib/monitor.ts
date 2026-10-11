@@ -335,7 +335,9 @@ export async function checkBmc(asset: Asset, settings: MonitorSettings, exec: Mo
     state.bmcOk = false;
     state.bmcError = failure;
     state.bmcFailures += 1;
-    state.health = asset.bmcIp && accounts.length ? { at: now, overall: "unreachable", problems: [], redfishError: failure } : null;
+    // 和「BMC 连不上」告警同一个标准：连续失败够次数才显示连不上，偶尔一次没连上保留上次的结果。
+    if (!asset.bmcIp || !accounts.length) state.health = null;
+    else if (state.bmcFailures >= settings.bmcFailuresToAlert) state.health = { at: now, overall: "unreachable", problems: [], redfishError: `${failure}，连续 ${state.bmcFailures} 次` };
     if (asset.bmcIp && accounts.length && state.bmcFailures >= settings.bmcFailuresToAlert) {
       findings.push({ key: "bmc:down", source: "bmc", severity: "warning", title: "BMC 连不上", detail: `${failure}，连续 ${state.bmcFailures} 次` });
     }

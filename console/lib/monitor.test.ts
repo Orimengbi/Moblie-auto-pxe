@@ -129,6 +129,7 @@ test("bmc checks open, update and resolve alerts", async () => {
   await monitor.checkBmc(asset, settings, exec, health);
   up = false;
   await monitor.checkBmc(asset, settings, exec, health);
+  assert.notEqual(monitor.getMonitorState(asset.id).health?.overall, "unreachable", "只失败一次时健康和告警一样先不报");
   assert.ok(!alerts.listAlerts({ assetId: asset.id }).some((alert) => alert.key === "bmc:down" && alert.status === "active"));
   await monitor.checkBmc(asset, settings, exec, health);
   assert.equal(monitor.getMonitorState(asset.id).health?.overall, "unreachable");
