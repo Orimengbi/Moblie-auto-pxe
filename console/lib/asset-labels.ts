@@ -1,4 +1,4 @@
-import type { AlertSeverity, AlertSource, AlertStatus, Asset, AssetStatus, AssetType, Customer, FloorItemKind, PartKind, PartStatus, RackFacing, TagSettings, TicketKind, TicketPriority, TicketStatus } from "./types.ts";
+import type { AlertSeverity, AlertSource, AlertStatus, Asset, AssetStatus, AssetType, Customer, FloorItemKind, PartKind, PartSource, PartStatus, RackFacing, TagSettings, TicketKind, TicketPriority, TicketStatus } from "./types.ts";
 
 /** 页面和服务端共用的名称。这个文件不碰数据库，客户端组件可以直接引用。 */
 export const ASSET_TYPES: Record<AssetType, string> = {
@@ -63,6 +63,11 @@ export const PART_STATUS: Record<PartStatus, string> = {
   faulty: "待返修",
   rma: "返修中",
   scrapped: "报废",
+};
+
+export const PART_SOURCE: Record<PartSource, string> = {
+  purchase: "采购",
+  lease: "租借",
 };
 
 export const TICKET_KINDS: Record<TicketKind, string> = {

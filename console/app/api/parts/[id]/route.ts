@@ -1,6 +1,7 @@
 import { audited, jsonError, readJson } from "@/lib/api";
 import { getAsset } from "@/lib/assets";
 import { requireAdmin, requireUser } from "@/lib/auth";
+import { hostsForPart } from "@/lib/part-groups";
 import { deletePart, getPart, listPartEvents, partLabel, updatePart, type PartEdit } from "@/lib/parts";
 
 export const dynamic = "force-dynamic";
@@ -12,7 +13,7 @@ export async function GET(_: Request, context: Context) {
   const part = getPart(id);
   if (!part) return jsonError(new Error("备件不存在"), 404);
   const asset = part.assetId ? getAsset(part.assetId) : null;
-  return Response.json({ part, events: listPartEvents(id), asset: asset ? { id: asset.id, tag: asset.tag, sn: asset.sn } : null });
+  return Response.json({ part, events: listPartEvents(id), asset: asset ? { id: asset.id, tag: asset.tag, sn: asset.sn } : null, hosts: hostsForPart(part) });
 }
 
 export async function PATCH(request: Request, context: Context) {

@@ -2,14 +2,15 @@ import { audited, jsonError, readJson } from "@/lib/api";
 import { PART_KINDS } from "@/lib/asset-labels";
 import { listParts, partsOfAsset, receiveParts, stockSummary, type ReceiveInput } from "@/lib/parts";
 import { requireUser } from "@/lib/auth";
+import { listPartGroups, partSets, partSetsForAsset } from "@/lib/part-groups";
 
 export const dynamic = "force-dynamic";
 
-/** ?asset= 只要装在这台上的。 */
+/** ?asset= 只要装在这台上的，和这台能用的各组备件。 */
 export function GET(request: Request) {
   const asset = new URL(request.url).searchParams.get("asset");
-  if (asset) return Response.json({ parts: partsOfAsset(asset), summary: [] });
-  return Response.json({ parts: listParts(), summary: stockSummary() });
+  if (asset) return Response.json({ parts: partsOfAsset(asset), summary: [], sets: partSetsForAsset(asset) });
+  return Response.json({ parts: listParts(), summary: stockSummary(), sets: partSets(), groups: listPartGroups() });
 }
 
 /** 入库：sns 一行一个序列号，没有序列号时给 quantity。 */

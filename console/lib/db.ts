@@ -305,6 +305,23 @@ const MIGRATIONS: string[] = [
   ALTER TABLE sites ADD COLUMN floor_h INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE floor_items ADD COLUMN side TEXT NOT NULL DEFAULT '';
   `,
+  // 备件来源（采购 / 租借，租借的只能用在指定厂商或客户的机器上）和替换组（同一组的型号可以互相替换）。
+  `
+  ALTER TABLE parts ADD COLUMN source TEXT NOT NULL DEFAULT 'purchase';
+  ALTER TABLE parts ADD COLUMN lender TEXT NOT NULL DEFAULT '';
+  ALTER TABLE parts ADD COLUMN lease_for TEXT NOT NULL DEFAULT '';
+  ALTER TABLE parts ADD COLUMN lease_end TEXT NOT NULL DEFAULT '';
+  CREATE TABLE part_groups (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL,
+    models TEXT NOT NULL DEFAULT '[]',
+    asset_models TEXT NOT NULL DEFAULT '[]',
+    note TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  `,
 ];
 
 let opened: { file: string; db: Database } | null = null;

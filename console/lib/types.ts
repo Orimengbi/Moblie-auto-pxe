@@ -841,9 +841,61 @@ export interface Part {
   supplier: string;
   purchaseOrder: string;
   warrantyEnd: string;
+  /** 采购的随便用；租借的只能用在 leaseFor 里列的厂商或客户的机器上。 */
+  source: PartSource;
+  /** 从谁那里借的，例如 H3C。 */
+  lender: string;
+  /** 逗号分隔的厂商或客户名，空着就按 lender 算。 */
+  leaseFor: string;
+  /** 要还的日期。 */
+  leaseEnd: string;
   note: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export type PartSource = "purchase" | "lease";
+
+/** 替换组：同一类型里可以互相替换的型号，例如两种 4T 硬盘。组里的型号能用在硬件采集里有这些型号的机器上，或者 assetModels 列的机型上。 */
+export interface PartGroup {
+  id: string;
+  name: string;
+  kind: PartKind;
+  models: string[];
+  /** 硬件采集看不到的部件（风扇、电源等）按机型指定能用在哪些机器上。 */
+  assetModels: string[];
+  note: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** 一组能互相替换的备件（替换组，或者没进组的单个型号）的库存和能用的主机数。 */
+export interface PartSet {
+  key: string;
+  groupId: string | null;
+  name: string;
+  kind: PartKind;
+  models: string[];
+  /** 在库件数，其中租借的几件。 */
+  stock: number;
+  leased: number;
+  /** 有这些型号、或者机型对得上的主机数。 */
+  hosts: number;
+  /** 至少有一件在库备件能用上的主机数（租借的受限制）。 */
+  usableHosts: number;
+}
+
+/** 一台主机上的一组：这台装了几个，库里能给它用的几件，租借限制挡掉的几件。 */
+export interface AssetPartSet {
+  key: string;
+  groupId: string | null;
+  name: string;
+  kind: PartKind;
+  models: string[];
+  installed: number;
+  usable: number;
+  blocked: number;
+  blockedBy: string[];
 }
 
 export interface PartEvent {

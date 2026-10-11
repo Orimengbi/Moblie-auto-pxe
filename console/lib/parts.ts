@@ -3,7 +3,7 @@ import { addEvent, getAsset } from "./assets.ts";
 import { db, transaction, type SqlValue } from "./db.ts";
 import { getSite } from "./racks.ts";
 import { assertDate, cleanText } from "./validate.ts";
-import type { HwChange, HwComponent, HwKind, Part, PartEvent, PartKind, PartStatus } from "./types.ts";
+import type { Asset, HwChange, HwComponent, HwKind, Part, PartEvent, PartKind, PartSource, PartStatus } from "./types.ts";
 
 /**
  * 备件：每件一条。在库的放在某个机房的库位里，装上机器的记着装在哪台资产、哪个槽位。
@@ -23,6 +23,10 @@ const COLUMNS: [keyof Part, string][] = [
   ["supplier", "supplier"],
   ["purchaseOrder", "purchase_order"],
   ["warrantyEnd", "warranty_end"],
+  ["source", "source"],
+  ["lender", "lender"],
+  ["leaseFor", "lease_for"],
+  ["leaseEnd", "lease_end"],
   ["note", "note"],
 ];
 
@@ -93,6 +97,55 @@ function assertSn(sn: string, selfId = ""): string {
   return sn;
 }
 
+interface SourceInput {
+  source?: string;
+  lender?: string;
+  leaseFor?: string;
+  leaseEnd?: string;
+}
+
+/** 来源一栏：采购的把租借信息清掉；租借的必须写从谁借的。 */
+function sourceFields(input: SourceInput, current?: Pick<Part, "source" | "lender" | "leaseFor" | "leaseEnd">): Pick<Part, "source" | "lender" | "leaseFor" | "leaseEnd"> {
+  const source = (input.source ?? current?.source ?? "purchase") as PartSource;
+  if (source !== "purchase" && source !== "lease") throw new Error("来源只能是采购或租借");
+  if (source === "purchase") return { source, lender: "", leaseFor: "", leaseEnd: "" };
+  const lender = input.lender !== undefined ? cleanText(input.lender, 80) : current?.lender || "";
+  if (!lender) throw new Error("租借的备件要写从谁那里借的");
+  const leaseFor = (input.leaseFor !== undefined ? cleanText(input.leaseFor, 200) : current?.leaseFor || "")
+    .split(/[,，;；、]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .join(", ");
+  const leaseEnd = input.leaseEnd !== undefined ? assertDate(cleanText(input.leaseEnd, 10), "归还日期") : current?.leaseEnd || "";
+  return { source, lender, leaseFor, leaseEnd };
+}
+
+/** 租借的备件能用在哪些厂商或客户的机器上；没填就是出借方自己的。 */
+export function leaseTargets(part: Pick<Part, "source" | "lender" | "leaseFor">): string[] {
+  if (part.source !== "lease") return [];
+  const list = part.leaseFor.split(",").map((item) => item.trim()).filter(Boolean);
+  return list.length ? list : [part.lender];
+}
+
+/** 机器的厂商、所属客户的代码和名称，拿来对租借限制。 */
+export function assetOwners(asset: Pick<Asset, "vendor" | "customerId">): string[] {
+  const names = [asset.vendor];
+  if (asset.customerId) {
+    const customer = db().prepare("SELECT code, name FROM customers WHERE id = ?").get(asset.customerId);
+    if (customer) names.push(String(customer.code), String(customer.name));
+  }
+  return names.filter(Boolean);
+}
+
+/** 不分大小写，互相包含就算对上：「Giga」对得上「Giga Computing」。 */
+export function leaseAllows(targets: string[], owners: string[]): boolean {
+  const lower = owners.map((owner) => owner.toLowerCase());
+  return targets.some((target) => {
+    const t = target.toLowerCase();
+    return lower.some((owner) => owner.includes(t) || t.includes(owner));
+  });
+}
+
 function siteOrNull(id: unknown): string | null {
   if (!id) return null;
   if (!getSite(String(id))) throw new Error("选的机房不存在");
@@ -104,7 +157,7 @@ export function partLabel(part: Pick<Part, "kind" | "model" | "sn">): string {
   return [PART_KINDS[part.kind], part.model, part.sn ? `SN ${part.sn}` : "无序列号"].filter(Boolean).join(" ");
 }
 
-export interface ReceiveInput {
+export interface ReceiveInput extends SourceInput {
   kind?: string;
   model?: string;
   vendor?: string;
@@ -131,6 +184,7 @@ export function receiveParts(input: ReceiveInput, actor: string): Part[] {
   const repeated = sns.find((sn, index) => sns.findIndex((other) => other.toUpperCase() === sn.toUpperCase()) !== index);
   if (repeated) throw new Error(`序列号 ${repeated} 写了两遍`);
   const warrantyEnd = assertDate(cleanText(input.warrantyEnd, 10), "保修到期");
+  const source = sourceFields(input);
   return transaction(db(), () => {
     const now = new Date().toISOString();
     const siteId = siteOrNull(input.siteId);
@@ -150,19 +204,21 @@ export function receiveParts(input: ReceiveInput, actor: string): Part[] {
         supplier: cleanText(input.supplier, 120),
         purchaseOrder: cleanText(input.purchaseOrder, 120),
         warrantyEnd,
+        ...source,
         note: cleanText(input.note, 1000),
         createdAt: now,
         updatedAt: now,
       };
       insertPart(part);
-      addPartEvent(part.id, "in", `入库${siteId ? `到 ${getSite(siteId)?.code}${part.bin ? ` ${part.bin}` : ""}` : ""}`, actor);
+      const lease = part.source === "lease" ? `，从 ${part.lender} 租借，只能用于 ${leaseTargets(part).join("、")}` : "";
+      addPartEvent(part.id, "in", `入库${siteId ? `到 ${getSite(siteId)?.code}${part.bin ? ` ${part.bin}` : ""}` : ""}${lease}`, actor);
       made.push(part);
     }
     return made;
   });
 }
 
-export interface PartEdit {
+export interface PartEdit extends SourceInput {
   kind?: string;
   model?: string;
   vendor?: string;
@@ -193,6 +249,7 @@ export function updatePart(id: string, input: PartEdit, actor: string): Part {
       next.warrantyEnd = assertDate(cleanText(input.warrantyEnd, 10), "保修到期");
     }
     if (input.note !== undefined) next.note = cleanText(input.note, 1000);
+    if (input.source !== undefined || input.lender !== undefined || input.leaseFor !== undefined || input.leaseEnd !== undefined) Object.assign(next, sourceFields(input, part));
     if (!next.model) throw new Error("型号必填");
     const changed = COLUMNS.filter(([key]) => part[key] !== next[key]).map(([key]) => key);
     if (!changed.length) return part;
@@ -236,6 +293,9 @@ export function installPart(id: string, assetId: string, slot: string, actor: st
     const asset = getAsset(assetId);
     if (!asset) throw new Error("资产不存在");
     if (part.status !== "stock" && part.status !== "removed") throw new Error(`${partLabel(part)} 现在是「${PART_STATUS[part.status]}」，不能装`);
+    if (part.source === "lease" && !leaseAllows(leaseTargets(part), assetOwners(asset))) {
+      throw new Error(`${partLabel(part)} 是从 ${part.lender} 租借的，只能用于 ${leaseTargets(part).join("、")}，${asset.tag} 不是`);
+    }
     const next: Part = { ...part, status: "installed", assetId, slot: cleanText(slot, 80), updatedAt: new Date().toISOString() };
     writePart(next);
     addPartEvent(id, "install", `装到 ${asset.tag}${next.slot ? `（${next.slot}）` : ""}`, actor, ticketId);
@@ -339,6 +399,10 @@ export function registerPart(
       supplier: "",
       purchaseOrder: "",
       warrantyEnd: "",
+      source: "purchase",
+      lender: "",
+      leaseFor: "",
+      leaseEnd: "",
       note: "",
       createdAt: now,
       updatedAt: now,
