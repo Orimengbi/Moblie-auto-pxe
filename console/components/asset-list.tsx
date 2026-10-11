@@ -572,7 +572,7 @@ export function AssetList({
       <Stack spacing={1.5} sx={{ borderTop: 1, borderColor: "divider", pt: 2 }}>
         <Typography variant="h3">批量任务</Typography>
         <Typography variant="body2" sx={{ color: "text.secondary" }}>
-          在上面的列表里勾选机器。控制台用自己的 SSH 密钥登录系统地址执行，装机时会写入这把公钥；不是这里装的机器要自己把公钥放进 root 的 authorized_keys。
+          在上面的列表里勾选机器。控制台用自己的 SSH 密钥登录系统地址执行，装机时会写入这把公钥；不是这里装的机器要自己把公钥放进 root 的 authorized_keys；控制台到不了的网段可以在「设置 → SSH 跳板机」里配成经跳板机登录。
         </Typography>
         <ProjectTaskRunner picked={picked} installed={installed} onPick={setPicked} files={files} revoke={false} />
       </Stack>

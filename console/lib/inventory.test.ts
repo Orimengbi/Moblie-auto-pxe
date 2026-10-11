@@ -550,7 +550,7 @@ test("inventory tasks collect both sources, keep history and feed the baseline",
   const offline = async () => ({ code: 255, output: "ssh: connect to host 10.0.0.5 port 22: No route to host\n", timedOut: false });
   const failed = await runTask(createTask({ kind: "inventory", projectId: project.id, assetIds: [serverId] }, context).id, offline, () => async () => Promise.reject(new RedfishAuthError("BMC 拒绝了账号（HTTP 401）")));
   assert.equal(failed.targets[0].status, "unreachable");
-  assert.match(failed.targets[0].output, /SSH 登录失败[\s\S]*BMC（192\.168\.77\.151）：BMC 拒绝了账号/);
+  assert.match(failed.targets[0].output, /SSH 登录 10\.0\.0\.5 失败[\s\S]*BMC（192\.168\.77\.151）：BMC 拒绝了账号/);
   assert.equal(listInventory(serverId).length, 3, "失败的不存");
 
   // 只要 BMC：没有系统地址也能采。
