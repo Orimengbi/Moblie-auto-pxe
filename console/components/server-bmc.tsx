@@ -22,7 +22,7 @@ import Typography from "@mui/material/Typography";
 import ArrowDownwardOutlined from "@mui/icons-material/ArrowDownwardOutlined";
 import ArrowUpwardOutlined from "@mui/icons-material/ArrowUpwardOutlined";
 import { StatusChip } from "@/components/mui/status-chip";
-import type { Tone } from "@/lib/asset-labels";
+import { isHgxFirmware, type Tone } from "@/lib/asset-labels";
 import type { BmcOverview, FirmwareItem } from "@/lib/bmc-redfish";
 import { api } from "@/lib/client-api";
 import type { StreamStatus } from "@/lib/redfish-events";
@@ -512,7 +512,8 @@ function MediaSection({ view, busy, onSend }: { view: View; busy: boolean; onSen
 }
 
 function FirmwareSection({ assetId, view, busy, onSend }: { assetId: string; view: View; busy: boolean; onSend: (body: unknown) => Promise<boolean> }) {
-  const [items, setItems] = useState<FirmwareItem[] | null>(null);
+  const [data, setData] = useState<{ readAt: string; items: FirmwareItem[] | null }>({ readAt: "", items: null });
+  const [scope, setScope] = useState<"all" | "hgx" | "other">("all");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [open, setOpen] = useState(false);
@@ -520,13 +521,25 @@ function FirmwareSection({ assetId, view, busy, onSend }: { assetId: string; vie
   const [component, setComponent] = useState("");
   const update = view.firmwareUpdate;
 
-  async function loadInventory() {
-    setLoading(true);
-    const result = await api<{ items: FirmwareItem[] }>(`/api/assets/${assetId}/redfish/firmware`);
-    setLoading(false);
-    if (result.ok) setItems(result.data.items);
-    setError(result.error);
-  }
+  // 平常显示上次读到的，点按钮才连 BMC 读。
+  const loadInventory = useCallback(
+    async (refresh: boolean) => {
+      if (refresh) setLoading(true);
+      const result = await api<{ readAt: string; items: FirmwareItem[] | null }>(`/api/assets/${assetId}/redfish/firmware${refresh ? "?refresh=1" : ""}`);
+      setLoading(false);
+      if (result.ok) setData(result.data);
+      setError(result.error);
+    },
+    [assetId],
+  );
+
+  useEffect(() => {
+    void loadInventory(false);
+  }, [loadInventory]);
+
+  const items = data.items;
+  const hgxCount = items?.filter((item) => isHgxFirmware(item.id)).length || 0;
+  const shownItems = items?.filter((item) => scope === "all" || (scope === "hgx") === isHgxFirmware(item.id)) || null;
 
   async function submit() {
     const what = component || "自动识别的部件";
@@ -542,9 +555,6 @@ function FirmwareSection({ assetId, view, busy, onSend }: { assetId: string; vie
       title="固件"
       extra={
         <Stack direction="row" spacing={1}>
-          <Button size="small" disabled={loading} onClick={() => void loadInventory()}>
-            {items ? "重新读版本" : "读全部版本"}
-          </Button>
           {update ? (
             <Button size="small" disabled={busy} onClick={() => setOpen(true)}>
               升级
@@ -568,15 +578,18 @@ function FirmwareSection({ assetId, view, busy, onSend }: { assetId: string; vie
           {error}
         </Typography>
       ) : null}
-      {loading ? (
-        <Typography variant="body2" sx={{ color: "text.secondary" }}>
-          正在读（GPU 机器有上百项，要一会儿）
-        </Typography>
+      <ReadBar readAt={data.readAt} reading={loading} onRead={() => void loadInventory(true)} hint="正在逐项读固件版本，HGX 机器要十几秒" />
+      {items && hgxCount ? (
+        <ToggleButtonGroup size="small" exclusive value={scope} onChange={(_, value) => value && setScope(value)} sx={{ my: 1 }}>
+          <ToggleButton value="all">全部 {items.length}</ToggleButton>
+          <ToggleButton value="hgx">HGX {hgxCount}</ToggleButton>
+          <ToggleButton value="other">主板 {items.length - hgxCount}</ToggleButton>
+        </ToggleButtonGroup>
       ) : null}
-      {items ? (
+      {shownItems ? (
         <Box component="table" sx={{ width: "100%", borderCollapse: "collapse", "& td": { py: 0.5, pr: 2, borderBottom: 1, borderColor: "divider", fontSize: 13, verticalAlign: "top" } }}>
           <tbody>
-            {items.map((item) => (
+            {shownItems.map((item) => (
               <tr key={item.id}>
                 <td>{item.name}</td>
                 <Box component="td" sx={{ fontFamily: MONO }}>

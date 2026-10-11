@@ -1,6 +1,14 @@
-import type { AlertSeverity, AlertSource, AlertStatus, Asset, AssetStatus, AssetType, Customer, FloorItemKind, PartKind, PartSource, PartStatus, RackFacing, TagSettings, TicketKind, TicketPriority, TicketStatus } from "./types.ts";
+import type { AlertSeverity, AlertSource, AlertStatus, Asset, AssetStatus, BmcSettingKind, AssetType, Customer, FloorItemKind, PartKind, PartSource, PartStatus, RackFacing, TagSettings, TicketKind, TicketPriority, TicketStatus } from "./types.ts";
 
 /** 页面和服务端共用的名称。这个文件不碰数据库，客户端组件可以直接引用。 */
+/** HGX 底板（GPU、NVSwitch、HMC、ConnectX 等）的固件，Id 都以 HGX_ 开头。 */
+export function isHgxFirmware(id: string): boolean {
+  return id.startsWith("HGX_");
+}
+
+/** 批量采集时顺带经 Redfish 读的几样。 */
+export const BMC_SETTING_LABEL: Record<BmcSettingKind, string> = { overview: "BMC 设置", bios: "BIOS 设置", firmware: "固件版本" };
+
 export const ASSET_TYPES: Record<AssetType, string> = {
   server: "服务器",
   switch: "网络设备",

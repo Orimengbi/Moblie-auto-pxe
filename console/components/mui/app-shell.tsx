@@ -29,6 +29,7 @@ import GroupOutlined from "@mui/icons-material/GroupOutlined";
 import Inventory2Outlined from "@mui/icons-material/Inventory2Outlined";
 import LogoutOutlined from "@mui/icons-material/LogoutOutlined";
 import ManageAccountsOutlined from "@mui/icons-material/ManageAccountsOutlined";
+import MemoryOutlined from "@mui/icons-material/MemoryOutlined";
 import MenuBookOutlined from "@mui/icons-material/MenuBookOutlined";
 import MenuOutlined from "@mui/icons-material/MenuOutlined";
 import NotificationsOutlined from "@mui/icons-material/NotificationsOutlined";
@@ -62,6 +63,7 @@ function groups(role: string, counts: NavCounts): { title: string; links: NavLin
         },
         { href: "/tickets", label: "工单", icon: AssignmentOutlined, badge: { value: counts.tickets, color: "primary" } },
         { href: "/parts", label: "备件", icon: Inventory2Outlined },
+        { href: "/firmware", label: "固件版本", icon: MemoryOutlined },
         { href: "/catalog", label: "型号字典", icon: MenuBookOutlined },
         { href: "/customers", label: "客户", icon: GroupOutlined },
       ],
