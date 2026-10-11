@@ -77,7 +77,7 @@ export const IPMI_SEL_PATH = "ipmi:sel";
 /** 读 SEL 不带 -v，整份 SEL 一千多条也要给够时间。 */
 const quietExec: IpmiExec = (host, user, password, args) => defaultIpmiExec(host, user, password, args, 90_000, false);
 
-async function withAccount<T>(asset: Asset, exec: IpmiExec, work: (account: { user: string; password: string }) => Promise<T>): Promise<T> {
+export async function withAccount<T>(asset: Asset, exec: IpmiExec, work: (account: { user: string; password: string }) => Promise<T>): Promise<T> {
   if (!asset.bmcIp) throw new Error(`${asset.sn} 还没有 BMC 地址`);
   const accounts = assetBmcAccounts(asset);
   if (!accounts.length) throw new Error(`${asset.sn} 没有 BMC 账号密码`);

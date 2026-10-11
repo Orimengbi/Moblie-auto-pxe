@@ -296,7 +296,7 @@ function saveState(state: MonitorState): void {
 // ---------- 单台检查 ----------
 
 /** SDR 缓存：第一次 dump 下来，以后 -S 读本地文件，sdr elist 从几十秒降到几秒。 */
-function sdrCachePath(assetId: string): string {
+export function sdrCachePath(assetId: string): string {
   return path.join(dataDir(), "monitor", `${assetId}.sdr`);
 }
 
