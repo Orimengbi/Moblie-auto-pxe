@@ -159,6 +159,77 @@ test("lists PCIe slots, drive bays and network ports with their usage", () => {
   assert.equal(portSummary(ports, "net"), "网口 5 个：有链路 2，没链路 3，配了地址 1");
 });
 
+/** 技嘉 G894：BIOS 一个 SXM 槽报 4 条（设备 + 交换芯片下行口）、一堆 NotAvailable；网卡开了 SR-IOV 和 switchdev。 */
+const G894 = `
+===PXEINV slots===
+Handle 0x0030, DMI type 9, 17 bytes
+System Slot Information
+\tDesignation: SXM1_GPU0
+\tType: x16 PCI Express 5 x16
+\tCurrent Usage: In Use
+\tLength: Long
+\tBus Address: 0000:71:00.0
+
+Handle 0x0031, DMI type 9, 17 bytes
+System Slot Information
+\tDesignation: SXM1_GPU0
+\tType: x16 PCI Express 5 x16
+\tCurrent Usage: Unknown
+\tLength: Long
+\tBus Address: 0000:70:01.2
+
+Handle 0x0032, DMI type 9, 17 bytes
+System Slot Information
+\tDesignation: NotAvailable
+\tType: <OUT OF SPEC> <OUT OF SPEC>
+\tCurrent Usage: Unknown
+\tBus Address: Unknown
+
+Handle 0x0033, DMI type 9, 17 bytes
+System Slot Information
+\tDesignation: NotAvailable
+\tType: <OUT OF SPEC> <OUT OF SPEC>
+\tCurrent Usage: Unknown
+\tBus Address: Unknown
+
+===PXEINV pcidev===
+0000:70:01.2|0x060400|/sys/devices/pci0000:70/0000:70:01.2
+0000:71:00.0|0x020000|/sys/devices/pci0000:70/0000:70:01.2/0000:71:00.0
+0000:03:00.0|0x020000|/sys/devices/pci0000:00/0000:03:00.0
+0000:03:00.1|0x020000|/sys/devices/pci0000:00/0000:03:00.1
+0000:03:00.2|0x020000|/sys/devices/pci0000:00/0000:03:00.2
+
+===PXEINV lspci===
+0000:71:00.0 "Ethernet controller" "Mellanox Technologies" "CX8 Family [ConnectX-8]" -r00 "" ""
+
+===PXEINV netlink===
+eth_p1_r1|1|up|400000|0000:03:00.0||74:25:54:5d:35:c2|p0|
+eth_p2_r1|1|up|400000|0000:03:00.1||74:25:54:5d:35:c3|p1|
+eth_rep_r1|1|up||0000:03:00.0||e2:c3:e6:62:8c:9b|pf0vf0|
+eth_vf_r1|1|up|400000|0000:03:00.2||00:89:cb:25:00:00||0000:03:00.0
+
+===PXEINV ipaddr===
+[{"ifname":"eth_vf_r1","addr_info":[{"family":"inet","local":"43.0.11.70","prefixlen":31,"scope":"global"}]}]
+
+===PXEINV end===
+`;
+
+test("one row per BIOS slot name; VFs and representors are not ports of their own", () => {
+  const { ports } = parseOsInventory(G894);
+  assert.deepEqual(
+    ports.filter((port) => port.group === "pcie").map((port) => [port.name, port.used, port.device]),
+    [["SXM1_GPU0", true, "Mellanox CX8 Family [ConnectX-8]"]],
+    "同名的 4 条合成一条，NotAvailable 占位不列",
+  );
+  assert.deepEqual(
+    ports.filter((port) => port.group === "net").map((port) => [port.name, port.ips, port.note]),
+    [
+      ["eth_p1_r1", ["43.0.11.70/31"], "地址配在 VF eth_vf_r1 上"],
+      ["eth_p2_r1", [], undefined],
+    ],
+  );
+});
+
 test("older collections without the port sections still parse", () => {
   const { ports } = parseOsInventory("===PXEINV end===\n");
   assert.deepEqual(ports, []);

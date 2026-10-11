@@ -48,7 +48,8 @@ done
 sec netlink
 for n in /sys/class/net/*; do
   [ -e "$n/device" ] || continue
-  echo "$(basename "$n")|$(cat "$n/carrier" 2>/dev/null)|$(cat "$n/operstate" 2>/dev/null)|$(cat "$n/speed" 2>/dev/null)|$(pci_of "$n")|$(basename "$(readlink "$n/master" 2>/dev/null)" 2>/dev/null)|$(cat "$n/address" 2>/dev/null)"
+  pf=""; [ -e "$n/device/physfn" ] && pf=$(basename "$(readlink -f "$n/device/physfn")")
+  echo "$(basename "$n")|$(cat "$n/carrier" 2>/dev/null)|$(cat "$n/operstate" 2>/dev/null)|$(cat "$n/speed" 2>/dev/null)|$(pci_of "$n")|$(basename "$(readlink "$n/master" 2>/dev/null)" 2>/dev/null)|$(cat "$n/address" 2>/dev/null)|$(cat "$n/phys_port_name" 2>/dev/null)|$pf"
 done
 sec ipaddr
 have ip && ip -j addr 2>/dev/null
@@ -67,6 +68,12 @@ const PCI_ADDRESS = /^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]$/i;
  * （技嘉 G894 的 NVME0~7、P0_M.2），其实是硬盘位，放进硬盘位一组。
  */
 export const DRIVE_BAY = /NVMe|U\.2|E[13]\.S|EDSFF|M\.2|SFF-8639/i;
+
+/** BIOS 填的占位名字。 */
+function clean(value: string | undefined): string {
+  const text = (value || "").trim();
+  return /^(not ?available|n\/a|none|unknown|to be filled by o\.e\.m\.?|default string)?$/i.test(text) ? "" : text;
+}
 
 function rows(text: string | undefined, width: number): string[][] {
   return (text || "")
@@ -145,10 +152,12 @@ export function parseOsPorts(sections: Map<string, string>, components: HwCompon
 
   /** 地址本身或挂在它下面的终端设备（桥不算）。 */
   const endpointsUnder = (addr: string) => pcidevs.filter((dev) => !dev.cls.startsWith("0x06") && (dev.addr === addr || dev.path.includes(`/${addr}/`)));
+  // SR-IOV 的 VF 是虚拟出来的，不算插在槽上的设备。
   const describe = (devs: PciDev[]) =>
     deviceText(
       devs
-        .filter((dev, index) => devs.findIndex((other) => other.addr.slice(0, -2) === dev.addr.slice(0, -2) && lspci.get(other.addr)?.name === lspci.get(dev.addr)?.name) === index)
+        .filter((dev) => !/Virtual Function/i.test(lspci.get(dev.addr)?.name || ""))
+        .filter((dev, index, list) => list.findIndex((other) => other.addr.slice(0, -2) === dev.addr.slice(0, -2) && lspci.get(other.addr)?.name === lspci.get(dev.addr)?.name) === index)
         .map((dev) => {
           const ns = nvmeByPci.get(dev.addr);
           if (ns) {
@@ -160,6 +169,9 @@ export function parseOsPorts(sections: Map<string, string>, components: HwCompon
     );
 
   // PCIe 插槽和 M.2 槽：BIOS 报的占用不一定准，找到设备就算占用。
+  // 同一个插槽名 BIOS 可能报好几条（G894 的 SXM1_GPU0 有 4 条，一条是插着的设备，三条是 PCIe 交换芯片的下行口），按名字合成一条。
+  // 名字是 NotAvailable 这类占位、又没有总线地址和占用信息的条目是 BIOS 填表凑数的，不列。
+  const slotRows = new Map<string, { port: HwPort; devs: PciDev[]; valid: boolean }>();
   const slotIds = new Set<string>();
   const slotPrefixes = new Set<string>();
   const dmi = parseDmidecode(sections.get("slots") || "").filter((block) => block.type === 9);
@@ -174,15 +186,24 @@ export function parseOsPorts(sections: Map<string, string>, components: HwCompon
     const used = devs.length ? true : /in use/i.test(usage) ? true : /available/i.test(usage) ? false : null;
     const m2 = /M\.2/i.test(fields.Type || "");
     const bay = m2 || DRIVE_BAY.test(fields.Designation || "") || DRIVE_BAY.test(fields.Type || "");
-    ports.push({
-      group: bay ? "drive" : "pcie",
-      name: fields.Designation || `插槽 ${fields.ID || ports.length + 1}`,
-      type: slotType(fields.Type || "", fields.Length || ""),
-      used,
-      device: describe(devs),
-      ...(used && !devs.length ? { note: "BIOS 报占用，系统里没找到设备" } : {}),
-      ...(!valid ? { note: "BIOS 没给总线地址，占用按 BIOS 报的" } : {}),
-    });
+    const designation = clean(fields.Designation);
+    if (!designation && !valid && used === null) continue;
+    const name = designation || `插槽 ${fields.ID || slotRows.size + 1}`;
+    const same = slotRows.get(name);
+    if (same) {
+      same.devs.push(...devs);
+      same.valid ||= valid;
+      if (used === true || same.port.used === null) same.port.used = used;
+      continue;
+    }
+    const port: HwPort = { group: bay ? "drive" : "pcie", name, type: slotType(fields.Type || "", fields.Length || ""), used, device: "" };
+    slotRows.set(name, { port, devs: [...devs], valid });
+    ports.push(port);
+  }
+  for (const { port, devs, valid } of slotRows.values()) {
+    port.device = describe(devs);
+    if (port.used && !devs.length) port.note = "BIOS 报占用，系统里没找到设备";
+    if (!valid) port.note = "BIOS 没给总线地址，占用按 BIOS 报的";
   }
 
   // 热插拔槽：没在 SMBIOS 表里的，装着 NVMe 的算盘位，其余的列进 PCIe。
@@ -262,8 +283,20 @@ export function parseOsPorts(sections: Map<string, string>, components: HwCompon
   } catch {
     // ip 没装或输出不是 JSON，只是没有 IP 一列。
   }
-  for (const [name, carrier, operstate, speed, pci, master, mac] of rows(sections.get("netlink"), 7)) {
+  // SR-IOV 的 VF 和 switchdev 的 representor 是虚拟口，不单列；VF 上配的地址记到它所在的物理口上。
+  const netRows = rows(sections.get("netlink"), 9);
+  const vfsOf = new Map<string, { names: string[]; ips: string[] }>();
+  for (const [name, , , , , , , , physfn] of netRows) {
+    if (!physfn) continue;
+    const vfs = vfsOf.get(physfn.toLowerCase()) || { names: [], ips: [] };
+    vfs.names.push(name);
+    vfs.ips.push(...(ipsOf.get(name) || []));
+    vfsOf.set(physfn.toLowerCase(), vfs);
+  }
+  for (const [name, carrier, operstate, speed, pci, master, mac, portName, physfn] of netRows) {
     if (!PCI_ADDRESS.test(pci)) continue; // USB 网卡（比如 BMC 的虚拟网口）不算
+    if (physfn || /^pf\d+(vf|sf)\d+$/.test(portName)) continue;
+    const vfs = vfsOf.get(pci.toLowerCase());
     const link = carrier === "1" ? "up" : carrier === "0" ? "down" : operstate === "down" ? "disabled" : operstate === "up" ? "up" : "";
     const masterIps = master ? ipsOf.get(master) || [] : [];
     ports.push({
@@ -274,10 +307,12 @@ export function parseOsPorts(sections: Map<string, string>, components: HwCompon
       device: "",
       link,
       speed: link === "up" ? gbps(Number(speed)) : "",
-      ips: ipsOf.get(name) || [],
+      ips: [...(ipsOf.get(name) || []), ...(vfs?.ips || [])],
       ...(master ? { master: masterIps.length ? `${master}（${masterIps.join("，")}）` : master } : {}),
       mac,
+      ...(vfs ? { note: vfs.ips.length ? `地址配在 VF ${vfs.names.join("、")} 上` : `VF：${vfs.names.join("、")}` } : {}),
     });
+    vfsOf.delete(pci.toLowerCase());
   }
   for (const [dev, port, state, phys, rate, layer, pci, netdevs] of rows(sections.get("ibports"), 8)) {
     if (netdevs.trim() || !/infiniband/i.test(layer)) continue;

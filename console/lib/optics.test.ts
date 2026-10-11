@@ -148,8 +148,18 @@ test("judges each lane against the module's own alarm thresholds", () => {
   assert.equal(powerLevel(-30), "ok", "没有门限就不判断");
 });
 
+test("a bonded second port has no RDMA device of its own and is read by PCI address", () => {
+  const ports = parseOptics(`===PXEOPT mlx mlx5_bond_0 0000:33:00.0 eth0===\n${MLX_PORT}\n===PXEOPT mlx 0000:33:00.1 0000:33:00.1 eth1===\n${MLX_PORT.replace("MODSN0001", "MODSN0002")}\n===PXEOPT end===\n`);
+  assert.deepEqual(ports.map((port) => [port.port, port.rdma, port.pci, port.sn]), [
+    ["eth0", "mlx5_bond_0", "0000:33:00.0", "MODSN0001"],
+    ["eth1", "", "0000:33:00.1", "MODSN0002"],
+  ]);
+  assert.equal(opticsComponents(ports).length, 2);
+});
+
 test("the optics script only reads", () => {
-  assert.match(OPTICS_SCRIPT, /mlxlink -d "\$\(basename "\$d"\)" -m --json/);
+  assert.match(OPTICS_SCRIPT, /mlxlink -d "\$\(basename "\$p"\)" -m --json/);
+  assert.match(OPTICS_SCRIPT, /physfn" \] && continue/, "VF 不读");
   assert.match(OPTICS_SCRIPT, /ethtool -m /);
   assert.doesNotMatch(OPTICS_SCRIPT, /mlxlink[^\n]*(--port_state|-a |--pc|--set|--fec|--speeds)/);
   assert.doesNotMatch(OPTICS_SCRIPT, /\b(rm|dd|reboot|ip link set)\b/);
