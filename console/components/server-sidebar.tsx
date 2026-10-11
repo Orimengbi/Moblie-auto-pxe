@@ -21,7 +21,6 @@ import { ServerBmc } from "@/components/server-bmc";
 import { ServerBmcLogs } from "@/components/server-bmc-logs";
 import { ServerFirmware } from "@/components/server-firmware";
 import { ServerInventory } from "@/components/server-inventory";
-import { ServerOptics } from "@/components/server-optics";
 import { ServerPorts } from "@/components/server-ports";
 import { ServerSensors } from "@/components/server-sensors";
 import { ServerTopology } from "@/components/server-topology";
@@ -38,7 +37,7 @@ interface Row {
   description: string;
 }
 
-export type Tab = "overview" | "netports" | "monitor" | "sensors" | "bmc" | "bios" | "firmware" | "bmclogs" | "tickets" | "hardware" | "ports" | "topology" | "optics" | "history";
+export type Tab = "overview" | "netports" | "monitor" | "sensors" | "bmc" | "bios" | "firmware" | "bmclogs" | "tickets" | "hardware" | "ports" | "topology" | "history";
 
 interface TabContext {
   row: Row;
@@ -63,7 +62,6 @@ const TABS: { id: Tab; label: string; where: "server" | "network" | "all"; rende
   { id: "hardware", label: "硬件配置", where: "server", render: ({ row, projectId }) => <ServerInventory projectId={projectId} row={row} /> },
   { id: "ports", label: "接口", where: "server", render: ({ row }) => <ServerPorts row={row} /> },
   { id: "topology", label: "GPU / 网卡拓扑", where: "server", render: ({ row }) => <ServerTopology row={row} /> },
-  { id: "optics", label: "光模块", where: "server", render: ({ row }) => <ServerOptics row={row} /> },
   { id: "history", label: "记录", where: "all", render: ({ row }) => <AssetHistory assetId={row.id} /> },
 ];
 

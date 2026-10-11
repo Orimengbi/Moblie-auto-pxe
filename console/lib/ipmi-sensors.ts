@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { withAccount } from "./ipmi-sel.ts";
 import { defaultIpmiExec, type IpmiExec } from "./ipmi-remote.ts";
 import { parseSdr, sdrCachePath, sensorSeverity } from "./monitor.ts";
@@ -66,8 +67,38 @@ export function parseSensorList(text: string, sdrText: Map<string, SensorReading
   return out;
 }
 
+export interface SensorsReading {
+  at: string;
+  sensors: SensorRow[];
+}
+
+/** 最近一次读到的传感器表，和 SDR 缓存放在一起。 */
+export function sensorsPath(assetId: string): string {
+  return path.join(path.dirname(sdrCachePath(assetId)), `${assetId}.sensors.json`);
+}
+
+/** 上次手动读到的传感器表，没读过是 null。 */
+export function lastSensors(assetId: string): SensorsReading | null {
+  if (!/^[0-9a-f-]{36}$/.test(assetId)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(sensorsPath(assetId), "utf8")) as SensorsReading;
+  } catch {
+    return null;
+  }
+}
+
+/** 读一次并存下，页面打开时显示这次的结果。 */
+export async function readAndSaveSensors(asset: Asset): Promise<SensorsReading> {
+  const reading = await readSensors(asset);
+  const file = sensorsPath(asset.id);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(`${file}.tmp`, JSON.stringify(reading));
+  fs.renameSync(`${file}.tmp`, file);
+  return reading;
+}
+
 /** 读整张传感器表。用监控存下的 SDR 缓存，一台两三秒。 */
-export async function readSensors(asset: Asset, exec: IpmiExec = (host, user, password, args) => defaultIpmiExec(host, user, password, args, 120_000, false)): Promise<{ at: string; sensors: SensorRow[] }> {
+export async function readSensors(asset: Asset, exec: IpmiExec = (host, user, password, args) => defaultIpmiExec(host, user, password, args, 120_000, false)): Promise<SensorsReading> {
   return withAccount(asset, exec, async (account) => {
     const cache = sdrCachePath(asset.id);
     const cached = fs.existsSync(cache) ? ["-S", cache] : [];
