@@ -1,5 +1,5 @@
 import { CATALOG_CATEGORIES, CATALOG_FIELDS, modelKey } from "./catalog-schema.ts";
-import { listAssets } from "./assets.ts";
+import { listAssets, updateAsset } from "./assets.ts";
 import { db, transaction, type SqlValue } from "./db.ts";
 import { latestInventory } from "./store.ts";
 import { cleanText } from "./validate.ts";
@@ -64,6 +64,7 @@ function cleanAttrs(category: CatalogCategory, input: Record<string, unknown> | 
     if (field.number) {
       const n = Number(text);
       if (!Number.isFinite(n)) throw new Error(`「${field.label}」要填数字`);
+      if (field.key === "heightU" && (!Number.isInteger(n) || n < 0 || n > 60)) throw new Error("高度要填 0 到 60 的整数");
       out[field.key] = n;
     } else out[field.key] = text;
   }
@@ -115,6 +116,50 @@ export function saveCatalogEntry(id: string | null, input: CatalogInput): Catalo
     write(entry);
     return entry;
   });
+}
+
+export interface HeightSync {
+  height: number;
+  updated: number;
+  failed: { sn: string; error: string }[];
+}
+
+const RACKED_CATEGORIES = new Set<CatalogCategory>(["server", "switch", "pdu"]);
+
+/** 保存前后比一下：高度、型号、别名或分类变了，同型号资产的占用 U 才需要跟着改。只改了备注之类的不碰资产。 */
+export function heightChanged(before: CatalogEntry | null, after: CatalogEntry): boolean {
+  if (!RACKED_CATEGORIES.has(after.category) || typeof after.attrs.heightU !== "number") return false;
+  if (!before) return true;
+  const names = (entry: CatalogEntry) => [entry.model, ...entry.aliases].map(modelKey).sort().join("|");
+  return before.attrs.heightU !== after.attrs.heightU || before.category !== after.category || names(before) !== names(after);
+}
+
+/**
+ * 把字典里的高度写到同型号（含别名）、同类型的资产上。每台单独改，会和机柜里别的设备重叠、或超出机柜的那台不改，
+ * 报出来让人去机柜页挪。
+ */
+export function syncAssetHeights(entry: CatalogEntry, actor: string): HeightSync | null {
+  const height = entry.attrs.heightU;
+  if (!RACKED_CATEGORIES.has(entry.category) || typeof height !== "number") return null;
+  const names = new Set([entry.model, ...entry.aliases].map(modelKey));
+  const result: HeightSync = { height, updated: 0, failed: [] };
+  for (const asset of listAssets()) {
+    if (asset.type !== entry.category || asset.uHeight === height || !names.has(modelKey(asset.model))) continue;
+    try {
+      updateAsset(asset.id, { uHeight: height }, actor);
+      result.updated++;
+    } catch (error) {
+      result.failed.push({ sn: asset.sn, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  return result;
+}
+
+/** 审计里记一句同步结果。 */
+export function syncDetail(sync: HeightSync | null | undefined): string {
+  if (!sync) return "";
+  const failed = sync.failed.map((item) => `${item.sn}：${item.error}`).join("；");
+  return `同型号资产占用 U 改成 ${sync.height}：改了 ${sync.updated} 台${sync.failed.length ? `，${sync.failed.length} 台没改（${failed}）` : ""}`.slice(0, 2000);
 }
 
 export function deleteCatalogEntry(id: string): CatalogEntry {

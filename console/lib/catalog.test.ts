@@ -54,3 +54,36 @@ test("autofill creates models from inventory and only fills blanks", async () =>
   assert.equal(specText(x710), "10G · 2 · RJ45 · Ethernet");
   assert.deepEqual(catalog.autofillCatalog(), { created: [], updated: [] }, "再跑一次没有变化");
 });
+
+test("server height in the catalog flows to assets of that model", async () => {
+  const racks = await import("./racks.ts");
+  const dc = racks.createDatacenter({ code: "HDC", name: "高度测试" });
+  const site = racks.createSite({ datacenterId: dc.id, code: "HT1", name: "高度机房" });
+  const [r1] = racks.createRacks({ siteId: site.id, prefix: "H", from: 1, to: 1, pad: 2, heightU: 42 }).created;
+  const loose = assets.createAsset({ sn: "h-loose", model: "HX-8U" }, "t");
+  const low = assets.createAsset({ sn: "h-low", model: "hx-8u", rackId: r1.id, uStart: 1 }, "t");
+  const blocker = assets.createAsset({ sn: "h-blocker", model: "OTHER", rackId: r1.id, uStart: 20 }, "t");
+  const high = assets.createAsset({ sn: "h-high", model: "HX-8U-ALIAS", rackId: r1.id, uStart: 15 }, "t");
+  assert.equal(loose.uHeight, 1, "字典里还没有，默认 1U");
+
+  const entry = catalog.saveCatalogEntry(null, { category: "server", model: "HX-8U", aliases: "HX-8U-ALIAS", attrs: { heightU: 8 } });
+  assert.ok(catalog.heightChanged(null, entry));
+  const sync = catalog.syncAssetHeights(entry, "admin")!;
+  assert.equal(sync.updated, 2);
+  assert.deepEqual(sync.failed.map((item) => item.sn), ["H-HIGH"], "U15 起 8U 会压到 U20 的设备，不改");
+  assert.match(sync.failed[0].error, /U20 已经放了 H-BLOCKER/);
+  assert.deepEqual([assets.getAsset(loose.id)?.uHeight, assets.getAsset(low.id)?.uHeight, assets.getAsset(high.id)?.uHeight, assets.getAsset(blocker.id)?.uHeight], [8, 8, 1, 1]);
+  assert.ok(assets.listEvents(low.id).some((event) => /占用 U：1 → 8/.test(event.text)), "资产履历里记一笔");
+
+  const renamed = catalog.saveCatalogEntry(entry.id, { note: "只改备注" });
+  assert.equal(catalog.heightChanged(entry, renamed), false, "只改备注不动资产");
+  assert.throws(() => catalog.saveCatalogEntry(entry.id, { attrs: { heightU: "2.5" } }), /0 到 60 的整数/);
+
+  assert.equal(assets.createAsset({ sn: "h-new", model: "HX-8U" }, "t").uHeight, 8, "新入库没填占用 U 按字典");
+  assert.equal(assets.createAsset({ sn: "h-new-2", model: "HX-8U", uHeight: 4 }, "t").uHeight, 4, "填了的按填的");
+  const other = assets.createAsset({ sn: "h-switch", model: "OTHER" }, "t");
+  assert.equal(assets.updateAsset(other.id, { model: "HX-8U" }, "t").uHeight, 8, "改成这个型号也按字典");
+  assert.equal(assets.updateAsset(other.id, { uHeight: 6 }, "t").uHeight, 6, "之后单台手改可以");
+  assert.equal(assets.updateAsset(other.id, { owner: "x" }, "t").uHeight, 6, "改别的字段不回到字典值");
+  assert.equal(assets.createAsset({ sn: "h-pdu", type: "pdu", model: "HX-8U" }, "t").uHeight, 1, "类型不同不套用");
+});

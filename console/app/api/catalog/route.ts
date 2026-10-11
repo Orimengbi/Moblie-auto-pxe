@@ -1,6 +1,6 @@
 import { audited, jsonError, readJson } from "@/lib/api";
 import { requireAdmin } from "@/lib/auth";
-import { listCatalog, saveCatalogEntry, type CatalogInput } from "@/lib/catalog";
+import { heightChanged, listCatalog, saveCatalogEntry, syncAssetHeights, syncDetail, type CatalogInput } from "@/lib/catalog";
 
 export const dynamic = "force-dynamic";
 
@@ -10,10 +10,17 @@ export function GET() {
 
 export async function POST(request: Request) {
   try {
-    requireAdmin(request);
+    const identity = requireAdmin(request);
     const body = await readJson<CatalogInput>(request);
-    const entry = await audited(request, (made) => ({ action: "新建字典型号", targetType: "catalog", targetId: made?.id, targetLabel: `${body.vendor || ""} ${body.model || ""}`.trim() }), () => saveCatalogEntry(null, body));
-    return Response.json(entry, { status: 201 });
+    const saved = await audited(
+      request,
+      (made) => ({ action: "新建字典型号", targetType: "catalog", targetId: made?.id, targetLabel: `${body.vendor || ""} ${body.model || ""}`.trim(), detail: syncDetail(made?.heightSync) }),
+      () => {
+        const entry = saveCatalogEntry(null, body);
+        return { ...entry, heightSync: heightChanged(null, entry) ? syncAssetHeights(entry, identity.user.username) : null };
+      },
+    );
+    return Response.json(saved, { status: 201 });
   } catch (error) {
     return jsonError(error);
   }
