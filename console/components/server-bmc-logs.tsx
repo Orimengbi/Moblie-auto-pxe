@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
+import Checkbox from "@mui/material/Checkbox";
+import FormControlLabel from "@mui/material/FormControlLabel";
 import MenuItem from "@mui/material/MenuItem";
 import Paper from "@mui/material/Paper";
 import Stack from "@mui/material/Stack";
@@ -18,7 +20,7 @@ import { formatTime } from "@/lib/time";
 const MONO = "var(--font-geist-mono), monospace";
 const PAGE = 50;
 
-function Entry({ at, severity, title, detail }: { at: string; severity: string; title: string; detail: string }) {
+function Entry({ at, severity, title, detail, hint }: { at: string; severity: string; title: string; detail: string; hint?: string }) {
   return (
     <Stack direction="row" spacing={1.5} sx={{ py: 0.75, borderBottom: 1, borderColor: "divider", alignItems: "flex-start" }}>
       <Typography variant="caption" sx={{ fontFamily: MONO, color: "text.secondary", width: 132, flexShrink: 0, pt: 0.25 }}>
@@ -36,9 +38,20 @@ function Entry({ at, severity, title, detail }: { at: string; severity: string; 
             {detail}
           </Typography>
         ) : null}
+        {hint ? (
+          <Typography variant="caption" component="div" sx={{ color: "text.secondary" }}>
+            处理建议：{hint}
+          </Typography>
+        ) : null}
       </Box>
     </Stack>
   );
+}
+
+/** HGX 的日志前面标出来源（HGX_BMC_0、HGX_Baseboard_0），主 BMC、主系统的按 BMC / 主机。 */
+function serviceLabel(item: LogServiceView): string {
+  const owner = item.source ? item.source.replace(/^HGX_Baseboard_\d+$/, "HGX 底板").replace(/^HGX_BMC_\d+$/, "HGX BMC") : item.owner === "manager" ? "BMC" : "主机";
+  return `${owner} · ${item.name}`;
 }
 
 /** AMI 的 SEL 把 IPMI 字段拼成一长串，挑出有用的几个。 */
@@ -54,9 +67,10 @@ export function ServerBmcLogs({ assetId }: { assetId: string }) {
   const [services, setServices] = useState<LogServiceView[] | null>(null);
   const [service, setService] = useState("");
   const [page, setPage] = useState(0);
-  const [log, setLog] = useState<{ total: number; entries: LogEntryView[] } | null>(null);
+  const [log, setLog] = useState<{ total: number; entries: LogEntryView[]; sorted: boolean } | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [alertsOnly, setAlertsOnly] = useState(false);
 
   const loadEvents = useCallback(async () => {
     const result = await api<{ stream: StreamStatus; events: BmcEvent[] }>(`/api/assets/${assetId}/redfish/events`);
@@ -82,11 +96,13 @@ export function ServerBmcLogs({ assetId }: { assetId: string }) {
   const loadLog = useCallback(async () => {
     if (!service) return;
     setLoading(true);
-    const result = await api<{ total: number; entries: LogEntryView[] }>(`/api/assets/${assetId}/redfish/logs?service=${encodeURIComponent(service)}&page=${page}`);
+    const result = await api<{ total: number; entries: LogEntryView[]; sorted: boolean }>(
+      `/api/assets/${assetId}/redfish/logs?service=${encodeURIComponent(service)}&page=${page}${alertsOnly ? "&alerts=1" : ""}`,
+    );
     setLoading(false);
     if (result.ok) setLog(result.data);
     setError(result.error);
-  }, [assetId, service, page]);
+  }, [assetId, service, page, alertsOnly]);
 
   useEffect(() => {
     void loadLog();
@@ -140,11 +156,24 @@ export function ServerBmcLogs({ assetId }: { assetId: string }) {
           >
             {(services || []).map((item) => (
               <MenuItem key={item.path} value={item.path}>
-                {item.owner === "manager" ? "BMC" : "主机"} · {item.name}
+                {serviceLabel(item)}
                 {item.count !== null ? `（${item.count}）` : ""}
               </MenuItem>
             ))}
           </TextField>
+          <FormControlLabel
+            control={
+              <Checkbox
+                size="small"
+                checked={alertsOnly}
+                onChange={(event) => {
+                  setAlertsOnly(event.target.checked);
+                  setPage(0);
+                }}
+              />
+            }
+            label={<Typography variant="body2">只看告警</Typography>}
+          />
           <Box sx={{ flex: 1 }} />
           <Button size="small" disabled={loading || page === 0} onClick={() => setPage(page - 1)}>
             较新
@@ -174,16 +203,28 @@ export function ServerBmcLogs({ assetId }: { assetId: string }) {
             正在读日志列表
           </Typography>
         ) : null}
+        {log && !log.sorted && log.entries.length ? (
+          <Typography variant="caption" sx={{ display: "block", mb: 1, color: "text.secondary" }}>
+            日志太大，按编号倒着翻{alertsOnly ? "，只看告警也只筛当前这一页" : ""}
+          </Typography>
+        ) : null}
         {log ? (
           log.entries.length ? (
             <Box sx={{ opacity: loading ? 0.5 : 1 }}>
               {log.entries.map((entry) => (
-                <Entry key={entry.id} at={entry.created} severity={entry.severity} title={selSummary(entry)} detail={[entry.id && `#${entry.id}`, entry.messageId !== "0x000000" ? entry.messageId : "", entry.sensor].filter(Boolean).join("  ")} />
+                <Entry
+                  key={entry.id}
+                  at={entry.created}
+                  severity={entry.severity}
+                  title={selSummary(entry)}
+                  detail={[entry.id && `#${entry.id}`, entry.device, entry.messageId !== "0x000000" ? entry.messageId : "", entry.sensor, entry.resolved === true ? "已恢复" : ""].filter(Boolean).join("  ")}
+                  hint={entry.resolution}
+                />
               ))}
             </Box>
           ) : (
             <Typography variant="body2" sx={{ color: "text.secondary" }}>
-              这个日志是空的
+              {alertsOnly ? (log.sorted ? "这个日志里没有告警" : "这一页里没有告警") : "这个日志是空的"}
             </Typography>
           )
         ) : null}

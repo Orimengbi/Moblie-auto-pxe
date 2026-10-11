@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 type Context = { params: Promise<{ id: string }> };
 
-/** 不带 service：列出有哪些日志和条数；带 service（日志的 Redfish 路径）和 page：读一页，新的在前。 */
+/** 不带 service：列出有哪些日志和条数；带 service（日志的 Redfish 路径）和 page：读一页，新的在前。alerts=1 只给告警。 */
 export async function GET(request: Request, context: Context) {
   try {
     const { id } = await context.params;
@@ -16,7 +16,7 @@ export async function GET(request: Request, context: Context) {
     const { session } = await assetSession(id);
     if (!service) return Response.json({ services: await listLogServices(session) });
     const page = Math.max(0, Number(url.searchParams.get("page")) || 0);
-    return Response.json(await readLog(session, service, page));
+    return Response.json(await readLog(session, service, page, 50, url.searchParams.get("alerts") === "1"));
   } catch (error) {
     return jsonError(error);
   }

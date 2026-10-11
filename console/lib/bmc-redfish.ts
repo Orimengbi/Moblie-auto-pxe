@@ -780,6 +780,8 @@ export interface LogServiceView {
   name: string;
   /** manager 是 BMC 的日志，system 是主机的（BIOS、Crashdump 等）。 */
   owner: "manager" | "system";
+  /** 不是主 BMC / 主系统的才有，如 HGX_BMC_0、HGX_Baseboard_0（HGX 底板的告警都在这里）。 */
+  source: string;
   count: number | null;
   canClear: boolean;
 }
@@ -792,28 +794,52 @@ export interface LogEntryView {
   messageId: string;
   entryType: string;
   sensor: string;
+  /** NVIDIA HGX 的日志才有：出问题的部件、处理建议、是否已恢复。 */
+  device: string;
+  resolution: string;
+  resolved: boolean | null;
 }
 
+/** 主 BMC、主系统的日志排前面，HGX 这类附带的排后面。 */
 export async function listLogServices(session: BmcSession): Promise<LogServiceView[]> {
   const out: LogServiceView[] = [];
-  for (const [owner, base] of [["manager", session.paths.manager], ["system", session.paths.system]] as const) {
-    if (!base) continue;
-    const doc = await rfFind(session, base);
-    const services = await expandMembers(session, link(doc, "LogServices")).catch(() => [] as RedfishDoc[]);
-    for (const service of services) {
-      const entries = link(service, "Entries");
-      let count: number | null = null;
-      if (entries) {
-        const head = await session.request("GET", `${entries}?$top=1`).catch(() => null);
-        count = num(head?.body?.["Members@odata.count"]);
+  const seen = new Set<string>();
+  for (const [owner, collection, main] of [
+    ["manager", "/redfish/v1/Managers", session.paths.manager],
+    ["system", "/redfish/v1/Systems", session.paths.system],
+  ] as const) {
+    const others = members(await rfFind(session, collection)).filter((item) => item !== main);
+    for (const base of [main, ...others]) {
+      if (!base) continue;
+      const doc = await rfFind(session, base);
+      const services = await expandMembers(session, link(doc, "LogServices")).catch(() => [] as RedfishDoc[]);
+      for (const service of services) {
+        const path = str(service["@odata.id"]);
+        if (!path || seen.has(path)) continue;
+        seen.add(path);
+        const entries = link(service, "Entries");
+        let count: number | null = null;
+        if (entries) {
+          const head = await session.request("GET", `${entries}?$top=1`).catch(() => null);
+          count = num(head?.body?.["Members@odata.count"]);
+        }
+        out.push({
+          id: str(service.Id),
+          path,
+          name: str(service.Name || service.Id),
+          owner,
+          source: base === main ? "" : base.split("/").pop() || "",
+          count,
+          canClear: Boolean(action(service, "#LogService.ClearLog")),
+        });
       }
-      out.push({ id: str(service.Id), path: str(service["@odata.id"]), name: str(service.Name || service.Id), owner, count, canClear: Boolean(action(service, "#LogService.ClearLog")) });
     }
   }
   return out;
 }
 
 function entryView(doc: RedfishDoc): LogEntryView {
+  const nvidia = (doc.Oem as { Nvidia?: { Device?: unknown } } | undefined)?.Nvidia;
   return {
     id: str(doc.Id),
     created: str(doc.EventTimestamp || doc.Created),
@@ -822,21 +848,73 @@ function entryView(doc: RedfishDoc): LogEntryView {
     messageId: str(doc.MessageId),
     entryType: str(doc.EntryType),
     sensor: [str(doc.SensorType), doc.SensorNumber !== undefined ? `#${str(doc.SensorNumber)}` : ""].filter(Boolean).join(" "),
+    device: str(nvidia?.Device),
+    resolution: str(doc.Resolution),
+    resolved: typeof doc.Resolved === "boolean" ? doc.Resolved : null,
   };
 }
 
-/** 一页日志，新的在前。page 从 0 起。 */
-export async function readLog(session: BmcSession, servicePath: string, page: number, size = 50): Promise<{ total: number; entries: LogEntryView[] }> {
+/** 条数不超过这个就整份读下来按时间排；HGX 底板的日志是循环写的，编号和先后对不上。 */
+const LOG_FULL_READ = 3000;
+
+/** 告警：Warning、Critical，没标级别的不算。 */
+export function isAlertEntry(entry: Pick<LogEntryView, "severity">): boolean {
+  return /^(warning|critical)$/i.test(entry.severity);
+}
+
+/** 新的在前：先比时间，时间一样（AMI 的 SEL 常常整批一个时间）比编号。 */
+export function newestFirst(a: LogEntryView, b: LogEntryView): number {
+  const at = Date.parse(a.created) || 0;
+  const bt = Date.parse(b.created) || 0;
+  if (at !== bt) return bt - at;
+  const an = Number(a.id);
+  const bn = Number(b.id);
+  return Number.isFinite(an) && Number.isFinite(bn) ? bn - an : b.id.localeCompare(a.id);
+}
+
+/** 整份读一个日志。BMC 一次给不全时按 nextLink 或 $skip 接着读；只给链接没给内容时返回 null。 */
+async function readWholeLog(session: BmcSession, entries: string, total: number): Promise<RedfishDoc[] | null> {
+  const list: RedfishDoc[] = [];
+  let doc = await rfGet(session, entries);
+  for (;;) {
+    const got = Array.isArray(doc.Members) ? (doc.Members as RedfishDoc[]) : [];
+    if (got.length && Object.keys(got[0]).length <= 1) return null;
+    list.push(...got);
+    if (!got.length || list.length >= total) break;
+    const next = str(doc["Members@odata.nextLink"]);
+    doc = await rfGet(session, next || `${entries}?$skip=${list.length}&$top=${total - list.length}`);
+  }
+  return list;
+}
+
+/**
+ * 一页日志，新的在前。page 从 0 起。alerts 为 true 只给 Warning、Critical。
+ * 不太大的日志整份读下来按时间排；太大的（如 HGX 的 Journal）按编号倒着取，只看告警也只在这一页里筛。
+ */
+export async function readLog(
+  session: BmcSession,
+  servicePath: string,
+  page: number,
+  size = 50,
+  alerts = false,
+): Promise<{ total: number; entries: LogEntryView[]; sorted: boolean }> {
   if (!/^\/redfish\/v1\/(Managers|Systems)\/[^/]+\/LogServices\/[^/?#]+$/.test(servicePath)) throw new RedfishFailure("日志路径不对");
   const service = await rfGet(session, servicePath);
   const entries = link(service, "Entries");
-  if (!entries) return { total: 0, entries: [] };
+  if (!entries) return { total: 0, entries: [], sorted: true };
   const head = await rfGet(session, `${entries}?$top=1`);
   const total = num(head["Members@odata.count"]) ?? 0;
+  if (total && total <= LOG_FULL_READ) {
+    const whole = await readWholeLog(session, entries, total);
+    if (whole) {
+      const all = whole.map(entryView).filter((entry) => !alerts || isAlertEntry(entry)).sort(newestFirst);
+      return { total: all.length, entries: all.slice(page * size, (page + 1) * size), sorted: true };
+    }
+  }
   // BMC 按编号从旧到新给，倒着取一页。
   const end = Math.max(0, total - page * size);
   const skip = Math.max(0, end - size);
-  if (end === 0) return { total, entries: [] };
+  if (end === 0) return { total, entries: [], sorted: false };
   // AMI 不接受 $skip=0。
   const doc = await rfGet(session, `${entries}?${skip ? `$skip=${skip}&` : ""}$top=${end - skip}`);
   let list = Array.isArray(doc.Members) ? (doc.Members as RedfishDoc[]) : [];
@@ -851,7 +929,7 @@ export async function readLog(session: BmcSession, servicePath: string, page: nu
     }
     list = full;
   }
-  return { total, entries: list.map(entryView).reverse() };
+  return { total, entries: list.map(entryView).reverse().filter((entry) => !alerts || isAlertEntry(entry)), sorted: false };
 }
 
 export async function clearLog(session: BmcSession, servicePath: string): Promise<void> {

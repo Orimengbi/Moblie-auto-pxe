@@ -21,7 +21,20 @@ function fakeBmc(password = "good") {
   const calls: { method: string; path: string; body?: unknown; headers?: Record<string, string> }[] = [];
   const sel = Array.from({ length: 77 }, (_, index) => ({ "@odata.id": `/redfish/v1/Managers/Self/LogServices/SEL/Entries/${index + 1}`, Id: String(index + 1), Created: "2026-10-10T06:57:23+00:00", Severity: "OK", Message: `entry ${index + 1}`, MessageId: "0x000000" }));
   docs.set("/redfish/v1/", { Systems: { "@odata.id": "/redfish/v1/Systems" }, Managers: { "@odata.id": "/redfish/v1/Managers" } });
-  docs.set("/redfish/v1/Systems", { Members: [{ "@odata.id": "/redfish/v1/Systems/Self" }] });
+  // HGX 底板的日志是循环写的：前面是新写的，后面接着出厂时的旧记录。
+  const hgx = [
+    ...Array.from({ length: 30 }, (_, index) => ({ Id: String(200 + index), Created: `2026-10-10T04:${String(index).padStart(2, "0")}:00+00:00`, Severity: index % 3 ? "OK" : "Warning", Message: `new ${index}`, Resolution: "Check GPU", Oem: { Nvidia: { Device: `GPU_${index % 8}` } }, Resolved: false })),
+    ...Array.from({ length: 40 }, (_, index) => ({ Id: String(80 + index), Created: `2024-02-27T17:${String(index).padStart(2, "0")}:00+00:00`, Severity: "Critical", Message: `factory ${index}` })),
+  ];
+  docs.set("/redfish/v1/Systems", { Members: [{ "@odata.id": "/redfish/v1/Systems/Self" }, { "@odata.id": "/redfish/v1/Systems/HGX_Baseboard_0" }] });
+  docs.set("/redfish/v1/Systems/HGX_Baseboard_0", { LogServices: { "@odata.id": "/redfish/v1/Systems/HGX_Baseboard_0/LogServices" } });
+  docs.set("/redfish/v1/Systems/HGX_Baseboard_0/LogServices", { Members: [{ "@odata.id": "/redfish/v1/Systems/HGX_Baseboard_0/LogServices/EventLog" }] });
+  docs.set("/redfish/v1/Systems/HGX_Baseboard_0/LogServices/EventLog", {
+    "@odata.id": "/redfish/v1/Systems/HGX_Baseboard_0/LogServices/EventLog",
+    Id: "EventLog",
+    Name: "Event Log",
+    Entries: { "@odata.id": "/redfish/v1/Systems/HGX_Baseboard_0/LogServices/EventLog/Entries" },
+  });
   docs.set("/redfish/v1/Managers", { Members: [{ "@odata.id": "/redfish/v1/Managers/Self" }] });
   docs.set("/redfish/v1/Systems/Self", {
     "@odata.etag": 'W/"1"',
@@ -92,6 +105,12 @@ function fakeBmc(password = "good") {
       const skip = Number(params.get("$skip") || 0);
       const top = Number(params.get("$top") || 50);
       return { status: 200, body: { "Members@odata.count": sel.length, Members: sel.slice(skip, skip + Math.min(top, 50)) }, headers: {} };
+    }
+    if (base.endsWith("/HGX_Baseboard_0/LogServices/EventLog/Entries")) {
+      const params = new URLSearchParams(query);
+      const skip = Number(params.get("$skip") || 0);
+      const top = Number(params.get("$top") || 1000);
+      return { status: 200, body: { "Members@odata.count": hgx.length, Members: hgx.slice(skip, skip + Math.min(top, 1000)) }, headers: {} };
     }
     if (base === "/redfish/v1/UpdateService/FirmwareInventory") {
       // 和 AMI 一样：分页 50 条；$expand 时 HGX_ 条目（HMC 代理的）只有 Id、Name，没有 Version。
@@ -187,6 +206,25 @@ test("log pages come newest first", async () => {
   assert.deepEqual([second.entries[0].id, second.entries.at(-1)?.id, second.entries.length], ["27", "1", 27]);
   assert.deepEqual((await bmc.readLog(session, service, 2)).entries, []);
   await assert.rejects(bmc.readLog(session, "/redfish/v1/../etc", 0), /路径不对/);
+});
+
+test("HGX logs are listed and sorted by time, alerts can be filtered", async () => {
+  setup();
+  const session = await bmc.openSession(asset);
+  const services = await bmc.listLogServices(session);
+  const hgx = services.find((item) => item.source === "HGX_Baseboard_0");
+  assert.equal(hgx?.count, 70);
+
+  const first = await bmc.readLog(session, hgx!.path, 0, 10);
+  assert.equal(first.sorted, true);
+  assert.deepEqual(first.entries.slice(0, 2).map((entry) => entry.id), ["229", "228"]);
+  assert.equal(first.entries[0].device, "GPU_5");
+  assert.equal(first.entries[0].resolution, "Check GPU");
+
+  const alerts = await bmc.readLog(session, hgx!.path, 0, 100, true);
+  assert.equal(alerts.total, 50);
+  assert.ok(alerts.entries.every((entry) => entry.severity !== "OK"));
+  assert.equal(alerts.entries.at(-1)?.message, "factory 0");
 });
 
 test("sse frames are split and AMI event payloads parsed", () => {

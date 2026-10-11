@@ -11,11 +11,11 @@ import { OPTICS_SCRIPT, parseOptics } from "./optics.ts";
 import { bmcColdReset, defaultIpmiExec, firstWorkingAccount, ipmiFailure, type IpmiExec } from "./ipmi-remote.ts";
 import { crawlRedfish, RedfishAuthError, redfishGetter, type RedfishGet } from "./redfish.ts";
 import { renderRevokeScript } from "./render.ts";
-import { assetBmcAccounts, getAsset } from "./assets.ts";
+import { addEvent, assetBmcAccounts, getAsset } from "./assets.ts";
 import { BMC_SETTING_LABEL } from "./asset-labels.ts";
 import { collectSettings } from "./bmc-redfish.ts";
 import { filePayloadPath, getFile, getProject, getTask, listMachines, listNicPlans, readLeasesText, saveInventory, saveOptics, writeTask } from "./store.ts";
-import type { Asset, BmcSettingKind, HwChange, HwPort, InventorySource, OpticsReading, Machine, NicPlan, RemoteTask, ServerRow, TaskHostSource, TaskKind, TaskTarget, TaskTargetStatus } from "./types.ts";
+import type { Asset, BmcResetVia, BmcSettingKind, HwChange, HwPort, InventorySource, OpticsReading, Machine, NicPlan, RemoteTask, ServerRow, TaskHostSource, TaskKind, TaskTarget, TaskTargetStatus } from "./types.ts";
 
 const OUTPUT_LIMIT = 16000;
 /** 采集脚本的原始输出要整段解析，不能像普通任务那样只留结尾。 */
@@ -86,6 +86,8 @@ export interface TaskInput {
   sources?: InventorySource[];
   /** 采集硬件时顺带读 BMC 设置、BIOS 设置，默认不读。 */
   settings?: BmcSettingKind[];
+  /** 重启 BMC 任务走带外还是带内，默认带外。 */
+  bmcReset?: BmcResetVia;
   name?: string;
   script?: string;
   /** 资产 id。 */
@@ -107,9 +109,18 @@ function boundedInt(value: unknown, fallback: number, min: number, max: number, 
 export function createTask(input: TaskInput, context: HostContext = hostContext()): RemoteTask {
   const project = input.projectId ? getProject(input.projectId) : null;
   if (input.projectId && !project) throw new Error("装机批次不存在");
-  const kind: TaskKind = input.kind === "revoke" || input.kind === "inventory" ? input.kind : "script";
+  const kind: TaskKind = input.kind === "revoke" || input.kind === "inventory" || input.kind === "bmc-reset" ? input.kind : "script";
+  const via: BmcResetVia = input.bmcReset === "inband" ? "inband" : "outband";
   const script =
-    kind === "revoke" ? renderRevokeScript(consolePublicKey()) : kind === "inventory" ? INVENTORY_SCRIPT : (input.script || "").replace(/\r\n/g, "\n");
+    kind === "revoke"
+      ? renderRevokeScript(consolePublicKey())
+      : kind === "inventory"
+        ? INVENTORY_SCRIPT
+        : kind === "bmc-reset"
+          ? via === "inband"
+            ? BMC_RESET_SCRIPT
+            : "# 带外：控制台用资产上的 BMC 账号执行\nipmitool -I lanplus -H <BMC 地址> mc reset cold\n"
+          : (input.script || "").replace(/\r\n/g, "\n");
   if (!script.trim()) throw new Error("脚本是空的");
   if (script.length > 200000) throw new Error("脚本超过 200KB");
   const sources = kind === "inventory" ? (["os", "bmc"] as const).filter((source) => !input.sources || input.sources.includes(source)) : [];
@@ -117,7 +128,8 @@ export function createTask(input: TaskInput, context: HostContext = hostContext(
   if (kind === "inventory" && !sources.length && !settings.length) throw new Error("至少选一种采集方式");
   const settingsName = settings.map((item) => BMC_SETTING_LABEL[item]).join("、");
   const inventoryName = sources.length ? `采集硬件配置${settings.length ? `、${settingsName}` : ""}` : `读取 ${settingsName}`;
-  const defaultName = kind === "revoke" ? "交付清理：撤掉控制台公钥" : kind === "inventory" ? inventoryName : script.trim().split("\n")[0].slice(0, 80);
+  const defaultName =
+    kind === "revoke" ? "交付清理：撤掉控制台公钥" : kind === "inventory" ? inventoryName : kind === "bmc-reset" ? `重启 BMC（${via === "inband" ? "带内" : "带外"}）` : script.trim().split("\n")[0].slice(0, 80);
   const name = (input.name || "").trim().slice(0, 80) || defaultName;
   const fileIds = kind === "script" ? [...new Set(input.fileIds || [])] : [];
   for (const id of fileIds) {
@@ -129,6 +141,19 @@ export function createTask(input: TaskInput, context: HostContext = hostContext(
   const targets: TaskTarget[] = wanted.map((id) => {
     const row = getAsset(id);
     if (!row) throw new Error("选中的机器已经不在资产里，刷新页面再选");
+    if (kind === "bmc-reset" && via === "outband") {
+      // 带外连的是 BMC，任务里「地址」一栏显示 BMC 地址。
+      const ready = Boolean(row.bmcIp && assetBmcAccounts(row).length);
+      return {
+        serverId: row.id,
+        sn: row.sn,
+        host: row.bmcIp || "",
+        hostSource: "",
+        status: ready ? "pending" : "unreachable",
+        exitCode: null,
+        output: ready ? "" : row.bmcIp ? "资产上没有 BMC 账号密码，可以试带内" : "还没有 BMC 地址，可以试带内",
+      } satisfies TaskTarget;
+    }
     const found = resolveAssetHost(row, context);
     // 采集硬件只读 BMC 时不需要系统地址；两边都读时有一边能连就去试。BMC、BIOS 设置也是从 BMC 读。
     const viaBmc = sources.includes("bmc") || settings.length > 0;
@@ -160,6 +185,7 @@ export function createTask(input: TaskInput, context: HostContext = hostContext(
     targets,
     ...(kind === "inventory" ? { inventorySources: [...sources] } : {}),
     ...(settings.length ? { inventorySettings: [...settings] } : {}),
+    ...(kind === "bmc-reset" ? { bmcReset: via } : {}),
     createdAt: new Date().toISOString(),
   };
   if (task.status === "done") task.finishedAt = task.createdAt;
@@ -439,8 +465,6 @@ case "$out" in *"Sent cold reset"*) exit 0 ;; esac
 exit $code
 `;
 
-export type BmcResetVia = "outband" | "inband";
-
 /**
  * 重启 BMC（冷重启，不影响服务器系统）。outband 用资产上的 BMC 账号经网口发 IPMI；
  * inband SSH 进系统，用系统里的 ipmitool 经本机接口发，BMC 网络不通或密码不对时用这个。
@@ -448,7 +472,7 @@ export type BmcResetVia = "outband" | "inband";
 export async function resetBmc(
   assetId: string,
   via: BmcResetVia,
-  deps: { exec?: Exec; ipmi?: IpmiExec; context?: HostContext } = {},
+  deps: { exec?: Exec; ipmi?: IpmiExec; context?: HostContext; host?: string } = {},
 ): Promise<{ message: string }> {
   const asset = getAsset(assetId);
   if (!asset) throw new Error("资产不存在");
@@ -468,7 +492,7 @@ export async function resetBmc(
     return { message: `${asset.sn}：已让 BMC ${asset.bmcIp} 冷重启（带外）。${after}` };
   }
   if (via !== "inband") throw new Error("不支持的重启方式");
-  const { host } = resolveAssetHost(asset, deps.context || hostContext());
+  const host = deps.host || resolveAssetHost(asset, deps.context || hostContext()).host;
   if (!host) throw new Error(`${asset.sn} 找不到系统地址，带内重启不了`);
   const ran = await (deps.exec || defaultExec)("ssh", [...sshOptions(), `root@${host}`, "bash -s"], BMC_RESET_SCRIPT, Date.now() + 90_000);
   const said = ran.output.trim().split("\n").slice(-3).join(" ").slice(0, 200);
@@ -477,6 +501,19 @@ export async function resetBmc(
   if (ran.code === 3) throw new Error(`${asset.sn}（${host}）的系统里没有 ipmitool，先装上（apt/yum install ipmitool）`);
   if (ran.code !== 0) throw new Error(`${asset.sn}（${host}）重启 BMC 失败${said ? `：${said}` : ""}`);
   return { message: `${asset.sn}：已经系统 ${host} 让 BMC 冷重启（带内）。${after}` };
+}
+
+/** 重启 BMC 任务里的一台：成功后在资产记录里记一笔。 */
+async function resetBmcTarget(task: RemoteTask, target: TaskTarget, exec: Exec): Promise<Pick<TaskTarget, "status" | "exitCode" | "output">> {
+  const via = task.bmcReset || "outband";
+  try {
+    const result = await resetBmc(target.serverId, via, { exec, host: via === "inband" ? target.host : undefined });
+    addEvent(target.serverId, "bmc", `重启 BMC（${via === "inband" ? "带内" : "带外"}，任务「${task.name}」）`, "批量任务");
+    return { status: "ok", exitCode: 0, output: `${result.message}\n` };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "重启 BMC 失败";
+    return { status: /SSH 登录|没有回应|找不到系统地址/.test(message) ? "unreachable" : "failed", exitCode: null, output: `${message}\n` };
+  }
 }
 
 /** 在独立进程里跑完一个任务，每台机器状态变化时写回任务文件。 */
@@ -497,7 +534,14 @@ export async function runTask(id: string, exec: Exec = defaultExec, redfish: Red
       target.startedAt = new Date().toISOString();
       writeTask(task);
       try {
-        Object.assign(target, task.kind === "inventory" ? await collectInventory(task, target, exec, redfish) : await runOnHost(task, target, files, exec));
+        Object.assign(
+          target,
+          task.kind === "inventory"
+            ? await collectInventory(task, target, exec, redfish)
+            : task.kind === "bmc-reset"
+              ? await resetBmcTarget(task, target, exec)
+              : await runOnHost(task, target, files, exec),
+        );
       } catch (error) {
         target.status = "failed";
         target.output = error instanceof Error ? error.message : "执行失败";

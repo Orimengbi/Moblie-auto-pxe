@@ -8,7 +8,7 @@ const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pxe-bmc-reset-test-"));
 process.env.PXE_DATA_DIR = temp;
 
 const assets = await import("./assets.ts");
-const { resetBmc } = await import("./remote.ts");
+const { createTask, resetBmc, runTask } = await import("./remote.ts");
 
 const context = { nics: [], machines: [], leases: [], locals: ["10.0.0.1"] };
 
@@ -46,4 +46,21 @@ test("in-band reset runs ipmitool inside the OS over SSH", async () => {
   const noSsh = async () => ({ code: 255, output: "", timedOut: false });
   await assert.rejects(resetBmc(asset.id, "inband", { exec: noSsh, context }), /SSH 登录/);
   await assert.rejects(resetBmc(asset.id, "outband", { context }), /没有 BMC 地址/);
+});
+
+test("bmc reset runs as a task, out-of-band targets show the BMC address", async () => {
+  const withBmc = assets.createAsset({ sn: "bmc-003", bmcIp: "10.0.1.7", bmcUser: "admin", bmcPassword: "secret" }, "tester");
+  const bare = assets.createAsset({ sn: "bmc-004" }, "tester");
+  const outband = createTask({ kind: "bmc-reset", assetIds: [withBmc.id, bare.id] }, context);
+  assert.equal(outband.name, "重启 BMC（带外）");
+  assert.equal(outband.bmcReset, "outband");
+  assert.deepEqual(outband.targets.map((target) => [target.host, target.status]), [["10.0.1.7", "pending"], ["", "unreachable"]]);
+
+  const os = assets.createAsset({ sn: "bmc-005", osAddress: "10.0.0.30", osNetmask: "255.255.255.0" }, "tester");
+  const inband = createTask({ kind: "bmc-reset", bmcReset: "inband", assetIds: [os.id] }, context);
+  assert.equal(inband.targets[0].host, "10.0.0.30");
+  const done = await runTask(inband.id, async () => ({ code: 0, output: "Sent cold reset command to MC\n", timedOut: false }));
+  assert.equal(done.targets[0].status, "ok");
+  assert.match(done.targets[0].output, /带内/);
+  assert.ok(assets.listEvents(os.id).some((event) => /重启 BMC（带内/.test(event.text)));
 });
