@@ -19,7 +19,7 @@ import { taskTargetTone } from "@/lib/asset-labels";
 import type { RemoteTask, TaskTargetStatus } from "@/lib/types";
 import { formatTime } from "@/lib/time";
 
-const KIND: Record<RemoteTask["kind"], string> = { script: "执行脚本", inventory: "采集硬件配置", revoke: "交付清理" };
+const KIND: Record<RemoteTask["kind"], string> = { script: "执行脚本", inventory: "采集硬件配置", revoke: "交付清理", "bmc-reset": "重启 BMC" };
 
 const MONO = "var(--font-geist-mono), monospace";
 const OUTPUT_SX = { m: 0, overflow: "auto", borderRadius: 1, bgcolor: "action.hover", p: 1, fontFamily: MONO, fontSize: 12, whiteSpace: "pre-wrap" } as const;

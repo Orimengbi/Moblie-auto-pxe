@@ -24,14 +24,14 @@ export function auditRequest(request: Request, identity: Identity | null, entry:
 
 /** 批量任务的审计：一台时对象是那台资产，多台时是任务本身。 */
 export function auditTask(request: Request, identity: Identity, task: RemoteTask): void {
-  const kind = task.kind === "inventory" ? "采集硬件" : task.kind === "revoke" ? "交付清理" : "执行脚本";
+  const kind = task.kind === "inventory" ? "采集硬件" : task.kind === "revoke" ? "交付清理" : task.kind === "bmc-reset" ? "重启 BMC" : "执行脚本";
   const sns = task.targets.map((target) => target.sn);
   auditRequest(request, identity, {
     action: `发起任务：${kind}`,
     targetType: "task",
     targetId: task.targets.length === 1 ? task.targets[0].serverId : task.id,
     targetLabel: `${task.name}（${sns.length} 台）`,
-    detail: `${sns.slice(0, 50).join(" ")}${sns.length > 50 ? " …" : ""}${task.kind === "script" ? `\n${task.script.slice(0, 1500)}` : ""}`,
+    detail: `${sns.slice(0, 50).join(" ")}${sns.length > 50 ? " …" : ""}${task.kind === "script" ? `\n${task.script.slice(0, 1500)}` : ""}${task.kind === "bmc-reset" ? `\n${task.bmcReset === "inband" ? "带内" : "带外"}` : ""}`,
   });
 }
 

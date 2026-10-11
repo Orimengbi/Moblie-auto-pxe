@@ -277,7 +277,7 @@ export function ServerBmc({ assetId }: { assetId: string }) {
   );
 }
 
-/** 「重启 BMC」：带外经 BMC 网口发 IPMI，带内 SSH 进系统发。BMC 刚重启连不上，所以完了不自动重读。 */
+/** 「重启 BMC」：建一个重启 BMC 任务，带外经 BMC 网口发 IPMI，带内 SSH 进系统发。BMC 刚重启连不上，所以完了不自动重读。 */
 function BmcResetButton({ assetId, onDone }: { assetId: string; onDone: (ok: boolean, text: string) => void }) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const [busy, setBusy] = useState(false);
@@ -287,9 +287,9 @@ function BmcResetButton({ assetId, onDone }: { assetId: string; onDone: (ok: boo
     const how = via === "inband" ? "带内（SSH 进系统用 ipmitool）" : "带外（经 BMC 网口）";
     if (!window.confirm(`${how}冷重启 BMC？\n\n服务器系统不受影响，1~3 分钟内 BMC 网页、远程控制台和 Redfish 都连不上。`)) return;
     setBusy(true);
-    const result = await api<{ message: string }>(`/api/assets/${assetId}/control`, "POST", { bmcReset: via });
+    const result = await api<{ name: string }>("/api/tasks", "POST", { kind: "bmc-reset", bmcReset: via, assetIds: [assetId], concurrency: 1, timeoutSec: 120 });
     setBusy(false);
-    onDone(result.ok, result.ok ? result.data.message : result.error);
+    onDone(result.ok, result.ok ? `已建任务「${result.data.name}」，在右上角「任务」里看结果。BMC 要 1~3 分钟才能重新连上` : result.error);
   }
 
   return (

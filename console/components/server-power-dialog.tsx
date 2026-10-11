@@ -15,6 +15,7 @@ import Stack from "@mui/material/Stack";
 import ToggleButton from "@mui/material/ToggleButton";
 import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
 import Typography from "@mui/material/Typography";
+import { api } from "@/lib/client-api";
 
 type PowerAction = "on" | "soft" | "off" | "reset" | "cycle";
 type BootDevice = "pxe" | "usb" | "cdrom" | "disk" | "bios";
@@ -83,6 +84,22 @@ export function ServerPowerDialog({ targets, onClose }: { targets: Target[]; onC
     router.refresh();
   }
 
+  /** 重启 BMC 建成一个批量任务，所有选中的机器在一个任务里，结果在右上角「任务」里看。 */
+  async function resetBmc(via: "outband" | "inband") {
+    if (!window.confirm(`${names}：${via === "inband" ? "带内" : "带外"}${BMC_RESET_CONFIRM}。确定？`)) return;
+    setPending(true);
+    setResults([]);
+    const result = await api<{ id: string; name: string }>("/api/tasks", "POST", {
+      kind: "bmc-reset",
+      bmcReset: via,
+      assetIds: targets.map((target) => target.id),
+      concurrency: 10,
+      timeoutSec: 120,
+    });
+    setPending(false);
+    setResults([result.ok ? { sn: "", ok: true, text: `已建任务「${result.data.name}」，在右上角「任务」里看每台的结果` } : { sn: "", ok: false, text: result.error }]);
+  }
+
   function applyBoot() {
     const label = BOOT.find((item) => item.id === boot)?.label;
     const body = { boot, persistent, legacy, ...(restart ? { power: "cycle" } : {}) };
@@ -127,10 +144,10 @@ export function ServerPowerDialog({ targets, onClose }: { targets: Target[]; onC
         <Stack component="section" spacing={1} sx={{ borderTop: 1, borderColor: "divider", pt: 2, mt: 2 }}>
           <Typography variant="subtitle2">BMC</Typography>
           <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap" }}>
-            <Button variant="outlined" disabled={pending} onClick={() => run({ bmcReset: "outband" }, BMC_RESET_CONFIRM)}>
+            <Button variant="outlined" disabled={pending} onClick={() => void resetBmc("outband")}>
               重启 BMC（带外）
             </Button>
-            <Button variant="outlined" disabled={pending} onClick={() => run({ bmcReset: "inband" }, BMC_RESET_CONFIRM)}>
+            <Button variant="outlined" disabled={pending} onClick={() => void resetBmc("inband")}>
               重启 BMC（带内）
             </Button>
           </Stack>

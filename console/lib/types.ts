@@ -325,7 +325,9 @@ export const DEFAULT_STATE: ApplianceState = {
   },
 };
 
-export type TaskKind = "script" | "revoke" | "inventory";
+export type TaskKind = "script" | "revoke" | "inventory" | "bmc-reset";
+/** 重启 BMC 的方式：outband 经 BMC 网口发 IPMI，inband SSH 进系统用系统里的 ipmitool 发。 */
+export type BmcResetVia = "outband" | "inband";
 export type TaskStatus = "running" | "done";
 export type TaskTargetStatus = "pending" | "running" | "ok" | "failed" | "timeout" | "unreachable";
 export type TaskHostSource = "sheet" | "nic" | "fixed" | "lease" | "";
@@ -361,6 +363,8 @@ export interface RemoteTask {
   inventorySources?: InventorySource[];
   /** 采集硬件任务顺带读的 BMC 设置（overview）和 BIOS 设置，存成侧边栏 BMC、BIOS 页的「上次读到的」。 */
   inventorySettings?: BmcSettingKind[];
+  /** 重启 BMC 任务走带外还是带内。 */
+  bmcReset?: BmcResetVia;
   createdAt: string;
   finishedAt?: string;
 }
