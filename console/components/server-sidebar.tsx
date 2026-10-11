@@ -20,6 +20,7 @@ import { ServerBios } from "@/components/server-bios";
 import { ServerBmc } from "@/components/server-bmc";
 import { ServerBmcLogs } from "@/components/server-bmc-logs";
 import { ServerChanges } from "@/components/server-changes";
+import { ServerFirmware } from "@/components/server-firmware";
 import { ServerInventory } from "@/components/server-inventory";
 import { ServerOptics } from "@/components/server-optics";
 import { ServerPorts } from "@/components/server-ports";
@@ -37,7 +38,7 @@ interface Row {
   description: string;
 }
 
-type Tab = "overview" | "netports" | "monitor" | "bmc" | "bios" | "bmclogs" | "tickets" | "hardware" | "changes" | "ports" | "topology" | "optics" | "history";
+export type Tab = "overview" | "netports" | "monitor" | "bmc" | "bios" | "firmware" | "bmclogs" | "tickets" | "hardware" | "changes" | "ports" | "topology" | "optics" | "history";
 
 interface TabContext {
   row: Row;
@@ -55,6 +56,7 @@ const TABS: { id: Tab; label: string; where: "server" | "network" | "all"; rende
   { id: "monitor", label: "监控", where: "all", render: ({ row }) => <AssetMonitor assetId={row.id} /> },
   { id: "bmc", label: "BMC", where: "server", render: ({ row }) => <ServerBmc assetId={row.id} /> },
   { id: "bios", label: "BIOS", where: "server", render: ({ row }) => <ServerBios assetId={row.id} /> },
+  { id: "firmware", label: "固件", where: "server", render: ({ row }) => <ServerFirmware assetId={row.id} /> },
   { id: "bmclogs", label: "BMC 日志", where: "server", render: ({ row }) => <ServerBmcLogs assetId={row.id} /> },
   { id: "tickets", label: "工单", where: "all", render: ({ row, onChanged }) => <AssetTickets asset={{ id: row.id, tag: row.tag || row.sn, sn: row.sn, model: "" }} onChanged={onChanged} /> },
   { id: "hardware", label: "硬件配置", where: "server", render: ({ row, projectId }) => <ServerInventory projectId={projectId} row={row} /> },
@@ -107,6 +109,8 @@ function FirmwareVersions({ assetId }: { assetId: string }) {
 export function ServerSidebar({ projectId, row, initialTab = "overview", onClose, onChanged }: { projectId?: string; row: Row | null; initialTab?: Tab; onClose: () => void; onChanged?: () => void }) {
   // 换一台机器时停在同一个标签上，方便一台台对比。
   const [tab, setTab] = useState<Tab>(initialTab);
+  // 从别的页带着标签跳过来（如固件版本页）时切过去。
+  useEffect(() => setTab(initialTab), [initialTab]);
   const network = Boolean(row?.type && row.type !== "server");
   const tabs = TABS.filter((item) => item.where === "all" || item.where === (network ? "network" : "server"));
   const current = tabs.find((item) => item.id === tab) || tabs.find((item) => item.id === "overview")!;

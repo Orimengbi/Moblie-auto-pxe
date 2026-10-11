@@ -22,8 +22,8 @@ import Typography from "@mui/material/Typography";
 import ArrowDownwardOutlined from "@mui/icons-material/ArrowDownwardOutlined";
 import ArrowUpwardOutlined from "@mui/icons-material/ArrowUpwardOutlined";
 import { StatusChip } from "@/components/mui/status-chip";
-import { isHgxFirmware, type Tone } from "@/lib/asset-labels";
-import type { BmcOverview, FirmwareItem } from "@/lib/bmc-redfish";
+import type { Tone } from "@/lib/asset-labels";
+import type { BmcOverview } from "@/lib/bmc-redfish";
 import { api } from "@/lib/client-api";
 import type { StreamStatus } from "@/lib/redfish-events";
 import { formatTime } from "@/lib/time";
@@ -114,7 +114,7 @@ interface Snapshot {
   events: StreamStatus;
 }
 
-/** 侧边栏「BMC」：经 Redfish 看和改引导、定位灯、资产编号、虚拟介质、功耗、固件。打开时只显示上次读到的，点按钮才读 BMC。 */
+/** 侧边栏「BMC」：经 Redfish 看和改引导、定位灯、资产编号、虚拟介质、功耗（固件在「固件」页）。打开时只显示上次读到的，点按钮才读 BMC。 */
 export function ServerBmc({ assetId }: { assetId: string }) {
   const [data, setData] = useState<Snapshot | null>(null);
   const [error, setError] = useState("");
@@ -254,8 +254,6 @@ export function ServerBmc({ assetId }: { assetId: string }) {
       </Section>
 
       <MediaSection view={view} busy={busy} onSend={(body) => send(`/api/assets/${assetId}/redfish/media`, "POST", body)} />
-
-      <FirmwareSection assetId={assetId} view={view} busy={busy} onSend={(body) => send(`/api/assets/${assetId}/redfish/firmware`, "POST", body)} />
     </Stack>
   );
 }
@@ -504,129 +502,6 @@ function MediaSection({ view, busy, onSend }: { view: View; busy: boolean; onSen
           <Button onClick={() => setSlot(null)}>取消</Button>
           <Button variant="contained" disabled={busy || !image.trim()} onClick={() => void insert()}>
             挂载
-          </Button>
-        </DialogActions>
-      </Dialog>
-    </Section>
-  );
-}
-
-function FirmwareSection({ assetId, view, busy, onSend }: { assetId: string; view: View; busy: boolean; onSend: (body: unknown) => Promise<boolean> }) {
-  const [data, setData] = useState<{ readAt: string; items: FirmwareItem[] | null }>({ readAt: "", items: null });
-  const [scope, setScope] = useState<"all" | "hgx" | "other">("all");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [open, setOpen] = useState(false);
-  const [imageUri, setImageUri] = useState("");
-  const [component, setComponent] = useState("");
-  const update = view.firmwareUpdate;
-
-  // 平常显示上次读到的，点按钮才连 BMC 读。
-  const loadInventory = useCallback(
-    async (refresh: boolean) => {
-      if (refresh) setLoading(true);
-      const result = await api<{ readAt: string; items: FirmwareItem[] | null }>(`/api/assets/${assetId}/redfish/firmware${refresh ? "?refresh=1" : ""}`);
-      setLoading(false);
-      if (result.ok) setData(result.data);
-      setError(result.error);
-    },
-    [assetId],
-  );
-
-  useEffect(() => {
-    void loadInventory(false);
-  }, [loadInventory]);
-
-  const items = data.items;
-  const hgxCount = items?.filter((item) => isHgxFirmware(item.id)).length || 0;
-  const shownItems = items?.filter((item) => scope === "all" || (scope === "hgx") === isHgxFirmware(item.id)) || null;
-
-  async function submit() {
-    const what = component || "自动识别的部件";
-    if (!window.confirm(`让 BMC 从\n${imageUri}\n下载并刷写 ${what}？\n\n刷写期间不要断电。BIOS 要关机或重启后才生效，BMC 刷完会自己重启。`)) return;
-    if (await onSend({ imageUri, component: component || undefined })) {
-      setOpen(false);
-      setImageUri("");
-    }
-  }
-
-  return (
-    <Section
-      title="固件"
-      extra={
-        <Stack direction="row" spacing={1}>
-          {update ? (
-            <Button size="small" disabled={busy} onClick={() => setOpen(true)}>
-              升级
-            </Button>
-          ) : null}
-        </Stack>
-      }
-    >
-      {update && (update.status || update.target) ? (
-        <Typography variant="body2" sx={{ mb: 1 }}>
-          BMC 上的升级：{update.target || "—"} {update.status}
-          {update.percent !== null ? `，${update.percent}%` : ""}
-        </Typography>
-      ) : (
-        <Typography variant="body2" sx={{ color: "text.secondary", mb: items ? 1 : 0 }}>
-          {update ? "没有进行中的升级" : "这台 BMC 不支持从网址升级"}
-        </Typography>
-      )}
-      {error ? (
-        <Typography variant="body2" color="error">
-          {error}
-        </Typography>
-      ) : null}
-      <ReadBar readAt={data.readAt} reading={loading} onRead={() => void loadInventory(true)} hint="正在逐项读固件版本，HGX 机器要十几秒" />
-      {items && hgxCount ? (
-        <ToggleButtonGroup size="small" exclusive value={scope} onChange={(_, value) => value && setScope(value)} sx={{ my: 1 }}>
-          <ToggleButton value="all">全部 {items.length}</ToggleButton>
-          <ToggleButton value="hgx">HGX {hgxCount}</ToggleButton>
-          <ToggleButton value="other">主板 {items.length - hgxCount}</ToggleButton>
-        </ToggleButtonGroup>
-      ) : null}
-      {shownItems ? (
-        <Box component="table" sx={{ width: "100%", borderCollapse: "collapse", "& td": { py: 0.5, pr: 2, borderBottom: 1, borderColor: "divider", fontSize: 13, verticalAlign: "top" } }}>
-          <tbody>
-            {shownItems.map((item) => (
-              <tr key={item.id}>
-                <td>{item.name}</td>
-                <Box component="td" sx={{ fontFamily: MONO }}>
-                  {item.version || "—"}
-                </Box>
-                <Box component="td" sx={{ color: "text.secondary", whiteSpace: "nowrap" }}>
-                  {item.updateable ? "可升级" : ""}
-                </Box>
-              </tr>
-            ))}
-          </tbody>
-        </Box>
-      ) : null}
-      <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth="sm">
-        <DialogTitle>升级固件</DialogTitle>
-        <DialogContent>
-          <Stack spacing={2} sx={{ mt: 1 }}>
-            <TextField label="固件地址" value={imageUri} onChange={(event) => setImageUri(event.target.value)} placeholder="http://… 或 ftp://…（AMI 的 .ima / BIOS 的 .bin）" fullWidth slotProps={{ htmlInput: { style: { fontFamily: MONO } } }} />
-            {update?.components.length ? (
-              <TextField select label="刷哪个部件" value={component} onChange={(event) => setComponent(event.target.value)} fullWidth>
-                <MenuItem value="">让 BMC 按文件自动识别</MenuItem>
-                {update.components.map((value) => (
-                  <MenuItem key={value} value={value}>
-                    {value}
-                  </MenuItem>
-                ))}
-              </TextField>
-            ) : null}
-            <Typography variant="caption" sx={{ color: "text.secondary" }}>
-              BMC 自己下载，地址要 BMC 能访问到。支持 {update?.protocols.join(" / ") || "HTTP"}。只有管理员能提交。
-            </Typography>
-          </Stack>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setOpen(false)}>取消</Button>
-          <Button variant="contained" color="warning" disabled={busy || !imageUri.trim()} onClick={() => void submit()}>
-            开始升级
           </Button>
         </DialogActions>
       </Dialog>

@@ -215,7 +215,7 @@ function MachineList({ machines }: { machines: FleetMachine[] }) {
     <Stack spacing={0.5}>
       {machines.map((machine) => (
         <Stack key={machine.id} direction="row" spacing={1.5} sx={{ alignItems: "baseline" }}>
-          <MuiLink component={Link} href={`/assets?open=${machine.id}`} underline="hover" sx={{ fontFamily: MONO, fontSize: 13 }}>
+          <MuiLink component={Link} href={`/assets?open=${machine.id}&tab=firmware`} underline="hover" sx={{ fontFamily: MONO, fontSize: 13 }}>
             {machine.tag}
           </MuiLink>
           <Typography variant="body2" sx={{ fontFamily: MONO }}>
@@ -248,7 +248,7 @@ function Outliers({ model }: { model: FleetModel }) {
           return (
             <Box key={machine.id}>
               <Stack direction="row" spacing={1.5} sx={{ alignItems: "baseline" }}>
-                <MuiLink component={Link} href={`/assets?open=${machine.id}`} underline="hover" sx={{ fontFamily: MONO, fontSize: 13 }}>
+                <MuiLink component={Link} href={`/assets?open=${machine.id}&tab=firmware`} underline="hover" sx={{ fontFamily: MONO, fontSize: 13 }}>
                   {machine.tag}
                 </MuiLink>
                 <Typography variant="body2" sx={{ fontFamily: MONO }}>

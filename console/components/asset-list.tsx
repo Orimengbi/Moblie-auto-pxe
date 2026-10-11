@@ -19,7 +19,7 @@ import { InventoryCollectDialog, type CollectTarget } from "@/components/invento
 import { HOST_SOURCE, ProjectTaskRunner } from "@/components/project-task-runner";
 import { RemoteConsole } from "@/components/remote-console";
 import { ServerPowerDialog } from "@/components/server-power-dialog";
-import { ServerSidebar } from "@/components/server-sidebar";
+import { ServerSidebar, type Tab as SidebarTab } from "@/components/server-sidebar";
 import type { AssetRow } from "@/lib/asset-view";
 import { ASSET_STATUS, ASSET_STATUS_TONE, ASSET_TYPES, WARRANTY_LABEL } from "@/lib/asset-labels";
 import type { AssetStatus, Customer, Datacenter, RemoteFile, Site } from "@/lib/types";
@@ -101,6 +101,7 @@ export function AssetList({
   const [filters, setFilters] = useState<Filters>(EMPTY);
   const [picked, setPicked] = useState<string[]>([]);
   const [sideId, setSideId] = useState<string | null>(null);
+  const [sideTab, setSideTab] = useState<SidebarTab>("overview");
   const [creating, setCreating] = useState(false);
   const [importing, setImporting] = useState(false);
   // 从右上角任务列表点开的后台导入。
@@ -132,6 +133,8 @@ export function AssetList({
     }
     const open = search.get("open");
     if (open) setSideId(open);
+    const tab = search.get("tab");
+    if (tab) setSideTab(tab as SidebarTab);
     const job = search.get("import");
     if (job) {
       setImportJob(job);
@@ -502,6 +505,7 @@ export function AssetList({
       {consoleRow ? <RemoteConsole row={consoleRow} port={bmcPort} onClose={() => setConsoleRow(null)} /> : null}
       <ServerSidebar
         row={sideRow ? { id: sideRow.id, sn: sideRow.sn, tag: sideRow.tag, type: sideRow.type, description: [sideRow.tag, ASSET_STATUS[sideRow.status], sideRow.place, sideRow.customerName, [sideRow.vendor, sideRow.model].filter(Boolean).join(" ")].filter(Boolean).join(" · ") } : null}
+        initialTab={sideTab}
         onClose={() => setSideId(null)}
         onChanged={() => router.refresh()}
       />
