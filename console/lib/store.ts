@@ -1738,6 +1738,7 @@ export function removeAssetFiles(assetId: string): void {
   fs.rmSync(inventoryDir(assetId), { recursive: true, force: true });
   fs.rmSync(opticsPath(assetId), { force: true });
   fs.rmSync(path.join(dataDir(), "monitor", `${assetId}.sdr`), { force: true });
+  fs.rmSync(path.join(dataDir(), "monitor", `${assetId}.sensors.json`), { force: true });
   fs.rmSync(path.join(dataDir(), "redfish", "assets", assetId), { recursive: true, force: true });
 }
 
