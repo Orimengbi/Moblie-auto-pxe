@@ -192,8 +192,11 @@ export async function powerStatus(host: string, username: string, password: stri
   return parsePowerStatus(result.stdout);
 }
 
-/** timeoutMs 默认 20 秒；读整张传感器表（sdr）要给长一点。密码经临时文件（-f）给，不出现在命令行里。 */
-export async function defaultIpmiExec(host: string, username: string, password: string, args: string[], timeoutMs = 20000): Promise<IpmiExecResult> {
+/**
+ * timeoutMs 默认 20 秒；读整张传感器表（sdr）要给长一点。密码经临时文件（-f）给，不出现在命令行里。
+ * verbose 为 false 时不带 -v：sel elist 带 -v 会把每条拆成多行，时间也解坏。
+ */
+export async function defaultIpmiExec(host: string, username: string, password: string, args: string[], timeoutMs = 20000, verbose = true): Promise<IpmiExecResult> {
   return withSecretDir(
     "pxe-ipmi-",
     () => ({ pw: password }),
@@ -201,7 +204,7 @@ export async function defaultIpmiExec(host: string, username: string, password: 
       let result;
       try {
         // -v 让 ipmitool 说出登录失败的原因，见 ipmiFailure。
-        result = await runProcess("ipmitool", ["-v", "-I", "lanplus", "-H", host, "-U", username, "-f", path.join(dir, "pw"), ...args], { timeoutMs });
+        result = await runProcess("ipmitool", [...(verbose ? ["-v"] : []), "-I", "lanplus", "-H", host, "-U", username, "-f", path.join(dir, "pw"), ...args], { timeoutMs });
       } catch (error) {
         throw (error as NodeJS.ErrnoException).code === "ENOENT" ? new Error("小主机没有 ipmitool，无法连 BMC") : error;
       }
