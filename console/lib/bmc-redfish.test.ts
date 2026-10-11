@@ -62,6 +62,12 @@ function fakeBmc(password = "good") {
       ],
     },
   });
+  docs.set("/redfish/v1/UpdateService", { FirmwareInventory: { "@odata.id": "/redfish/v1/UpdateService/FirmwareInventory" } });
+  docs.set("/redfish/v1/UpdateService/FirmwareInventory/BIOS", { Id: "BIOS", Name: "BIOS", Version: "R05_F04", Updateable: true });
+  for (let index = 0; index < 60; index++) {
+    const id = `HGX_FW_GPU_${String(index).padStart(2, "0")}`;
+    docs.set(`/redfish/v1/UpdateService/FirmwareInventory/${id}`, { Id: id, Name: "Software Inventory", Version: "97.10.7E.00.03", Updateable: true });
+  }
   docs.set("/redfish/v1/Managers/Self/LogServices/SEL", { Entries: { "@odata.id": "/redfish/v1/Managers/Self/LogServices/SEL/Entries" }, Actions: { "#LogService.ClearLog": { target: "/x/clear" } } });
 
   const request = async (method: string, target: string, body?: unknown, headers?: Record<string, string>): Promise<import("./redfish.ts").RedfishResponse> => {
@@ -86,6 +92,16 @@ function fakeBmc(password = "good") {
       const skip = Number(params.get("$skip") || 0);
       const top = Number(params.get("$top") || 50);
       return { status: 200, body: { "Members@odata.count": sel.length, Members: sel.slice(skip, skip + Math.min(top, 50)) }, headers: {} };
+    }
+    if (base === "/redfish/v1/UpdateService/FirmwareInventory") {
+      // 和 AMI 一样：分页 50 条；$expand 时 HGX_ 条目（HMC 代理的）只有 Id、Name，没有 Version。
+      const params = new URLSearchParams(query);
+      const ids = [...docs.keys()].filter((key) => key.startsWith(`${base}/`)).sort();
+      const skip = Number(params.get("$skip") || 0);
+      const page = ids.slice(skip, skip + 50);
+      const expand = params.has("$expand");
+      const members = page.map((key) => (!expand ? { "@odata.id": key } : key.includes("/HGX_") ? { "@odata.id": key, Id: key.split("/").pop(), Name: key.split("/").pop() } : docs.get(key)));
+      return { status: 200, body: { Members: members, ...(skip + 50 < ids.length ? { "Members@odata.nextLink": `${base}?$skip=${skip + 50}` } : {}) }, headers: {} };
     }
     const doc = docs.get(base);
     if (!doc || query) return { status: 404, body: { error: { message: "not found" } }, headers: {} };
@@ -256,4 +272,21 @@ test("crawl uses $expand pages (re-adding it to AMI's next links) and falls back
   assert.deepEqual(raw.systems.map((item) => item.Id), ["Self"]);
   const plain = await crawlRedfish(get, { expand: false });
   assert.deepEqual(plain.systems.map((item) => item.Id), ["Self"]);
+});
+
+test("firmware inventory reads HGX items one by one when $expand leaves out their version, and bulk collect lists version changes", async () => {
+  const bmcs = setup();
+  const target = { ...asset, id: "asset-firmware" } as import("./types.ts").Asset;
+  const first = await bmc.collectSettings(target, ["firmware"]);
+  assert.deepEqual(first.lines, ["固件版本：61 项，其中 HGX 60 项"]);
+  const saved = bmc.loadSnapshot<import("./bmc-redfish.ts").FirmwareItem[]>("asset-firmware", "firmware")!.data;
+  assert.deepEqual(saved[0], { id: "BIOS", name: "BIOS", version: "R05_F04", updateable: true });
+  assert.deepEqual(saved[1], { id: "HGX_FW_GPU_00", name: "HGX_FW_GPU_00", version: "97.10.7E.00.03", updateable: true }, "Name 是 Software Inventory 的用 Id");
+  assert.equal(saved.length, 61, "第二页（nextLink）也读了");
+
+  const docs = bmcs.get("10.0.0.9")!.docs;
+  docs.get("/redfish/v1/UpdateService/FirmwareInventory/HGX_FW_GPU_03")!.Version = "97.10.80.00.01";
+  docs.delete("/redfish/v1/UpdateService/FirmwareInventory/HGX_FW_GPU_59");
+  const second = await bmc.collectSettings(target, ["firmware"]);
+  assert.deepEqual(second.lines, ["固件版本：60 项，其中 HGX 59 项", "  和上次读的比变了 2 项：", "    HGX_FW_GPU_03：97.10.7E.00.03 → 97.10.80.00.01", "    HGX_FW_GPU_59：97.10.7E.00.03 → （没有）"]);
 });

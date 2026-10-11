@@ -3,6 +3,7 @@ import path from "node:path";
 import { assetBmcAccounts, getAsset } from "./assets.ts";
 import { dataDir } from "./paths.ts";
 import { link, members, RedfishAuthError, redfishError, redfishRequester, type RedfishDoc, type RedfishRequest, type RedfishResponse } from "./redfish.ts";
+import { BMC_SETTING_LABEL, isHgxFirmware } from "./asset-labels.ts";
 import type { Asset, BmcSettingKind } from "./types.ts";
 
 /**
@@ -627,12 +628,26 @@ export function biosChanges(previous: BiosView, current: BiosView): string[] {
   return lines;
 }
 
+/** 和上次存的固件清单比，列出版本变了、新出现、不见了的项。 */
+export function firmwareChanges(previous: FirmwareItem[], current: FirmwareItem[]): string[] {
+  const before = new Map(previous.map((item) => [item.id, item]));
+  const lines: string[] = [];
+  for (const item of current) {
+    const old = before.get(item.id);
+    before.delete(item.id);
+    if (!old) lines.push(`${item.id}：（没有） → ${item.version || "（空）"}`);
+    else if (old.version !== item.version) lines.push(`${item.id}：${old.version || "（空）"} → ${item.version || "（空）"}`);
+  }
+  for (const old of before.values()) lines.push(`${old.id}：${old.version || "（空）"} → （没有）`);
+  return lines;
+}
+
 /**
- * 批量采集硬件时顺带读 BMC 设置和 BIOS 设置，和在侧边栏点「从 BMC 读取」一样存下来。
+ * 批量采集硬件时顺带读 BMC 设置、BIOS 设置和固件版本，和在侧边栏点「从 BMC 读取」一样存下来。
  * 返回写进任务输出的几行；tried 是要读的项数，ok 是读到的项数。
  */
 export async function collectSettings(asset: Asset, kinds: BmcSettingKind[]): Promise<{ ok: number; tried: number; lines: string[] }> {
-  const label = kinds.map((kind) => (kind === "overview" ? "BMC 设置" : "BIOS 设置")).join("、");
+  const label = kinds.map((kind) => BMC_SETTING_LABEL[kind]).join("、");
   if (!kinds.length) return { ok: 0, tried: 0, lines: [] };
   if (!asset.bmcIp) return { ok: 0, tried: 0, lines: [`${label}：还没有 BMC 地址，跳过`] };
   let session: BmcSession;
@@ -671,6 +686,21 @@ export async function collectSettings(asset: Asset, kinds: BmcSettingKind[]): Pr
       ok++;
     } catch (error) {
       lines.push(`BIOS 设置（${asset.bmcIp}）：${error instanceof Error ? error.message : "读取失败"}`);
+    }
+  }
+  if (kinds.includes("firmware")) {
+    try {
+      const previous = loadSnapshot<FirmwareItem[]>(asset.id, "firmware");
+      const items = saveSnapshot(asset.id, "firmware", await firmwareInventory(session)).data;
+      const hgx = items.filter((item) => isHgxFirmware(item.id));
+      lines.push(`固件版本：${items.length} 项${hgx.length ? `，其中 HGX ${hgx.length} 项` : ""}`);
+      if (previous) {
+        const changes = firmwareChanges(previous.data, items);
+        lines.push(changes.length ? `  和上次读的比变了 ${changes.length} 项：` : "  和上次读的比没有变化", ...changes.slice(0, 40).map((line) => `    ${line}`), ...(changes.length > 40 ? [`    等，共 ${changes.length} 项`] : []));
+      }
+      ok++;
+    } catch (error) {
+      lines.push(`固件版本（${asset.bmcIp}）：${error instanceof Error ? error.message : "读取失败"}`);
     }
   }
   return { ok, tried: kinds.length, lines };
@@ -841,7 +871,10 @@ export interface FirmwareItem {
   updateable: boolean;
 }
 
-/** HGX 机器的固件清单有上百项，分页读完。 */
+/**
+ * HGX 机器的固件清单有上百项，分页读完。$expand 时 AMI 对 HGX_ 开头的条目（HMC 代理过来的）只给 Id、Name，
+ * 没有版本，这种逐条再读一遍（技嘉 H100_tool 的 list 也是逐条读，每条约 0.2 秒）。
+ */
 export async function firmwareInventory(session: BmcSession): Promise<FirmwareItem[]> {
   const update = await rfFind(session, "/redfish/v1/UpdateService");
   let next = link(update, "FirmwareInventory");
@@ -849,16 +882,15 @@ export async function firmwareInventory(session: BmcSession): Promise<FirmwareIt
   for (let pages = 0; next && pages < 20; pages++) {
     const response = await session.request("GET", `${next}${next.includes("?") ? "&" : "?"}$expand=.($levels=1)`);
     const doc = response.status < 400 && response.body ? response.body : await rfGet(session, next);
-    let list = Array.isArray(doc.Members) ? (doc.Members as RedfishDoc[]) : [];
-    if (list.length && Object.keys(list[0]).length <= 1) {
-      const full: RedfishDoc[] = [];
-      for (const item of list) {
-        const one = await rfFind(session, str(item["@odata.id"]));
-        if (one) full.push(one);
-      }
-      list = full;
+    const list = Array.isArray(doc.Members) ? (doc.Members as RedfishDoc[]) : [];
+    for (const member of list) {
+      const item = member.Version === undefined ? await rfFind(session, str(member["@odata.id"])).catch(() => null) : member;
+      if (!item) continue;
+      const id = str(item.Id) || str(member["@odata.id"]).split("/").pop() || "";
+      // HGX 条目的 Name 都是「Software Inventory」，用 Id 才分得清。
+      const name = /^software inventory$/i.test(str(item.Name)) ? id : str(item.Name || id);
+      out.push({ id, name, version: str(item.Version), updateable: item.Updateable === true });
     }
-    for (const item of list) out.push({ id: str(item.Id), name: str(item.Name || item.Id), version: str(item.Version), updateable: item.Updateable === true });
     next = str(doc["Members@odata.nextLink"]);
   }
   return out;

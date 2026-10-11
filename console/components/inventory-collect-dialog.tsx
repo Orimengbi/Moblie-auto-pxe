@@ -13,6 +13,7 @@ import MuiLink from "@mui/material/Link";
 import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
+import { BMC_SETTING_LABEL } from "@/lib/asset-labels";
 import { api } from "@/lib/client-api";
 import type { BmcSettingKind, InventorySource } from "@/lib/types";
 
@@ -28,12 +29,25 @@ export interface CollectTarget {
 /**
  * 多选后一起采集硬件配置：发起一个批量任务，进度和每台的结果在右上角「任务」和任务页里看。
  * 系统内是 SSH 进系统读，BMC 是经 Redfish 读（关机也能读，一台 GPU 机器要一两分钟）。
- * BMC 设置、BIOS 设置也经 Redfish 读，存成侧边栏 BMC、BIOS 页上「上次读到的」，BIOS 和上次比有变化会列在任务结果里。
+ * BMC 设置、BIOS 设置、固件版本也经 Redfish 读，存成侧边栏 BMC、BIOS 页上「上次读到的」，BIOS 和固件和上次比有变化会列在任务结果里。
  */
-export function InventoryCollectDialog({ targets, projectId, onClose }: { targets: CollectTarget[]; projectId?: string; onClose: () => void }) {
+export function InventoryCollectDialog({
+  targets,
+  projectId,
+  onClose,
+  preset,
+}: {
+  targets: CollectTarget[];
+  projectId?: string;
+  onClose: () => void;
+  /** 打开时默认勾哪些；固件版本页只勾「固件版本」。 */
+  preset?: { sources: InventorySource[]; settings: BmcSettingKind[] };
+}) {
   const open = targets.length > 0;
-  const [sources, setSources] = useState<InventorySource[]>(["os", "bmc"]);
-  const [settings, setSettings] = useState<BmcSettingKind[]>(["overview", "bios"]);
+  // preset 是调用方每次渲染新建的对象，按内容比较，只在打开时套用。
+  const presetKey = preset ? JSON.stringify(preset) : "";
+  const [sources, setSources] = useState<InventorySource[]>(preset?.sources || ["os", "bmc"]);
+  const [settings, setSettings] = useState<BmcSettingKind[]>(preset?.settings || ["overview", "bios"]);
   const [concurrency, setConcurrency] = useState(8);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
@@ -43,7 +57,12 @@ export function InventoryCollectDialog({ targets, projectId, onClose }: { target
     if (!open) return;
     setError("");
     setTaskId("");
-  }, [open]);
+    if (presetKey) {
+      const chosen = JSON.parse(presetKey) as { sources: InventorySource[]; settings: BmcSettingKind[] };
+      setSources(chosen.sources);
+      setSettings(chosen.settings);
+    }
+  }, [open, presetKey]);
 
   const servers = targets.filter((target) => !target.type || target.type === "server");
   const skipped = targets.length - servers.length;
@@ -70,7 +89,7 @@ export function InventoryCollectDialog({ targets, projectId, onClose }: { target
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle>采集 {servers.length} 台的硬件配置</DialogTitle>
+      <DialogTitle>{sources.length ? `采集 ${servers.length} 台的硬件配置` : `读取 ${servers.length} 台的${settings.map((item) => BMC_SETTING_LABEL[item]).join("、") || "设置"}`}</DialogTitle>
       <DialogContent>
         {taskId ? (
           <Stack spacing={1}>
@@ -91,11 +110,11 @@ export function InventoryCollectDialog({ targets, projectId, onClose }: { target
               ))}
             </Stack>
             <Stack direction="row" spacing={2} sx={{ mt: "0 !important" }}>
-              {(["overview", "bios"] as const).map((value) => (
+              {(["overview", "bios", "firmware"] as const).map((value) => (
                 <FormControlLabel
                   key={value}
                   control={<Checkbox checked={settings.includes(value)} onChange={() => setSettings((list) => (list.includes(value) ? list.filter((item) => item !== value) : [...list, value]))} />}
-                  label={value === "overview" ? "BMC 设置" : "BIOS 设置"}
+                  label={BMC_SETTING_LABEL[value]}
                 />
               ))}
             </Stack>
@@ -109,7 +128,7 @@ export function InventoryCollectDialog({ targets, projectId, onClose }: { target
               sx={{ width: 160 }}
             />
             <Typography variant="caption" sx={{ color: "text.secondary" }}>
-              BMC 采集每台要一两分钟（BMC 一次只处理一个请求），多台同时跑互不影响。系统内采集要能用控制台的密钥 SSH 登录。BMC 设置是引导、定位灯、虚拟介质这些概况，BIOS 设置是全部设置项，读完在侧边栏 BMC、BIOS 页能看到，BIOS 和上次读的比有变化会列在任务结果里。
+              BMC 采集每台要一两分钟（BMC 一次只处理一个请求），多台同时跑互不影响。系统内采集要能用控制台的密钥 SSH 登录。BMC 设置是引导、定位灯、虚拟介质这些概况，BIOS 设置是全部设置项，固件版本是 BMC、BIOS、CPLD 和 HGX 底板（GPU、NVSwitch、HMC 等）的版本，每台多十几秒。读完在侧边栏 BMC、BIOS 页和「固件版本」页能看到，BIOS 和固件和上次读的比有变化会列在任务结果里。
               {skipped ? ` 选中的里有 ${skipped} 台不是服务器，跳过。` : ""}
               {noBmc && (sources.includes("bmc") || settings.length) ? ` 有 ${noBmc} 台没有 BMC 地址，只能采系统内的。` : ""}
             </Typography>

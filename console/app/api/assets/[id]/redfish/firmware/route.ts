@@ -1,20 +1,30 @@
 import { audited, jsonError, readJson } from "@/lib/api";
-import { addEvent } from "@/lib/assets";
+import { addEvent, getAsset } from "@/lib/assets";
 import { requireAdmin } from "@/lib/auth";
-import { assetSession, firmwareInventory, readTask, simpleUpdate, type FirmwareUpdateInput } from "@/lib/bmc-redfish";
+import { assetSession, firmwareInventory, loadSnapshot, readTask, saveSnapshot, simpleUpdate, type FirmwareItem, type FirmwareUpdateInput } from "@/lib/bmc-redfish";
 
 export const dynamic = "force-dynamic";
 
 type Context = { params: Promise<{ id: string }> };
 
-/** 固件版本清单；带 task 时读那个升级任务的进度。 */
+/**
+ * 固件版本清单。平常给上次读到的，不连 BMC；带 ?refresh=1 才去 BMC 读一遍并存下来（HGX 机器要十几秒）。
+ * 带 task 时读那个升级任务的进度。
+ */
 export async function GET(request: Request, context: Context) {
   try {
     const { id } = await context.params;
-    const task = new URL(request.url).searchParams.get("task");
+    const params = new URL(request.url).searchParams;
+    const task = params.get("task");
+    if (!task && params.get("refresh") !== "1") {
+      if (!getAsset(id)) throw new Error("资产不存在");
+      const cached = loadSnapshot<FirmwareItem[]>(id, "firmware");
+      return Response.json({ readAt: cached?.readAt || "", items: cached?.data || null });
+    }
     const { session } = await assetSession(id);
     if (task) return Response.json(await readTask(session, task));
-    return Response.json({ items: await firmwareInventory(session) });
+    const saved = saveSnapshot(id, "firmware", await firmwareInventory(session));
+    return Response.json({ readAt: saved.readAt, items: saved.data });
   } catch (error) {
     return jsonError(error);
   }

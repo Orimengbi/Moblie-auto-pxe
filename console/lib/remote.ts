@@ -11,6 +11,7 @@ import { OPTICS_SCRIPT, parseOptics } from "./optics.ts";
 import { crawlRedfish, RedfishAuthError, redfishGetter, type RedfishGet } from "./redfish.ts";
 import { renderRevokeScript } from "./render.ts";
 import { assetBmcAccounts, getAsset } from "./assets.ts";
+import { BMC_SETTING_LABEL } from "./asset-labels.ts";
 import { collectSettings } from "./bmc-redfish.ts";
 import { filePayloadPath, getFile, getProject, getTask, listMachines, listNicPlans, readLeasesText, saveInventory, saveOptics, writeTask } from "./store.ts";
 import type { Asset, BmcSettingKind, HwChange, HwPort, InventorySource, OpticsReading, Machine, NicPlan, RemoteTask, ServerRow, TaskHostSource, TaskKind, TaskTarget, TaskTargetStatus } from "./types.ts";
@@ -111,10 +112,10 @@ export function createTask(input: TaskInput, context: HostContext = hostContext(
   if (!script.trim()) throw new Error("脚本是空的");
   if (script.length > 200000) throw new Error("脚本超过 200KB");
   const sources = kind === "inventory" ? (["os", "bmc"] as const).filter((source) => !input.sources || input.sources.includes(source)) : [];
-  const settings = kind === "inventory" ? (["overview", "bios"] as const).filter((item) => input.settings?.includes(item)) : [];
+  const settings = kind === "inventory" ? (["overview", "bios", "firmware"] as const).filter((item) => input.settings?.includes(item)) : [];
   if (kind === "inventory" && !sources.length && !settings.length) throw new Error("至少选一种采集方式");
-  const settingsName = settings.map((item) => (item === "overview" ? "BMC" : "BIOS")).join("、");
-  const inventoryName = sources.length ? `采集硬件配置${settings.length ? `和 ${settingsName} 设置` : ""}` : `读取 ${settingsName} 设置`;
+  const settingsName = settings.map((item) => BMC_SETTING_LABEL[item]).join("、");
+  const inventoryName = sources.length ? `采集硬件配置${settings.length ? `、${settingsName}` : ""}` : `读取 ${settingsName}`;
   const defaultName = kind === "revoke" ? "交付清理：撤掉控制台公钥" : kind === "inventory" ? inventoryName : script.trim().split("\n")[0].slice(0, 80);
   const name = (input.name || "").trim().slice(0, 80) || defaultName;
   const fileIds = kind === "script" ? [...new Set(input.fileIds || [])] : [];
@@ -390,7 +391,7 @@ export async function collectInventory(
   }
 
   if (task.inventorySettings?.length && row && Date.now() < deadline) {
-    const settings = await withDeadline(collectSettings(row, task.inventorySettings), deadline, "读 BMC、BIOS 设置").catch((error: unknown) => ({
+    const settings = await withDeadline(collectSettings(row, task.inventorySettings), deadline, `读${task.inventorySettings.map((item) => BMC_SETTING_LABEL[item]).join("、")}`).catch((error: unknown) => ({
       ok: 0,
       tried: task.inventorySettings!.length,
       lines: [`BMC、BIOS 设置：${error instanceof Error ? error.message : "读取失败"}`],

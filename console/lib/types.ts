@@ -372,7 +372,7 @@ export type HwKind = "system" | "board" | "cpu" | "memory" | "disk" | "gpu" | "n
 export type InventorySource = "os" | "bmc" | "snmp";
 
 /** 经 Redfish 读、存一份上次结果的 BMC 设置：overview 是引导、定位灯、虚拟介质这些概况，bios 是全部 BIOS 设置项。 */
-export type BmcSettingKind = "overview" | "bios";
+export type BmcSettingKind = "overview" | "bios" | "firmware";
 
 /** 一个部件。slot 在同一台机器、同一来源里是稳定的位置名，比如 DIMM_P0_A0、P0、nvme0n1、GPU 的 PCI 地址。 */
 export interface HwComponent {
