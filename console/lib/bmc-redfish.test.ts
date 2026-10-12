@@ -253,6 +253,24 @@ test("health follows Redfish Status, unpowered PSUs count as warnings", async ()
   );
 });
 
+test("a system that is only unhealthy in rollup names the part: the bad DIMM, not 整机", async () => {
+  const bmcs = setup();
+  const session = await bmc.openSession(asset);
+  const fake = bmcs.get(asset.bmcIp)!;
+  fake.docs.set(session.paths.system, { Status: { Health: "OK", HealthRollup: "Warning", State: "Enabled" }, Memory: { "@odata.id": "/redfish/v1/Systems/Self/Memory" }, Processors: { "@odata.id": "/redfish/v1/Systems/Self/Processors" } });
+  fake.docs.set("/redfish/v1/Systems/Self/Memory", { Members: [{ "@odata.id": "/redfish/v1/Systems/Self/Memory/DIMM_P0_A0" }, { "@odata.id": "/redfish/v1/Systems/Self/Memory/DIMM_P0_F0" }] });
+  fake.docs.set("/redfish/v1/Systems/Self/Memory/DIMM_P0_A0", { Id: "DIMM_P0_A0", Name: "CPU0_ChannelA_Dimm0", Status: { Health: "OK", State: "Enabled" } });
+  fake.docs.set("/redfish/v1/Systems/Self/Memory/DIMM_P0_F0", { Id: "DIMM_P0_F0", Name: "CPU5_ChannelF_Dimm0", Status: { Health: "Warning", State: "Enabled" } });
+  fake.docs.set("/redfish/v1/Systems/Self/Processors", { Members: [] });
+  let problems = await bmc.readHealth(session);
+  assert.deepEqual(problems.map((item) => [item.name, item.severity]), [["内存 DIMM_P0_F0（CPU5_ChannelF_Dimm0）", "warning"]]);
+
+  // 找不到是哪个部件时，还是报整机。
+  fake.docs.set("/redfish/v1/Systems/Self/Memory/DIMM_P0_F0", { Id: "DIMM_P0_F0", Status: { Health: "OK", State: "Enabled" } });
+  problems = await bmc.readHealth(session);
+  assert.deepEqual(problems.map((item) => item.name), ["整机"]);
+});
+
 test("bmc clock: offset and NTP are patched with If-Match", async () => {
   const bmcs = setup();
   const session = await bmc.openSession(asset);
