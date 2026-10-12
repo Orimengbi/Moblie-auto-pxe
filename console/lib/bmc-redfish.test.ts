@@ -285,12 +285,12 @@ test("sse frames are split and AMI event payloads parsed", () => {
   assert.deepEqual(events.parseEventPayload("not json"), []);
 });
 
-test("recorded events are kept and critical ones open a sticky alert (task events do not)", () => {
+test("recorded events are kept and critical ones open a sticky alert (task and SEL-copy events do not)", () => {
   const created = assets.createAsset({ sn: "EVT1", type: "server" }, "test");
   const event = (messageId: string, severity: string) => ({ at: "2026-10-10T00:00:00.000Z", receivedAt: "2026-10-10T00:00:01.000Z", severity, messageId, message: `${messageId} happened`, origin: "/redfish/v1/Chassis/Self" });
   events.recordEvents(created.id, [event("Task.1.0.Failed", "Critical"), event("EventLog.1.0.PowerSupplyFailure", "Critical"), event("Base.1.0.Success", "OK")]);
-  events.recordEvents(created.id, [event("EventLog.1.0.PowerSupplyFailure", "Critical")]);
-  assert.equal(events.listBmcEvents(created.id).length, 4);
+  events.recordEvents(created.id, [event("EventLog.1.0.PowerSupplyFailure", "Critical"), event("IPMI.1.0.SelLogCreated", "Critical")]);
+  assert.equal(events.listBmcEvents(created.id).length, 5);
   const open = alerts.listAlerts({ assetId: created.id });
   assert.equal(open.length, 1);
   assert.equal(open[0].sticky, true);

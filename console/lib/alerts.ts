@@ -8,7 +8,7 @@ import { formatTime } from "./time.ts";
 /**
  * 告警。监控每查一遍得出一组「发现」，和已有的告警对：
  * 同一台同一个 key 还没恢复的只更新，不新开；状态类（传感器、BMC 连不上、掉卡、硬盘）这次没再发现就自动恢复；
- * 事件类（SEL、Xid）不会自己恢复，要人点「处理完」。
+ * 事件类（SEL、Xid）不会自己恢复，要人点「处理完」；SEL 里 BMC 后来写了 Deasserted 的（cleared）算自动恢复。
  */
 
 export interface Finding {
@@ -67,9 +67,10 @@ export function alertCounts(): { critical: number; warning: number } {
 
 /**
  * 记下一次检查的结果。scopes 是这次实际查了的 key 前缀（例如 BMC 没连上就不该把传感器告警当成恢复）。
- * 返回新开的告警。
+ * cleared 是 BMC 已经解除了的事件类 key：开着的自动恢复；这次新发现、但已经解除了的（风扇拔插这种几十秒就好的）
+ * 不再开新告警，记到同 key 最近那条上，次数加一。返回新开的告警。
  */
-export function applyFindings(assetId: string, findings: Finding[], scopes: string[]): Alert[] {
+export function applyFindings(assetId: string, findings: Finding[], scopes: string[], cleared: ReadonlySet<string> = new Set()): Alert[] {
   const asset = getAsset(assetId);
   if (!asset) return [];
   return transaction(db(), () => {
@@ -94,6 +95,20 @@ export function applyFindings(assetId: string, findings: Finding[], scopes: stri
           .run(finding.severity, finding.title.slice(0, 200), finding.detail.slice(0, 4000), count, now, status, existing.id);
         continue;
       }
+      if (finding.sticky && cleared.has(finding.key)) {
+        const last = db().prepare("SELECT id FROM alerts WHERE asset_id = ? AND key = ? ORDER BY id DESC LIMIT 1").get(assetId, finding.key);
+        if (last) {
+          db()
+            .prepare("UPDATE alerts SET severity = ?, title = ?, detail = ?, count = count + 1, last_at = ?, resolved_at = ? WHERE id = ?")
+            .run(finding.severity, finding.title.slice(0, 200), finding.detail.slice(0, 4000), now, now, Number(last.id));
+        } else {
+          db()
+            .prepare("INSERT INTO alerts (asset_id, key, source, severity, title, detail, status, sticky, count, first_at, last_at, resolved_by, resolved_at) VALUES (?, ?, ?, ?, ?, ?, 'resolved', 1, 1, ?, ?, '自动恢复', ?)")
+            .run(assetId, finding.key, finding.source, finding.severity, finding.title.slice(0, 200), finding.detail.slice(0, 4000), now, now, now);
+          addEvent(assetId, "alert", `${ALERT_SEVERITY[finding.severity]}告警（已自动恢复）：${finding.title}`, "监控");
+        }
+        continue;
+      }
       const result = db()
         .prepare("INSERT INTO alerts (asset_id, key, source, severity, title, detail, status, sticky, count, first_at, last_at) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, 1, ?, ?)")
         .run(assetId, finding.key, finding.source, finding.severity, finding.title.slice(0, 200), finding.detail.slice(0, 4000), finding.sticky ? 1 : 0, now, now);
@@ -102,6 +117,11 @@ export function applyFindings(assetId: string, findings: Finding[], scopes: stri
       addEvent(assetId, "alert", `${ALERT_SEVERITY[alert.severity]}告警：${alert.title}`, "监控");
     }
     for (const alert of open) {
+      if (alert.sticky && cleared.has(alert.key)) {
+        db().prepare("UPDATE alerts SET status = 'resolved', resolved_by = '自动恢复', resolved_at = ? WHERE id = ?").run(now, alert.id);
+        addEvent(assetId, "alert", `告警恢复：${alert.title}`, "监控");
+        continue;
+      }
       if (alert.sticky || seen.has(alert.key) || !scopes.some((scope) => alert.key.startsWith(scope))) continue;
       db().prepare("UPDATE alerts SET status = 'resolved', resolved_by = '自动恢复', resolved_at = ? WHERE id = ?").run(now, alert.id);
       addEvent(assetId, "alert", `告警恢复：${alert.title}`, "监控");

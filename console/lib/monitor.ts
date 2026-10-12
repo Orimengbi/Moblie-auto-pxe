@@ -59,7 +59,7 @@ export function saveMonitorSettings(input: Partial<MonitorSettings>): MonitorSet
 const CRITICAL_STATUS = new Set(["cr", "nr", "lcr", "ucr", "lnr", "unr"]);
 const WARNING_STATUS = new Set(["nc", "lnc", "unc"]);
 /** 离散传感器状态常是 ok，问题写在读数文字里。 */
-const CRITICAL_TEXT = /failure detected|ac lost|power supply.*lost|uncorrectable|non-recoverable|fault|thermal trip|ierr|critical|not present.*expected/i;
+const CRITICAL_TEXT = /failure detected|ac lost|power supply.*lost|uncorrectable|non-recoverable|fault|thermal trip|ierr|(?<!non-)critical|not present.*expected/i;
 const WARNING_TEXT = /predictive failure|degraded|non-critical|correctable/i;
 
 export function sensorSeverity(status: string, reading: string): SensorReading["severity"] {
@@ -85,7 +85,8 @@ export function parseSdr(text: string): SensorReading[] {
   return out;
 }
 
-const SEL_CRITICAL = /critical|non-recoverable|uncorrectable|failure detected|ac lost|fault|ierr|machine check|thermal trip|bus fatal|bus uncorrectable|processor.*error|power off|watchdog/i;
+/** Non-critical 是警告，不能被 critical 先匹配上。 */
+const SEL_CRITICAL = /(?<!non-)critical|non-recoverable|uncorrectable|failure detected|ac lost|fault|ierr|machine check|thermal trip|bus fatal|bus uncorrectable|processor.*error|power off|watchdog/i;
 const SEL_WARNING = /correctable|predictive|non-critical|degraded|presence detected.*deasserted|throttl/i;
 
 export function selSeverity(event: string, direction: string): SelEntry["severity"] {
@@ -117,6 +118,17 @@ export function newSelEntries(entries: SelEntry[], last: string): SelEntry[] {
 
 export function selKey(entry: SelEntry): string {
   return `${entry.id}@${entry.at}`;
+}
+
+export function selAlertKey(entry: SelEntry): string {
+  return `sel:${entry.sensor}:${entry.event}`;
+}
+
+/** 读到的这段 SEL 里，同一传感器同一事件最后一条是 Deasserted 的：BMC 已经解除了，对应的告警可以自动恢复。 */
+export function clearedSelKeys(entries: SelEntry[]): Set<string> {
+  const last = new Map<string, boolean>();
+  for (const entry of entries) last.set(selAlertKey(entry), /deasserted/i.test(entry.direction));
+  return new Set([...last].filter(([, deasserted]) => deasserted).map(([key]) => key));
 }
 
 function wildcard(pattern: string): RegExp {
@@ -368,15 +380,17 @@ export async function checkBmc(asset: Asset, settings: MonitorSettings, exec: Mo
   }
 
   const sel = await exec(asset.bmcIp, account.user, account.password, ["sel", "elist", "last", "100"], 60_000, false);
+  let cleared = new Set<string>();
   if (sel.code === 0 || sel.stdout.trim()) {
     const entries = parseSel(sel.stdout);
     const fresh = newSelEntries(entries, state.selLast);
+    cleared = clearedSelKeys(entries);
     if (entries.length) state.selLast = selKey(entries[entries.length - 1]);
     state.selRecent = [...state.selRecent, ...(state.selRecent.length ? fresh : entries)].slice(-100);
     for (const entry of fresh) {
       if (entry.severity === "info") continue;
       findings.push({
-        key: `sel:${entry.sensor}:${entry.event}`,
+        key: selAlertKey(entry),
         source: "sel",
         severity: entry.severity,
         title: `BMC 事件：${entry.sensor} ${entry.event}`,
@@ -401,7 +415,7 @@ export async function checkBmc(asset: Asset, settings: MonitorSettings, exec: Mo
   }
   state.health = { at: now, overall: overallHealth(problems), problems, redfishError };
   saveState(state);
-  applyFindings(asset.id, findings, scopes);
+  applyFindings(asset.id, findings, scopes, cleared);
   return state;
 }
 

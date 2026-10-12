@@ -103,9 +103,9 @@ export function splitSse(buffer: string): { messages: string[]; rest: string } {
   return { messages, rest };
 }
 
-/** 任务进度这类事件只记不报。 */
+/** 任务进度这类事件只记不报。SelLogCreated 是 SEL 新增了一条，监控读 IPMI SEL 已经报了（还能按 Deasserted 自动恢复），这里不重复开。 */
 function alertable(event: Omit<BmcEvent, "id" | "assetId">): "critical" | "warning" | null {
-  if (/^Task\./.test(event.messageId)) return null;
+  if (/^Task\./.test(event.messageId) || /\.SelLogCreated$/.test(event.messageId)) return null;
   const severity = event.severity.toLowerCase();
   if (severity === "critical") return "critical";
   if (severity === "warning") return "warning";
