@@ -1,6 +1,7 @@
 import type { DiskMode, DiskPartition, DiskPick, DiskPolicy, Family, ImageRecord, InstalledNetwork, IpmiSetting, NicPlan, Profile } from "./types.ts";
 import { FAMILY_LABEL } from "./types.ts";
 import { applyHostname, bootOrigin, netmaskToPrefix } from "./net.ts";
+import { shq } from "./shq.ts";
 
 function yamlQuote(value: string): string {
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
@@ -141,10 +142,6 @@ export function renderIpmiScript(setting: IpmiSetting | null): string {
   else lines.push('ipmitool lan set "$ch" vlan id off || true');
   lines.push('ipmitool lan set "$ch" access on', 'ipmitool lan print "$ch"');
   return `${lines.join("\n")}\n`;
-}
-
-function shq(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 /** 装机时把控制台公钥写给 root，装完后控制台才能批量执行脚本。 */

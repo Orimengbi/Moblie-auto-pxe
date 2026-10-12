@@ -21,6 +21,7 @@ import { BMC_SETTING_LABEL } from "./asset-labels.ts";
 import { changeClock, collectSettings, openSession, validOffset, type ClockChange } from "./bmc-redfish.ts";
 import { filePayloadPath, getFile, getProject, getTask, listMachines, listNicPlans, readLeasesText, saveInventory, saveOptics, writeTask } from "./store.ts";
 import type { Asset, BmcResetVia, BmcSettingKind, HwChange, HwPort, InventorySource, OpticsReading, Machine, NicPlan, RemoteTask, ServerRow, TaskHostSource, TaskKind, TaskTarget, TaskTargetStatus } from "./types.ts";
+import { shq } from "./shq.ts";
 
 const OUTPUT_LIMIT = 16000;
 /** 采集脚本的原始输出要整段解析，不能像普通任务那样只留结尾。 */
@@ -360,10 +361,6 @@ export function sshFailure(host: string, jumps: JumpHost[] = listJumpHosts()): s
 /** 用控制台的密钥以 root SSH 进一台机器跑一段 bash（目标网段配了跳板机就经跳板机）。监控用。 */
 export function runSsh(host: string, script: string, timeoutMs = 120_000, exec: Exec = defaultExec): Promise<ExecResult> {
   return sshExec(exec, host, "bash -s", script, Date.now() + timeoutMs, INVENTORY_OUTPUT_LIMIT);
-}
-
-function shq(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 function tail(text: string): string {

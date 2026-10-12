@@ -3,7 +3,7 @@ import path from "node:path";
 import { ISO_FORMATS_LABEL, isoSuffix } from "./iso-name.ts";
 import { createImageFromIncoming } from "./store.ts";
 import type { ImageRecord } from "./types.ts";
-import { ensureDataDirs, incomingDir, uploadDir } from "./paths.ts";
+import { ensureDataDirs, incomingDir, uploadDir, isSafeId, dataDir } from "./paths.ts";
 
 export interface UploadSession {
   id: string;
@@ -35,7 +35,7 @@ function partPath(id: string): string {
 }
 
 function readSession(id: string): UploadSession | null {
-  if (!/^[a-zA-Z0-9_-]{8,80}$/.test(id)) return null;
+  if (!isSafeId(id)) return null;
   const file = metaPath(id);
   if (!fs.existsSync(file)) return null;
   return JSON.parse(fs.readFileSync(file, "utf8")) as UploadSession;
@@ -58,7 +58,7 @@ function repairOffset(session: UploadSession): UploadSession {
 
 export function listUploadSessions(): UploadSession[] {
   ensureDataDirs();
-  const dir = path.dirname(uploadDir("x"));
+  const dir = path.join(dataDir(), "uploads");
   if (!fs.existsSync(dir)) return [];
   return fs
     .readdirSync(dir)

@@ -7,7 +7,7 @@
     "build": "next build --turbopack",
     "start": "next start -p 43123",
     "lint": "eslint",
-    "test": "node --experimental-strip-types --test lib/appliance.test.ts lib/auth.test.ts lib/kvm-proxy.test.ts"
+    "test": "node --experimental-strip-types --test lib/*.test.ts"
   },
   "dependencies": {
     "@emotion/cache": "^11.14.0",
@@ -20,15 +20,18 @@
     "next": "15.5.27",
     "react": "19.1.0",
     "react-dom": "19.1.0",
-    "xlsx": "^0.18.5"
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
-    "@types/node": "^20",
+    "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "15.5.27",
     "typescript": "^5"
+  },
+  "engines": {
+    "node": ">=22.6.0"
   }
 }

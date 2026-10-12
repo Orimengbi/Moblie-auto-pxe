@@ -50,33 +50,7 @@ import {
 } from "./net.ts";
 import { hashPassword } from "./password.ts";
 import { ISO_FORMATS_LABEL, isoSuffix, storedSuffix, stripIsoSuffix } from "./iso-name.ts";
-import {
-  baselinePath,
-  dataDir,
-  diagDir,
-  inventoryDir,
-  opticsPath,
-  dnsmasqConfPath,
-  fileDir,
-  ensureDataDirs,
-  imageDir,
-  incomingDir,
-  ipmiPath,
-  factPath,
-  nicPath,
-  serverPath,
-  serverImportPath,
-  leasePath,
-  machinePath,
-  profilePath,
-  projectPath,
-  reportPath,
-  scriptBodyPath,
-  scriptMetaPath,
-  statePath,
-  taskPath,
-  tftpDir,
-} from "./paths.ts";
+import { baselinePath, dataDir, diagDir, inventoryDir, opticsPath, dnsmasqConfPath, fileDir, ensureDataDirs, imageDir, incomingDir, ipmiPath, factPath, nicPath, serverPath, serverImportPath, leasePath, machinePath, profilePath, projectPath, reportPath, scriptBodyPath, scriptMetaPath, statePath, taskPath, tftpDir, isSafeId } from "./paths.ts";
 import {
   type Asset,
   DEFAULT_STATE,
@@ -130,10 +104,11 @@ function readJson<T>(file: string): T | null {
   return JSON.parse(fs.readFileSync(file, "utf8")) as T;
 }
 
+/** 只有属主能读写：里面有 BMC 密码、装机密码这类东西，同一个 data 目录还挂给了 nginx 容器。 */
 function writeJson(file: string, value: unknown): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`);
+  fs.writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
   fs.renameSync(tmp, file);
 }
 
@@ -252,7 +227,7 @@ function withImageSize(image: ImageRecord): ImageRecord {
 }
 
 export function getImage(id: string): ImageRecord | null {
-  if (!/^[a-zA-Z0-9_-]{8,80}$/.test(id)) return null;
+  if (!isSafeId(id)) return null;
   const image = readJson<ImageRecord>(path.join(imageDir(id), "meta.json"));
   return image ? withImageSize(image) : null;
 }
@@ -330,7 +305,7 @@ export function listProfiles(): Profile[] {
 }
 
 export function getProfile(id: string): Profile | null {
-  if (!/^[a-zA-Z0-9_-]{8,80}$/.test(id)) return null;
+  if (!isSafeId(id)) return null;
   return readJson<Profile>(profilePath(id));
 }
 
@@ -516,7 +491,7 @@ export function profilesForProject(projectId: string): Profile[] {
 }
 
 export function getProject(id: string): Project | null {
-  if (!/^[a-zA-Z0-9_-]{8,80}$/.test(id)) return null;
+  if (!isSafeId(id)) return null;
   const project = readJson<Project>(projectPath(id));
   return project ? hydrateProject(project) : null;
 }
@@ -730,7 +705,7 @@ export function listIpmi(): IpmiSetting[] {
 }
 
 export function getIpmi(id: string): IpmiSetting | null {
-  if (!/^[a-zA-Z0-9_-]{8,80}$/.test(id)) return null;
+  if (!isSafeId(id)) return null;
   return readJson<IpmiSetting>(ipmiPath(id));
 }
 
@@ -886,7 +861,7 @@ export async function createNic(input: NicInput): Promise<NicPlan> {
 
 export async function updateNic(id: string, input: NicInput): Promise<NicPlan> {
   return withLock(() => {
-    if (!/^[a-zA-Z0-9_-]{8,80}$/.test(id)) throw new Error("网卡设置不存在");
+    if (!isSafeId(id)) throw new Error("网卡设置不存在");
     const existing = listNicPlans().find((item) => item.id === id);
     if (!existing) throw new Error("网卡设置不存在");
     const plan: NicPlan = {
@@ -903,7 +878,7 @@ export async function updateNic(id: string, input: NicInput): Promise<NicPlan> {
 
 export async function deleteNic(id: string): Promise<void> {
   return withLock(() => {
-    if (!/^[a-zA-Z0-9_-]{8,80}$/.test(id) || !listNicPlans().some((item) => item.id === id)) throw new Error("网卡设置不存在");
+    if (!isSafeId(id) || !listNicPlans().some((item) => item.id === id)) throw new Error("网卡设置不存在");
     fs.rmSync(nicPath(id), { force: true });
   });
 }
@@ -1118,7 +1093,7 @@ export function listScripts(): DiagScript[] {
 }
 
 export function getScript(id: string): DiagScript | null {
-  if (!/^[a-zA-Z0-9_-]{8,80}$/.test(id)) return null;
+  if (!isSafeId(id)) return null;
   return readJson<DiagScript>(scriptMetaPath(id));
 }
 
@@ -1177,7 +1152,7 @@ export function listReports(): Report[] {
 }
 
 export function getReport(id: string): Report | null {
-  if (!/^[a-zA-Z0-9_-]{8,80}$/.test(id)) return null;
+  if (!isSafeId(id)) return null;
   return readJson<Report>(reportPath(id));
 }
 
@@ -1936,7 +1911,7 @@ export function listAllTasks(): RemoteTask[] {
 }
 
 export function getTask(id: string): RemoteTask | null {
-  if (!/^[a-zA-Z0-9_-]{8,80}$/.test(id)) return null;
+  if (!isSafeId(id)) return null;
   const task = readJson<RemoteTask>(taskPath(id));
   return task ? hydrateTask(task) : null;
 }
@@ -1983,7 +1958,7 @@ export function listFiles(): RemoteFile[] {
 }
 
 export function getFile(id: string): RemoteFile | null {
-  if (!/^[a-zA-Z0-9_-]{8,80}$/.test(id)) return null;
+  if (!isSafeId(id)) return null;
   return readJson<RemoteFile>(path.join(fileDir(id), "meta.json"));
 }
 
