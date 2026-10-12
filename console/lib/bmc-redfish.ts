@@ -1118,6 +1118,14 @@ function statusOf(doc: RedfishDoc | null): { health: string; rollup: string; sta
  * 和 BMC 网页一样按 Redfish 的 Status 看健康：整机、机箱（含汇总）、HGX 底板和 HGX 机箱的汇总，
  * 电源和风扇逐个看。只列不健康的；HGX 底板的汇总里有出厂遗留的旧告警时也会算进来，以 BMC 自己给的为准。
  */
+/** 整机汇总不好时往下查的几类部件。 */
+const SYSTEM_PARTS = [
+  ["Memory", "内存"],
+  ["Processors", "CPU"],
+  ["Storage", "存储"],
+  ["EthernetInterfaces", "网卡"],
+] as const;
+
 export async function readHealth(session: BmcSession): Promise<HealthProblem[]> {
   const problems: HealthProblem[] = [];
   const add = (name: string, doc: RedfishDoc | null) => {
@@ -1127,6 +1135,23 @@ export async function readHealth(session: BmcSession): Promise<HealthProblem[]> 
   };
   const system = session.paths.system ? await rfFind(session, session.paths.system) : null;
   add("整机", system);
+  // 整机只是「汇总」不好（自己 OK）时，往下找是哪根内存、哪颗 CPU、哪块盘或网卡；找到了就不再报笼统的「整机」。
+  const own = statusOf(system);
+  if (system && (!own.health || own.health === "OK") && (own.rollup === "Warning" || own.rollup === "Critical")) {
+    const found = problems.length;
+    for (const [key, label] of SYSTEM_PARTS) {
+      const collection = link(system, key);
+      if (!collection) continue;
+      for (const member of members(await rfFind(session, collection))) {
+        const doc = await rfFind(session, member);
+        if (!doc) continue;
+        const id = str(doc.Id) || member.split("/").pop() || "";
+        const name = str(doc.Name);
+        add(`${label} ${id}${name && name !== id ? `（${name}）` : ""}`, doc);
+      }
+    }
+    if (problems.length > found) problems.splice(found - 1, 1);
+  }
   const chassis = session.paths.chassis ? await rfFind(session, session.paths.chassis) : null;
   add("机箱", chassis);
   for (const [collection, pattern, label] of [
