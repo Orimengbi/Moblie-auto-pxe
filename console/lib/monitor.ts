@@ -3,11 +3,11 @@ import path from "node:path";
 import { applyFindings, type Finding } from "./alerts.ts";
 import { assetBmcAccounts } from "./assets.ts";
 import { db, getSetting, putSetting } from "./db.ts";
-import { defaultIpmiExec, firstWorkingAccount, ipmiFailure, type IpmiExec } from "./ipmi-remote.ts";
+import { defaultIpmiExec, firstWorkingAccount, ipmiFailure, parsePowerStatus, type IpmiExec } from "./ipmi-remote.ts";
 import { dataDir } from "./paths.ts";
 import { markedSections } from "./sections.ts";
 import { assetHealthProblems } from "./bmc-redfish.ts";
-import type { Asset, AssetHealth, AssetStatus, DiskHealth, GpuHealth, HealthLevel, HealthProblem, MonitorSettings, MonitorState, SelEntry, SensorReading } from "./types.ts";
+import type { Asset, AssetHealth, AssetStatus, DiskHealth, GpuHealth, HealthLevel, HealthProblem, MonitorSettings, MonitorState, PowerState, SelEntry, SensorReading } from "./types.ts";
 
 /**
  * 监控：用 ipmitool 读 BMC 的传感器（sdr elist）和事件日志（sel elist），SSH 进系统查 GPU（nvidia-smi、Xid）和硬盘健康。
@@ -221,7 +221,7 @@ export function parseDisks(text: string): DiskHealth[] {
 // ---------- 状态 ----------
 
 function emptyState(assetId: string): MonitorState {
-  return { assetId, bmcAt: "", bmcOk: false, bmcError: "", bmcFailures: 0, sensors: [], selLast: "", selRecent: [], osAt: "", osOkAt: "", osOk: false, osError: "", gpus: [], disks: [], ports: [], health: null };
+  return { assetId, bmcAt: "", bmcOk: false, bmcError: "", bmcFailures: 0, sensors: [], selLast: "", selRecent: [], osAt: "", osOkAt: "", osOk: false, osError: "", gpus: [], disks: [], ports: [], health: null, power: "unknown", powerAt: "" };
 }
 
 function parseJson<T>(value: unknown, fallback: T): T {
@@ -252,7 +252,30 @@ export function getMonitorState(assetId: string): MonitorState {
     disks: parseJson(row.disks, []),
     ports: parseJson(row.ports, []),
     health: parseJson(row.health, null),
+    power: toPower(row.power),
+    powerAt: String(row.power_at ?? ""),
   };
+}
+
+function toPower(value: unknown): PowerState {
+  return value === "on" || value === "off" ? value : "unknown";
+}
+
+/** 资产列表用：每台上次读到的开关机状态。 */
+export function powerByAsset(): Map<string, { state: PowerState; at: string }> {
+  const out = new Map<string, { state: PowerState; at: string }>();
+  for (const row of db().prepare("SELECT asset_id, power, power_at FROM monitor_state WHERE power_at != ''").all()) {
+    out.set(String(row.asset_id), { state: toPower(row.power), at: String(row.power_at) });
+  }
+  return out;
+}
+
+/** 开关机操作后马上记下，不用等下一轮监控。 */
+export function recordPower(assetId: string, power: PowerState): void {
+  const state = getMonitorState(assetId);
+  state.power = power;
+  state.powerAt = new Date().toISOString();
+  saveState(state);
 }
 
 /** 资产列表用：每台最近一次的健康状态，一次查完。 */
@@ -279,11 +302,12 @@ export function saveMonitorState(state: MonitorState): void {
 function saveState(state: MonitorState): void {
   db()
     .prepare(
-      `INSERT INTO monitor_state (asset_id, bmc_at, bmc_ok, bmc_error, bmc_failures, sensors, sel_last, sel_recent, os_at, os_ok, os_error, gpus, disks, ports, os_ok_at, health)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO monitor_state (asset_id, bmc_at, bmc_ok, bmc_error, bmc_failures, sensors, sel_last, sel_recent, os_at, os_ok, os_error, gpus, disks, ports, os_ok_at, health, power, power_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(asset_id) DO UPDATE SET bmc_at = excluded.bmc_at, bmc_ok = excluded.bmc_ok, bmc_error = excluded.bmc_error, bmc_failures = excluded.bmc_failures,
          sensors = excluded.sensors, sel_last = excluded.sel_last, sel_recent = excluded.sel_recent, os_at = excluded.os_at, os_ok = excluded.os_ok,
-         os_error = excluded.os_error, gpus = excluded.gpus, disks = excluded.disks, ports = excluded.ports, os_ok_at = excluded.os_ok_at, health = excluded.health`,
+         os_error = excluded.os_error, gpus = excluded.gpus, disks = excluded.disks, ports = excluded.ports, os_ok_at = excluded.os_ok_at, health = excluded.health,
+         power = excluded.power, power_at = excluded.power_at`,
     )
     .run(
       state.assetId,
@@ -302,6 +326,8 @@ function saveState(state: MonitorState): void {
       JSON.stringify(state.ports),
       state.osOkAt,
       JSON.stringify(state.health),
+      state.power,
+      state.powerAt,
     );
 }
 
@@ -340,6 +366,11 @@ export async function checkBmc(asset: Asset, settings: MonitorSettings, exec: Mo
   } else {
     const found = await firstWorkingAccount(asset.bmcIp, accounts, exec);
     account = found.account;
+    // 找账号用的就是 chassis power status，顺带记下开关机。
+    if (account) {
+      state.power = parsePowerStatus(found.result.stdout);
+      state.powerAt = now;
+    }
     if (!account) failure = ipmiFailure(found.result.stderr) === "denied" ? `BMC ${asset.bmcIp} 不接受资产里的账号密码` : `BMC ${asset.bmcIp} 没有回应`;
   }
 
@@ -350,6 +381,10 @@ export async function checkBmc(asset: Asset, settings: MonitorSettings, exec: Mo
     // 和「BMC 连不上」告警同一个标准：连续失败够次数才显示连不上，偶尔一次没连上保留上次的结果。
     if (!asset.bmcIp || !accounts.length) state.health = null;
     else if (state.bmcFailures >= settings.bmcFailuresToAlert) state.health = { at: now, overall: "unreachable", problems: [], redfishError: `${failure}，连续 ${state.bmcFailures} 次` };
+    if (state.bmcFailures >= settings.bmcFailuresToAlert && state.power !== "unknown") {
+      state.power = "unknown";
+      state.powerAt = now;
+    }
     if (asset.bmcIp && accounts.length && state.bmcFailures >= settings.bmcFailuresToAlert) {
       findings.push({ key: "bmc:down", source: "bmc", severity: "warning", title: "BMC 连不上", detail: `${failure}，连续 ${state.bmcFailures} 次` });
     }

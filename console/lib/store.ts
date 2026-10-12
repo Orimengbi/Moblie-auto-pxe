@@ -24,6 +24,7 @@ import {
   type IpmiExec,
   type PowerAction,
 } from "./ipmi-remote.ts";
+import { recordPower } from "./monitor.ts";
 import type { PlanCells } from "./plan-sheet.ts";
 import type { ServerCells } from "./server-sheet.ts";
 import {
@@ -1794,6 +1795,7 @@ export async function controlAsset(assetId: string, input: ServerControl, exec: 
     done.push(POWER_ACTIONS[action].label);
   }
   const state = await powerStatus(asset.bmcIp, account.user, account.password, exec).catch(() => "unknown" as const);
+  recordPower(assetId, state);
   await withLock(() => {
     for (const current of serversOfAsset(assetId)) {
       if (current.power === state && current.ipmiLink === "up") continue;

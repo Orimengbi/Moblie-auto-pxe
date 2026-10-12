@@ -24,7 +24,7 @@ import { BmcLogsBatchDialog, BmcUserBatchDialog } from "@/components/bmc-batch-d
 import { ServerSidebar, type Tab as SidebarTab } from "@/components/server-sidebar";
 import type { AssetRow } from "@/lib/asset-view";
 import { ASSET_STATUS, ASSET_STATUS_TONE, ASSET_TYPES, HEALTH_LABEL, HEALTH_TONE, WARRANTY_LABEL } from "@/lib/asset-labels";
-import type { AssetHealth, AssetStatus, Customer, Datacenter, RemoteFile, Site } from "@/lib/types";
+import type { AssetHealth, AssetStatus, PowerState, Customer, Datacenter, RemoteFile, Site } from "@/lib/types";
 import { SiteOptions } from "@/components/site-options";
 import { matchesSearch, pasteAsList, searchTerms } from "@/lib/search";
 import { formatTime } from "@/lib/time";
@@ -86,7 +86,22 @@ function HealthCell({ health }: { health: AssetHealth | null }) {
   );
 }
 
-/** 单元格里的第二行小字。 */
+const POWER_LABEL: Record<PowerState, string> = { on: "开机", off: "关机", unknown: "未知" };
+const POWER_TONE = { on: "success", off: "neutral", unknown: "warning" } as const;
+
+/** 「电源」一格：监控上次连 BMC 读到的开关机，鼠标停上去看是什么时候读的。 */
+function PowerCell({ power }: { power: AssetRow["power"] }) {
+  if (!power) return <Dash />;
+  return (
+    <Tooltip title={`${power.state === "unknown" ? "BMC 连不上，读不到" : "读于"} ${formatTime(power.at)}`}>
+      <span>
+        <StatusChip tone={POWER_TONE[power.state]} label={POWER_LABEL[power.state]} />
+      </span>
+    </Tooltip>
+  );
+}
+
+/** 单元格里的第二行小字。
 function Sub({ children, color = "text.secondary" }: { children: React.ReactNode; color?: string }) {
   return (
     <Typography component="span" variant="caption" sx={{ display: "block", color, fontFamily: FONT_SANS }}>
@@ -299,6 +314,15 @@ export function AssetList({
         valueGetter: (_value, row) => row.health?.overall || "",
         valueOptions: Object.entries(HEALTH_LABEL).map(([value, label]) => ({ value, label })),
         renderCell: ({ row }) => <HealthCell health={row.health} />,
+      },
+      {
+        field: "power",
+        headerName: "电源",
+        width: 80,
+        type: "singleSelect",
+        valueGetter: (_value, row) => row.power?.state || "",
+        valueOptions: Object.entries(POWER_LABEL).map(([value, label]) => ({ value, label })),
+        renderCell: ({ row }) => <PowerCell power={row.power} />,
       },
       {
         field: "place",

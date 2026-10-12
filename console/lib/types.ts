@@ -1072,6 +1072,9 @@ export interface MonitorState {
   /** 网络设备上次读到的端口状态和错包数，用来比出掉线和错包增长。 */
   ports: { name: string; admin: string; oper: string; inErrors: number | null; outErrors: number | null; neighbor: string }[];
   health: AssetHealth | null;
+  /** 上次从 BMC 读到的开关机状态；BMC 连续连不上够次数后变成 unknown。 */
+  power: PowerState;
+  powerAt: string;
 }
 
 export interface MonitorSettings {
