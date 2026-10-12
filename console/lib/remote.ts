@@ -314,8 +314,12 @@ async function sshExec(exec: Exec, host: string, command: string, stdin: string 
     const error = await checkJump(jump, exec);
     if (error) return { code: 255, output: `${error}\n`, timedOut: false };
   }
-  return exec("ssh", sshArgs(host, command, jumps), stdin, deadline, limit);
+  const ran = await exec("ssh", sshArgs(host, command, jumps), stdin, deadline, limit);
+  return jump ? { ...ran, output: ran.output.replace(MUX_NOISE, "") } : ran;
 }
+
+/** 复用的连接会话满了（sshd 的 MaxSessions）时 ssh 自己另开一条，会打这两行，不是错误。 */
+const MUX_NOISE = /^(mux_client_request_session: session request failed.*|ControlSocket .* already exists, disabling multiplexing)\r?\n/gm;
 
 /**
  * 登一台机器跑一条命令的 ssh 参数。目标网段配了跳板机时，先用控制台的密钥登跳板机，

@@ -79,3 +79,14 @@ test("a jump host that refuses us is tried once, then skipped for a while", asyn
   assert.equal(calls, 1);
   forgetJumpChecks();
 });
+
+test("multiplexing fallback noise is dropped from the output", async () => {
+  saveJumpHosts([jump]);
+  forgetJumpChecks();
+  const exec = async (_command: string, args: string[]) =>
+    args.at(-1) === "true"
+      ? { code: 0, output: "", timedOut: false }
+      : { code: 0, output: "mux_client_request_session: session request failed: Session open refused by peer\nControlSocket /data/ssh/cm-5a40 already exists, disabling multiplexing\nGPU-154\n", timedOut: false };
+  assert.equal((await runSsh("22.142.27.28", "hostname", 10_000, exec)).output, "GPU-154\n");
+  forgetJumpChecks();
+});
