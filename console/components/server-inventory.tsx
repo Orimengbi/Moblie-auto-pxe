@@ -15,7 +15,7 @@ import type { Baseline, BaselineIssue, HwComponent, HwKind, InventoryMeta, Inven
 import { formatTime } from "@/lib/time";
 import { useCan } from "@/components/role-context";
 import { PortSections } from "@/components/server-ports";
-import { portSummary } from "@/lib/ports";
+import { partLocations, portSummary } from "@/lib/ports";
 
 const MONO = "var(--font-geist-mono), monospace";
 
@@ -60,7 +60,9 @@ export function useGridColumnWidths(storageKey: string) {
 }
 
 /** 每类部件一张表，列都一样，列宽按类别各记各的。 */
-const PART_COLUMNS: GridColDef<HwComponent & { id: number }>[] = [
+type PartRow = HwComponent & { id: number; location: string };
+
+const PART_COLUMNS: GridColDef<PartRow>[] = [
   { field: "slot", headerName: "槽位", width: 130 },
   { field: "model", headerName: "型号", flex: 1, minWidth: 180, valueGetter: (value) => value || "—" },
   { field: "vendor", headerName: "厂商", width: 110, valueGetter: (value) => value || "—" },
@@ -88,11 +90,15 @@ function kindHeading(kind: HwComponent["kind"], items: HwComponent[], all: HwCom
   return `${KIND_LABEL[kind]}（${items.length}）`;
 }
 
+/** 「插在」列：GPU、网卡、盘插在哪个 PCIe 槽或盘位，来自同一次采集的接口数据。 */
+const LOCATION_COLUMN: GridColDef<PartRow> = { field: "location", headerName: "插在", width: 130, valueGetter: (value) => value || "—" };
+
 /** 一类部件的表格。列宽按类别记，比如 GPU 表把序列号拉宽不影响内存表。 */
-function PartTable({ kind, items }: { kind: HwKind; items: HwComponent[] }) {
+function PartTable({ kind, items, locations }: { kind: HwKind; items: HwComponent[]; locations: Map<HwComponent, string> }) {
   const { apply, onColumnWidthChange } = useGridColumnWidths(`pxe-inventory-columns:${kind}`);
-  const columns = useMemo(() => apply(PART_COLUMNS), [apply]);
-  const rows = useMemo(() => items.map((item, index) => ({ ...item, id: index })), [items]);
+  const located = items.some((item) => locations.has(item));
+  const columns = useMemo(() => apply(located ? [PART_COLUMNS[0], LOCATION_COLUMN, ...PART_COLUMNS.slice(1)] : PART_COLUMNS), [apply, located]);
+  const rows = useMemo(() => items.map((item, index) => ({ ...item, id: index, location: locations.get(item) || "" })), [items, locations]);
   return (
     <DataGrid
       rows={rows}
@@ -106,7 +112,7 @@ function PartTable({ kind, items }: { kind: HwKind; items: HwComponent[] }) {
         fontSize: 12,
         // 型号、属性可能很长，换行显示而不是截断。
         "& .MuiDataGrid-cell": { py: 0.75, whiteSpace: "normal", wordBreak: "break-word", lineHeight: 1.5 },
-        "& .MuiDataGrid-cell[data-field=slot], & .MuiDataGrid-cell[data-field=sn], & .MuiDataGrid-cell[data-field=firmware]": { fontFamily: MONO },
+        "& .MuiDataGrid-cell[data-field=slot], & .MuiDataGrid-cell[data-field=location], & .MuiDataGrid-cell[data-field=sn], & .MuiDataGrid-cell[data-field=firmware]": { fontFamily: MONO },
         "& .MuiDataGrid-cell[data-field=attrs]": { color: "text.secondary" },
       }}
     />
@@ -188,6 +194,7 @@ export function ServerInventory({ projectId, row }: { projectId?: string; row: {
   }
 
   const snapshot = view?.snapshot || null;
+  const locations = useMemo(() => (snapshot?.ports ? partLocations(snapshot.components, snapshot.ports) : new Map<HwComponent, string>()), [snapshot]);
   const source: InventorySource = snapshot?.source || "os";
   const history = (view?.history || []).filter((item) => item.source === source);
   const hasSource = (value: InventorySource) => (view?.history || []).some((item) => item.source === value);
@@ -345,7 +352,7 @@ export function ServerInventory({ projectId, row }: { projectId?: string; row: {
             return (
               <Stack key={kind} component="section" spacing={0.5}>
                 <Typography variant="subtitle2">{kindHeading(kind, items, snapshot.components)}</Typography>
-                <PartTable kind={kind} items={items} />
+                <PartTable kind={kind} items={items} locations={locations} />
               </Stack>
             );
           })}

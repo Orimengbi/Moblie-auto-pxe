@@ -200,8 +200,11 @@ export function parseOsPorts(sections: Map<string, string>, components: HwCompon
     slotRows.set(name, { port, devs: [...devs], valid });
     ports.push(port);
   }
+  /** 槽里的部件：PCI 地址，NVMe 再加盘符。 */
+  const partsOf = (devs: PciDev[]) => [...new Set(devs.flatMap((dev) => [dev.addr, nvmeByPci.get(dev.addr) || ""]).filter(Boolean))];
   for (const { port, devs, valid } of slotRows.values()) {
     port.device = describe(devs);
+    if (devs.length) port.parts = partsOf(devs);
     if (port.used && !devs.length) port.note = "BIOS 报占用，系统里没找到设备";
     if (!valid) port.note = "BIOS 没给总线地址，占用按 BIOS 报的";
   }
@@ -226,6 +229,7 @@ export function parseOsPorts(sections: Map<string, string>, components: HwCompon
       type: nvme ? "NVMe" : "PCIe 热插拔",
       used,
       device: describe(devs),
+      ...(devs.length ? { parts: partsOf(devs) } : {}),
       ...(!devs.length ? { note: nvme ? "空槽，按同一批热插拔槽里装着 NVMe 推测是 NVMe 盘位" : "空的热插拔槽，可能是 NVMe 盘位，也可能是交换芯片上没接东西的口" } : {}),
     });
   }
@@ -242,6 +246,7 @@ export function parseOsPorts(sections: Map<string, string>, components: HwCompon
       type: "SAS/SATA 背板",
       used: block ? true : /not installed/i.test(status) ? false : /^ok$/i.test(status) ? true : null,
       device: block ? diskText(disks.get(block), block) : "",
+      ...(block ? { parts: [block] } : {}),
     });
   }
 
@@ -256,6 +261,7 @@ export function parseOsPorts(sections: Map<string, string>, components: HwCompon
       type: ctl?.name ? `SATA（${ctl.name}）` : "SATA",
       used: Boolean(block),
       device: block ? diskText(disks.get(block), block) : "",
+      ...(block ? { parts: [block] } : {}),
     });
   }
 
@@ -386,6 +392,7 @@ export function redfishPorts(raw: RedfishRaw): HwPort[] {
           type: [/M\.2/i.test(name) ? "M.2" : "NVMe", pcieType && `（${pcieType}）`].filter(Boolean).join(""),
           used,
           device: drives.length ? deviceText(drives.map(driveText)) : deviceText(linked.map((item) => str(item, "Model") || str(item, "Name") || id(item))),
+          ...(drives.length || deviceIds.length ? { parts: [...drives.map(id), ...deviceIds] } : {}),
         });
         return;
       }
@@ -395,6 +402,7 @@ export function redfishPorts(raw: RedfishRaw): HwPort[] {
         type: [pcieType, str(slot, "SlotType")].filter(Boolean).join(" "),
         used,
         device: deviceText(linked.map((item) => str(item, "Model") || str(item, "Name") || id(item))),
+        ...(links.length ? { parts: links.map((link) => link.split("/").pop() || "").filter(Boolean) } : {}),
       });
     });
   }
@@ -449,4 +457,23 @@ export function portSummary(ports: HwPort[], group: PortGroup): string {
   const free = list.filter((port) => port.used === false).length;
   const unknown = list.length - used - free;
   return `${PORT_GROUP_LABEL[group]} ${list.length} 个：占用 ${used}，空闲 ${free}${unknown ? `，不确定 ${unknown}` : ""}`;
+}
+
+/**
+ * 部件插在哪个槽或盘位：按采集时记下的 parts 对部件的 slot 或 attrs.pci。
+ * 以前的采集没有 parts，盘按「插着的」开头的盘符对。返回 部件 → 槽位名。
+ */
+export function partLocations(components: HwComponent[], ports: HwPort[]): Map<HwComponent, string> {
+  const byKey = new Map<string, string>();
+  for (const port of ports) {
+    if (port.group === "net" || port.note === "没对上盘位") continue;
+    const keys = port.parts || (port.group === "drive" && port.device ? [port.device.split(" ")[0]] : []);
+    for (const key of keys) if (key && !byKey.has(key.toLowerCase())) byKey.set(key.toLowerCase(), port.name);
+  }
+  const found = new Map<HwComponent, string>();
+  for (const item of components) {
+    const name = [item.slot, String(item.attrs.pci || "")].map((key) => byKey.get(key.toLowerCase())).find(Boolean);
+    if (name && name !== item.slot) found.set(item, name);
+  }
+  return found;
 }
