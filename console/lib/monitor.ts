@@ -421,7 +421,7 @@ export async function checkOs(
   const ran = await ssh(host, OS_MONITOR_SCRIPT(since));
   if (ran.code === 255 || !ran.output.includes("===PXEMON end")) {
     state.osOk = false;
-    state.osError = `SSH 登录 ${host} 失败`;
+    state.osError = ran.output.startsWith("跳板机 ") ? ran.output.trim() : `SSH 登录 ${host} 失败`;
     saveState(state);
     return state;
   }

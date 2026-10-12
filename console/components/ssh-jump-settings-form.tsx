@@ -155,7 +155,7 @@ export function SshJumpSettingsForm({ jumps, publicKey }: { jumps: JumpHost[]; p
                 ) : tested ? (
                   <Typography variant="body2" component="div">
                     <Box component="span" sx={{ color: tested.jumpOk ? "success.main" : "error.main" }}>
-                      跳板机：{tested.jumpOk ? `能登录（${tested.jumpOutput}）` : `登录失败 ${tested.jumpOutput}`}
+                      {tested.jumpOk ? "跳板机：能登录" : tested.jumpOutput}
                     </Box>
                     {tested.targetOk !== undefined ? (
                       <Box component="span" sx={{ ml: 1.5, color: tested.targetOk ? "success.main" : "error.main" }}>

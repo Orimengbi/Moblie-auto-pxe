@@ -258,9 +258,63 @@ function sshOptions(): string[] {
 /** 跳板机上登目标用的选项：和直连一样不记主机密钥、连不上 8 秒就放弃。 */
 const JUMP_INNER_OPTIONS = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR", "-o", "ConnectTimeout=8", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"];
 
-/** 只登跳板机本身跑一条命令。 */
+/**
+ * 只登跳板机本身跑一条命令。到跳板机的连接复用一条（ControlMaster）：监控一轮要经它登几百台，
+ * 每台都新开一条 SSH 会被跳板机的 sshd 当成扫描，整个控制台 IP 被封（"Not allowed at this time"）。
+ */
 export function jumpSshArgs(jump: JumpHost, command: string): string[] {
-  return [...sshOptions(), "-p", String(jump.port), `${jump.user}@${jump.host}`, command];
+  const mux = ["-o", "ControlMaster=auto", "-o", `ControlPath=${path.join(path.dirname(sshKeyPath()), "cm-%C")}`, "-o", "ControlPersist=300"];
+  return [...sshOptions(), ...mux, "-p", String(jump.port), `${jump.user}@${jump.host}`, command];
+}
+
+/** 跳板机这一跳最近一次试连的结果。登不上的 5 分钟内不再去连，免得一轮几百次失败把控制台 IP 封得更久。 */
+const jumpChecks = new Map<string, { at: number; error: string; pending?: Promise<string> }>();
+const JUMP_OK_MS = 60_000;
+const JUMP_DOWN_MS = 5 * 60_000;
+
+function jumpKey(jump: JumpHost): string {
+  return `${jump.user}@${jump.host}:${jump.port}`;
+}
+
+function jumpDownMessage(jump: JumpHost, output: string): string {
+  const said = output.trim().split("\n").slice(-2).join(" ").slice(0, 200);
+  const hint = /Not allowed at this time/i.test(output)
+    ? "跳板机的 sshd 因为这个 IP 登录失败太多次，暂时把控制台封了（一般 10 分钟内自动解开）。先确认控制台公钥已放进跳板机的 authorized_keys"
+    : /Permission denied/i.test(output)
+      ? "跳板机不认控制台的密钥，把设置页里的控制台公钥加进跳板机的 authorized_keys"
+      : "跳板机连不上";
+  return `跳板机 ${jumpLabel(jump)} 登不上：${hint}${said ? `（${said}）` : ""}`;
+}
+
+/** 经跳板机之前先确认跳板机这一跳通不通，结果缓存，同时来的请求共用一次试连。通了返回空串。 */
+export async function checkJump(jump: JumpHost, exec: Exec = defaultExec): Promise<string> {
+  const key = jumpKey(jump);
+  const cached = jumpChecks.get(key);
+  if (cached?.pending) return cached.pending;
+  if (cached && Date.now() - cached.at < (cached.error ? JUMP_DOWN_MS : JUMP_OK_MS)) return cached.error;
+  const pending = exec("ssh", jumpSshArgs(jump, "true"), null, Date.now() + 20_000).then(
+    (ran) => (ran.code === 0 ? "" : jumpDownMessage(jump, ran.output)),
+    (error) => jumpDownMessage(jump, String(error)),
+  );
+  jumpChecks.set(key, { at: Date.now(), error: "", pending });
+  const error = await pending;
+  jumpChecks.set(key, { at: Date.now(), error });
+  return error;
+}
+
+/** 设置里改了跳板机或手动试连后，忘掉之前的结果。 */
+export function forgetJumpChecks(): void {
+  jumpChecks.clear();
+}
+
+/** SSH 进一台机器跑一条命令；要经跳板机而跳板机登不上时不去连，直接当 255 返回原因。 */
+async function sshExec(exec: Exec, host: string, command: string, stdin: string | null, deadline: number, limit?: number, jumps: JumpHost[] = listJumpHosts()): Promise<ExecResult> {
+  const jump = jumpFor(host, jumps);
+  if (jump) {
+    const error = await checkJump(jump, exec);
+    if (error) return { code: 255, output: `${error}\n`, timedOut: false };
+  }
+  return exec("ssh", sshArgs(host, command, jumps), stdin, deadline, limit);
 }
 
 /**
@@ -277,13 +331,15 @@ export function sshArgs(host: string, command: string, jumps: JumpHost[] = listJ
 /** SSH 登不上时的提示，经跳板机的说明是哪一台。 */
 export function sshFailure(host: string, jumps: JumpHost[] = listJumpHosts()): string {
   const jump = jumpFor(host, jumps);
+  const down = jump && jumpChecks.get(jumpKey(jump))?.error;
+  if (down) return down;
   if (jump) return `经跳板机 ${jumpLabel(jump)} 登录 ${host} 失败。跳板机上没放控制台公钥、跳板机连不上目标，或者目标端口、私钥不对`;
   return `SSH 登录 ${host} 失败。机器没开、地址不对，或者装机时没写入控制台公钥`;
 }
 
 /** 用控制台的密钥以 root SSH 进一台机器跑一段 bash（目标网段配了跳板机就经跳板机）。监控用。 */
 export function runSsh(host: string, script: string, timeoutMs = 120_000, exec: Exec = defaultExec): Promise<ExecResult> {
-  return exec("ssh", sshArgs(host, "bash -s"), script, Date.now() + timeoutMs, INVENTORY_OUTPUT_LIMIT);
+  return sshExec(exec, host, "bash -s", script, Date.now() + timeoutMs, INVENTORY_OUTPUT_LIMIT);
 }
 
 function shq(value: string): string {
@@ -307,10 +363,11 @@ export async function runOnHost(
   const timedOut = () => ({ status: "timeout" as const, exitCode: null, output: tail(`${log}超过 ${task.timeoutSec} 秒，已中止\n`) });
 
   const jumps = listJumpHosts();
-  const prepared = await exec("ssh", sshArgs(target.host, `mkdir -p ${shq(dir)}`, jumps), null, deadline);
+  const prepared = await sshExec(exec, target.host, `mkdir -p ${shq(dir)}`, null, deadline, undefined, jumps);
   if (prepared.timedOut) return timedOut();
   if (prepared.code !== 0) {
-    return { status: "unreachable", exitCode: prepared.code, output: tail(`${prepared.output}${sshFailure(target.host, jumps)}\n`) };
+    const failure = sshFailure(target.host, jumps);
+    return { status: "unreachable", exitCode: prepared.code, output: tail(prepared.output.includes(failure) ? prepared.output : `${prepared.output}${failure}\n`) };
   }
   if (files.length) {
     // 经跳板机时 scp 用不了（目标上没有控制台公钥），打成 tar 流穿过两跳再解开。
@@ -333,7 +390,7 @@ export async function runOnHost(
     'cd "$PXE_FILES"',
     "",
   ].join("\n");
-  const ran = await exec("ssh", sshArgs(target.host, "bash -s", jumps), `${header}${task.script}\n`, deadline);
+  const ran = await sshExec(exec, target.host, "bash -s", `${header}${task.script}\n`, deadline, undefined, jumps);
   log += ran.output;
   if (ran.timedOut) return timedOut();
   if (ran.code === 255) return { status: "unreachable", exitCode: 255, output: tail(`${log}SSH 连接中断\n`) };
@@ -392,11 +449,12 @@ export async function collectInventory(
       lines.push("系统内：找不到系统地址，跳过");
     } else {
       tried++;
-      const ran = await exec("ssh", sshArgs(target.host, "bash -s"), INVENTORY_SCRIPT, deadline, INVENTORY_OUTPUT_LIMIT);
+      const ran = await sshExec(exec, target.host, "bash -s", INVENTORY_SCRIPT, deadline, INVENTORY_OUTPUT_LIMIT);
       if (ran.timedOut) {
         lines.push(`系统内（${target.host}）：超过 ${task.timeoutSec} 秒，已中止`);
       } else if (ran.code === 255 || !ran.output.includes("===PXEINV ")) {
-        lines.push(`系统内：${sshFailure(target.host)}`, tail(ran.output).trim());
+        const failure = sshFailure(target.host);
+        lines.push(`系统内：${failure}`, ...(ran.output.includes(failure) ? [] : [tail(ran.output).trim()]));
       } else {
         reached = true;
         const parsed = parseOsInventory(ran.output);
@@ -483,7 +541,7 @@ export async function queryOptics(assetId: string, exec: Exec = defaultExec, con
   if (!row) throw new Error("资产不存在");
   const { host } = resolveAssetHost(row, context);
   if (!host) throw new Error(`${row.sn} 找不到系统地址，查不了光模块。收发光只能在系统里读`);
-  const ran = await exec("ssh", sshArgs(host, "bash -s"), OPTICS_SCRIPT, Date.now() + 120_000, INVENTORY_OUTPUT_LIMIT);
+  const ran = await sshExec(exec, host, "bash -s", OPTICS_SCRIPT, Date.now() + 120_000, INVENTORY_OUTPUT_LIMIT);
   if (ran.timedOut) throw new Error(`${row.sn}（${host}）查询超过 2 分钟，已中止`);
   if (ran.code === 255 || !ran.output.includes("===PXEOPT end===")) {
     throw new Error(sshFailure(host));
@@ -536,7 +594,7 @@ export async function resetBmc(
   if (via !== "inband") throw new Error("不支持的重启方式");
   const host = deps.host || resolveAssetHost(asset, deps.context || hostContext()).host;
   if (!host) throw new Error(`${asset.sn} 找不到系统地址，带内重启不了`);
-  const ran = await (deps.exec || defaultExec)("ssh", sshArgs(host, "bash -s"), BMC_RESET_SCRIPT, Date.now() + 90_000);
+  const ran = await sshExec(deps.exec || defaultExec, host, "bash -s", BMC_RESET_SCRIPT, Date.now() + 90_000);
   const said = ran.output.trim().split("\n").slice(-3).join(" ").slice(0, 200);
   if (ran.timedOut) throw new Error(`${asset.sn}（${host}）超过 90 秒没完成，已中止`);
   if (ran.code === 255) throw new Error(sshFailure(host));
