@@ -6,11 +6,20 @@ import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Checkbox from "@mui/material/Checkbox";
+import Dialog from "@mui/material/Dialog";
+import DialogActions from "@mui/material/DialogActions";
+import DialogContent from "@mui/material/DialogContent";
+import DialogTitle from "@mui/material/DialogTitle";
 import FormControlLabel from "@mui/material/FormControlLabel";
+import IconButton from "@mui/material/IconButton";
+import InputAdornment from "@mui/material/InputAdornment";
 import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
+import ArrowDownwardOutlined from "@mui/icons-material/ArrowDownwardOutlined";
+import ArrowUpwardOutlined from "@mui/icons-material/ArrowUpwardOutlined";
+import ClearOutlined from "@mui/icons-material/ClearOutlined";
 import { DataGrid, type GridColDef, type GridRowProps, type GridRowSelectionModel } from "@mui/x-data-grid";
 import { AssetEditDialog } from "@/components/asset-edit-dialog";
 import { AssetImportDialog } from "@/components/asset-import-dialog";
@@ -32,6 +41,20 @@ import { useCan } from "@/components/role-context";
 
 const MONO = "var(--font-geist-mono), monospace";
 const WIDTH_KEY = "pxe-asset-columns";
+/** 显示哪些列、什么顺序，记在这个浏览器里：{ order: 列 key[], hidden: 列 key[] }。 */
+const LAYOUT_KEY = "pxe-asset-layout";
+
+type Layout = { order: string[]; hidden: string[] };
+
+/** 按保存的顺序排列，没记过的列（新加的）接在后面；操作列总在最后、不能藏。 */
+function arrange<T extends { field: string }>(columns: T[], layout: Layout): T[] {
+  const rank = (field: string) => {
+    const index = layout.order.indexOf(field);
+    return index < 0 ? layout.order.length + columns.findIndex((column) => column.field === field) : index;
+  };
+  const body = columns.filter((column) => column.field !== "actions").sort((a, b) => rank(a.field) - rank(b.field));
+  return [...body.filter((column) => !layout.hidden.includes(column.field)), ...columns.filter((column) => column.field === "actions")];
+}
 const NATIVE = { select: { native: true } } as const;
 
 interface Filters {
@@ -162,6 +185,8 @@ export function AssetList({
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [widths, setWidths] = useState<Record<string, number>>({});
+  const [layout, setLayout] = useState<Layout>({ order: [], hidden: [] });
+  const [arranging, setArranging] = useState<Layout | null>(null);
 
   // 地址栏带的筛选（总览页点进来的）优先，其次是这个浏览器上次用的。
   useEffect(() => {
@@ -200,7 +225,22 @@ export function AssetList({
     } catch {
       // 读不到就用默认宽度。
     }
+    try {
+      const saved = JSON.parse(localStorage.getItem(LAYOUT_KEY) || "null");
+      if (saved && Array.isArray(saved.order) && Array.isArray(saved.hidden)) setLayout({ order: saved.order.map(String), hidden: saved.hidden.map(String) });
+    } catch {
+      // 读不到就按默认的列。
+    }
   }, []);
+
+  function saveLayout(next: Layout) {
+    setLayout(next);
+    try {
+      localStorage.setItem(LAYOUT_KEY, JSON.stringify(next));
+    } catch {
+      // 存不了这次照样生效，只是刷新后回到默认。
+    }
+  }
 
   function saveWidth(field: string, width: number) {
     const next = { ...widths, [field]: Math.round(width) };
@@ -413,6 +453,19 @@ export function AssetList({
     ];
     return list.map((column) => (widths[column.field] ? { ...column, width: widths[column.field] } : column));
   }, [widths, canConsole, canPower]);
+  const shownColumns = useMemo(() => arrange(columns, layout), [columns, layout]);
+  /** 设置对话框里列的名字和当前顺序（含藏起来的）。 */
+  const arrangeable = useMemo(() => arrange(columns, { order: (arranging || layout).order, hidden: [] }).filter((column) => column.field !== "actions"), [columns, arranging, layout]);
+
+  function moveColumn(field: string, step: number) {
+    if (!arranging) return;
+    const order = arrangeable.map((column) => column.field);
+    const from = order.indexOf(field);
+    const to = from + step;
+    if (from < 0 || to < 0 || to >= order.length) return;
+    [order[from], order[to]] = [order[to], order[from]];
+    setArranging({ ...arranging, order });
+  }
 
   return (
     <Stack spacing={2}>
@@ -422,7 +475,18 @@ export function AssetList({
           placeholder="搜编号、序列号、型号、IP…（多个用逗号隔开）"
           value={filters.q}
           onChange={(event) => setFilter("q", event.target.value)}
-          slotProps={{ htmlInput: { onPaste: pasteAsList((value) => setFilter("q", value)) } }}
+          slotProps={{
+            htmlInput: { onPaste: pasteAsList((value) => setFilter("q", value)) },
+            input: {
+              endAdornment: filters.q ? (
+                <InputAdornment position="end">
+                  <IconButton size="small" edge="end" aria-label="清空搜索" onClick={() => setFilter("q", "")}>
+                    <ClearOutlined fontSize="small" />
+                  </IconButton>
+                </InputAdornment>
+              ) : null,
+            },
+          }}
         />
         <TextField select slotProps={NATIVE} value={filters.status} onChange={(event) => setFilter("status", event.target.value)}>
           <option value="">全部状态</option>
@@ -470,6 +534,9 @@ export function AssetList({
         />
         {filtering ? <Button onClick={() => setFilters(EMPTY)}>清除筛选</Button> : null}
         <Stack direction="row" useFlexGap spacing={1} sx={{ ml: "auto", flexWrap: "wrap" }}>
+          <Button variant="outlined" onClick={() => setArranging({ order: arrangeable.map((column) => column.field), hidden: layout.hidden })}>
+            列设置
+          </Button>
           <Button variant="outlined" onClick={() => window.location.assign("/api/assets/export")}>
             导出 Excel
           </Button>
@@ -575,7 +642,7 @@ export function AssetList({
         <Box sx={{ width: "100%", minWidth: 0 }}>
           <DataGrid
             rows={shown}
-            columns={columns}
+            columns={shownColumns}
             checkboxSelection
             rowSelectionModel={selection}
             onRowSelectionModelChange={onSelection}
@@ -600,6 +667,62 @@ export function AssetList({
           />
         </Box>
       )}
+
+      <Dialog open={Boolean(arranging)} onClose={() => setArranging(null)} fullWidth maxWidth="xs">
+        <DialogTitle>列设置</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
+            勾上的列显示，用箭头调顺序。记在这个浏览器里。
+          </Typography>
+          {arranging
+            ? arrangeable.map((column, index) => (
+                <Stack key={column.field} direction="row" sx={{ alignItems: "center" }}>
+                  <FormControlLabel
+                    sx={{ flex: 1 }}
+                    control={
+                      <Checkbox
+                        size="small"
+                        checked={!arranging.hidden.includes(column.field)}
+                        onChange={(event) =>
+                          setArranging({ ...arranging, hidden: event.target.checked ? arranging.hidden.filter((field) => field !== column.field) : [...arranging.hidden, column.field] })
+                        }
+                      />
+                    }
+                    label={<Typography variant="body2">{column.headerName || column.field}</Typography>}
+                  />
+                  <IconButton size="small" aria-label={`${column.headerName} 上移`} disabled={index === 0} onClick={() => moveColumn(column.field, -1)}>
+                    <ArrowUpwardOutlined fontSize="small" />
+                  </IconButton>
+                  <IconButton size="small" aria-label={`${column.headerName} 下移`} disabled={index === arrangeable.length - 1} onClick={() => moveColumn(column.field, 1)}>
+                    <ArrowDownwardOutlined fontSize="small" />
+                  </IconButton>
+                </Stack>
+              ))
+            : null}
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={() => {
+              saveLayout({ order: [], hidden: [] });
+              setArranging(null);
+            }}
+          >
+            恢复默认
+          </Button>
+          <Box sx={{ flex: 1 }} />
+          <Button onClick={() => setArranging(null)}>取消</Button>
+          <Button
+            variant="contained"
+            disabled={Boolean(arranging && arranging.hidden.length >= arrangeable.length)}
+            onClick={() => {
+              if (arranging) saveLayout(arranging);
+              setArranging(null);
+            }}
+          >
+            保存
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <AssetEditDialog
         asset={null}
