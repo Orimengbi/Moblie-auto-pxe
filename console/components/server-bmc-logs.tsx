@@ -271,13 +271,13 @@ export function ServerBmcLogs({ assetId }: { assetId: string }) {
           />
           <Box sx={{ flex: 1 }} />
           <Button size="small" disabled={loading || page === 0} onClick={() => setPage(page - 1)}>
-            较新
+            上一页
           </Button>
           <Typography variant="caption" sx={{ color: "text.secondary" }}>
             {page + 1} / {pages}
           </Typography>
           <Button size="small" disabled={loading || page + 1 >= pages} onClick={() => setPage(page + 1)}>
-            较旧
+            下一页
           </Button>
           <Button size="small" disabled={loading} onClick={() => void loadLog()}>
             刷新
