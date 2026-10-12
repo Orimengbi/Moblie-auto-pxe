@@ -1,6 +1,6 @@
 import { auditRequest, jsonError, readJson } from "@/lib/api";
 import { deleteCustomer, getCustomer, updateCustomer, type CustomerInput } from "@/lib/assets";
-import { requireAdmin, requireUser } from "@/lib/auth";
+import { requirePermission, requireUser } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -21,7 +21,7 @@ export async function PATCH(request: Request, context: Context) {
 export async function DELETE(request: Request, context: Context) {
   try {
     // 删除统一只有管理员能做。
-    const identity = requireAdmin(request);
+    const identity = requirePermission(request, "delete");
     const { id } = await context.params;
     const customer = getCustomer(id);
     deleteCustomer(id);

@@ -27,8 +27,8 @@ export function AssetOverview({ assetId, onChanged }: { assetId: string; onChang
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [error, setError] = useState("");
   const [editing, setEditing] = useState(false);
-  const admin = useCan("admin");
-  const canEdit = useCan("engineer");
+  const canDelete = useCan("delete");
+  const canEdit = useCan("assets.edit");
   const [deleting, setDeleting] = useState(false);
   const [blocked, setBlocked] = useState(false);
 
@@ -99,7 +99,7 @@ export function AssetOverview({ assetId, onChanged }: { assetId: string; onChang
             编辑资料
           </Button>
         ) : null}
-        {admin ? (
+        {canDelete ? (
           <Button variant="outlined" color="error" disabled={deleting} onClick={() => void remove()}>
             删除
           </Button>

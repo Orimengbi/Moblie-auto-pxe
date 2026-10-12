@@ -1,5 +1,5 @@
 import { audited, jsonError, readJson } from "@/lib/api";
-import { requireAdmin } from "@/lib/auth";
+import { requirePermission } from "@/lib/auth";
 import { createSnmpProfile, listSnmpProfiles, publicSnmpProfile, type SnmpProfileInput } from "@/lib/snmp";
 
 export const dynamic = "force-dynamic";
@@ -11,7 +11,7 @@ export function GET() {
 
 export async function POST(request: Request) {
   try {
-    requireAdmin(request);
+    requirePermission(request, "settings");
     const body = await readJson<SnmpProfileInput>(request);
     const profile = await audited(request, (p) => ({ action: "新建 SNMP 凭据", targetType: "settings", targetId: p?.id, targetLabel: body.name, detail: body.version }), () => createSnmpProfile(body));
     return Response.json(publicSnmpProfile(profile), { status: 201 });

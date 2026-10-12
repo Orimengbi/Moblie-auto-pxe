@@ -161,7 +161,7 @@ export function ServerSensors({ assetId }: { assetId: string }) {
   const [onlyBad, setOnlyBad] = useState(false);
   const [hideEmpty, setHideEmpty] = useState(true);
   const [query, setQuery] = useState("");
-  const canOperate = useCan("operator");
+  const canOperate = useCan("refresh");
 
   useEffect(() => {
     let alive = true;

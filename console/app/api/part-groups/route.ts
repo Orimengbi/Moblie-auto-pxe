@@ -1,5 +1,5 @@
 import { audited, jsonError, readJson } from "@/lib/api";
-import { requireAdmin } from "@/lib/auth";
+import { requirePermission } from "@/lib/auth";
 import { listPartGroups, savePartGroup, seenModels, type PartGroupInput } from "@/lib/part-groups";
 
 export const dynamic = "force-dynamic";
@@ -11,7 +11,7 @@ export function GET() {
 
 export async function POST(request: Request) {
   try {
-    requireAdmin(request);
+    requirePermission(request, "catalog");
     const body = await readJson<PartGroupInput>(request);
     const group = await audited(request, (made) => ({ action: "新建替换组", targetType: "part-group", targetId: made?.id, targetLabel: String(body.name || ""), detail: made ? made.models.join("、") : "" }), () => savePartGroup(null, body));
     return Response.json(group, { status: 201 });

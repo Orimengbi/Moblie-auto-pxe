@@ -1,6 +1,6 @@
 import { audited, jsonError, readJson } from "@/lib/api";
 import { addEvent, getAsset } from "@/lib/assets";
-import { requireAdmin } from "@/lib/auth";
+import { requirePermission } from "@/lib/auth";
 import { assetSession, firmwareInventory, loadSnapshot, pushUpdate, readTask, saveSnapshot, simpleUpdate, type FirmwareItem, type FirmwareUpdateInput } from "@/lib/bmc-redfish";
 import { choiceImage, choicesForAsset } from "@/lib/firmware-lib";
 import { FIRMWARE_KIND_LABEL } from "@/lib/firmware-types";
@@ -56,7 +56,7 @@ interface PushRequest {
 export async function POST(request: Request, context: Context) {
   try {
     const { id } = await context.params;
-    const identity = requireAdmin(request);
+    const identity = requirePermission(request, "firmware");
     const body = await readJson<FirmwareUpdateInput & Partial<PushRequest>>(request);
     if (body.packageId) {
       const { pkg, file } = choiceImage(body.packageId, String(body.image || ""));

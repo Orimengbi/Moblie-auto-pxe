@@ -142,9 +142,12 @@ export function AssetList({
   const [picked, setPicked] = useState<string[]>([]);
   const [sideId, setSideId] = useState<string | null>(null);
   const [sideTab, setSideTab] = useState<SidebarTab>("overview");
-  const canOperate = useCan("operator");
-  const canEdit = useCan("engineer");
-  const isAdmin = useCan("admin");
+  const canConsole = useCan("console");
+  const canPower = useCan("power");
+  const canEdit = useCan("assets.edit");
+  const canCollect = useCan("inventory");
+  const canLogs = useCan("logs.collect");
+  const canBmcUsers = useCan("bmc.users");
   const [creating, setCreating] = useState(false);
   const [importing, setImporting] = useState(false);
   // 从右上角任务列表点开的后台导入。
@@ -393,19 +396,23 @@ export function AssetList({
         disableColumnMenu: true,
         align: "right",
         renderCell: ({ row }) => (
-          <Box sx={{ whiteSpace: "nowrap", display: canOperate ? undefined : "none" }}>
-            <Button disabled={!row.bmcIp} onClick={() => setConsoleRow(row)}>
-              远程控制台
-            </Button>
-            <Button disabled={!row.bmcIp} onClick={() => setPowerTargets([row])}>
-              电源
-            </Button>
+          <Box sx={{ whiteSpace: "nowrap", display: canConsole || canPower ? undefined : "none" }}>
+            {canConsole ? (
+              <Button disabled={!row.bmcIp} onClick={() => setConsoleRow(row)}>
+                远程控制台
+              </Button>
+            ) : null}
+            {canPower ? (
+              <Button disabled={!row.bmcIp} onClick={() => setPowerTargets([row])}>
+                电源
+              </Button>
+            ) : null}
           </Box>
         ),
       },
     ];
     return list.map((column) => (widths[column.field] ? { ...column, width: widths[column.field] } : column));
-  }, [widths, canOperate]);
+  }, [widths, canConsole, canPower]);
 
   return (
     <Stack spacing={2}>
@@ -527,22 +534,22 @@ export function AssetList({
                 </Button>
               </>
             ) : null}
-            {canOperate ? (
+            {canPower ? (
               <Button variant="outlined" onClick={() => setPowerTargets(pickedRows.filter((row) => row.bmcIp))}>
                 电源和引导
               </Button>
             ) : null}
-            {canEdit ? (
+            {canCollect ? (
               <Button variant="outlined" onClick={() => setCollectTargets(pickedRows.map((row) => ({ id: row.id, sn: row.sn, type: row.type, bmcIp: row.bmcIp })))}>
                 采集硬件配置
               </Button>
             ) : null}
-            {canOperate ? (
+            {canLogs ? (
               <Button variant="outlined" onClick={() => setLogTargets(pickedRows.filter((row) => row.type === "server"))}>
                 收集日志
               </Button>
             ) : null}
-            {isAdmin ? (
+            {canBmcUsers ? (
               <Button variant="outlined" onClick={() => setUserTargets(pickedRows.filter((row) => row.type === "server"))}>
                 BMC 用户
               </Button>

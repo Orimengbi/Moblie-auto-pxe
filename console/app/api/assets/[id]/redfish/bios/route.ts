@@ -1,6 +1,6 @@
 import { audited, jsonError, readJson } from "@/lib/api";
 import { addEvent, getAsset } from "@/lib/assets";
-import { requireAdmin } from "@/lib/auth";
+import { requirePermission } from "@/lib/auth";
 import { assetSession, clearBiosPending, loadSnapshot, readBios, resetBios, saveSnapshot, setBios, type BiosView } from "@/lib/bmc-redfish";
 
 export const dynamic = "force-dynamic";
@@ -28,7 +28,7 @@ export async function GET(request: Request, context: Context) {
 export async function PATCH(request: Request, context: Context) {
   try {
     const { id } = await context.params;
-    const identity = requireAdmin(request);
+    const identity = requirePermission(request, "bios");
     const body = await readJson<{ changes?: Record<string, unknown> }>(request);
     const changes = body.changes || {};
     const { asset, session } = await assetSession(id);
@@ -49,7 +49,7 @@ export async function PATCH(request: Request, context: Context) {
 export async function DELETE(request: Request, context: Context) {
   try {
     const { id } = await context.params;
-    const identity = requireAdmin(request);
+    const identity = requirePermission(request, "bios");
     const { asset, session } = await assetSession(id);
     await audited(request, { action: "撤销 BIOS 待生效设置", targetType: "asset", targetId: id, targetLabel: `${asset.tag} ${asset.sn}` }, () => clearBiosPending(session));
     addEvent(id, "bmc", "撤销 BIOS 待生效设置", identity.user.username);
@@ -64,7 +64,7 @@ export async function DELETE(request: Request, context: Context) {
 export async function POST(request: Request, context: Context) {
   try {
     const { id } = await context.params;
-    const identity = requireAdmin(request);
+    const identity = requirePermission(request, "bios");
     const body = await readJson<{ action?: string }>(request);
     if (body.action !== "reset") throw new Error("不支持的操作");
     const { asset, session } = await assetSession(id);

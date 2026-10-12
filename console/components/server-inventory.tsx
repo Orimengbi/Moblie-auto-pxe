@@ -120,7 +120,8 @@ export function ServerInventory({ projectId, row }: { projectId?: string; row: {
   const [message, setMessage] = useState("");
   const [sources, setSources] = useState<InventorySource[]>(["os", "bmc"]);
   const [collecting, setCollecting] = useState("");
-  const canEdit = useCan("engineer");
+  const canEdit = useCan("inventory");
+  const canBaseline = useCan("install");
 
   const load = useCallback(
     async (query: string) => {
@@ -266,7 +267,7 @@ export function ServerInventory({ projectId, row }: { projectId?: string; row: {
             ))}
           </TextField>
         ) : null}
-        {snapshot && projectId && canEdit ? (
+        {snapshot && projectId && canBaseline ? (
           <Button type="button" variant="outlined" sx={{ ml: "auto" }} onClick={makeBaseline}>
             设为批次基准
           </Button>

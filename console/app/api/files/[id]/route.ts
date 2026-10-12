@@ -1,5 +1,5 @@
 import { audited, jsonError } from "@/lib/api";
-import { requireAdmin } from "@/lib/auth";
+import { requirePermission } from "@/lib/auth";
 import { deleteFile, getFile } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 export async function DELETE(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     // 删除统一只有管理员能做。
-    requireAdmin(request);
+    requirePermission(request, "delete");
     const { id } = await context.params;
     await audited(request, { action: "删除任务文件", targetType: "file", targetId: id, targetLabel: getFile(id)?.name }, () => deleteFile(id));
     return Response.json({ ok: true });

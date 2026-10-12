@@ -1,7 +1,7 @@
 import { auditRequest, jsonError, readJson, userOrResponse } from "@/lib/api";
 import { assetRows } from "@/lib/asset-view";
 import { getAsset, updateAsset, type AssetInput } from "@/lib/assets";
-import { requireAdmin } from "@/lib/auth";
+import { requirePermission } from "@/lib/auth";
 import { uplinksOf } from "@/lib/network";
 import { removeAsset } from "@/lib/store";
 
@@ -34,7 +34,7 @@ export async function PATCH(request: Request, context: Context) {
 export async function DELETE(request: Request, context: Context) {
   try {
     const { id } = await context.params;
-    const identity = requireAdmin(request);
+    const identity = requirePermission(request, "delete");
     const asset = removeAsset(id);
     auditRequest(request, identity, { action: "删除资产", targetType: "asset", targetId: id, targetLabel: `${asset.tag} ${asset.sn}` });
     return Response.json({ ok: true });

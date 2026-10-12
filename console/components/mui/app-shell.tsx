@@ -40,7 +40,7 @@ import SettingsOutlined from "@mui/icons-material/SettingsOutlined";
 import type { SvgIconComponent } from "@mui/icons-material";
 import { TaskCenter } from "@/components/task-center";
 import { RoleProvider } from "@/components/role-context";
-import { normalizeRole, ROLE_LABEL } from "@/lib/roles";
+import type { Permission } from "@/lib/roles";
 import { ThemeToggle } from "./theme-toggle";
 
 export type NavCounts = { alerts: { critical: number; warning: number }; tickets: number };
@@ -49,8 +49,9 @@ type NavLink = { href: string; label: string; icon: SvgIconComponent; badge?: { 
 const DRAWER_WIDTH = 236;
 
 /** 分组显示：资产运维在前，装机是其中一项功能。 */
-function groups(role: string, counts: NavCounts): { title: string; links: NavLink[] }[] {
-  const admin = role === "admin";
+type ShellUser = { username: string; roleName: string; permissions: Permission[]; limited: boolean };
+
+function groups(permissions: Permission[], counts: NavCounts): { title: string; links: NavLink[] }[] {
   return [
     {
       title: "资产运维",
@@ -82,13 +83,9 @@ function groups(role: string, counts: NavCounts): { title: string; links: NavLin
     {
       title: "系统",
       links: [
-        ...(admin
-          ? [
-              { href: "/audit", label: "审计", icon: ReceiptLongOutlined },
-              { href: "/settings", label: "设置", icon: SettingsOutlined },
-              { href: "/users", label: "用户", icon: ManageAccountsOutlined },
-            ]
-          : []),
+        ...(permissions.includes("users") ? [{ href: "/audit", label: "审计", icon: ReceiptLongOutlined }] : []),
+        ...(permissions.includes("settings") ? [{ href: "/settings", label: "设置", icon: SettingsOutlined }] : []),
+        ...(permissions.includes("users") ? [{ href: "/users", label: "用户", icon: ManageAccountsOutlined }] : []),
         { href: "/account", label: "我的账号", icon: AccountCircleOutlined },
       ],
     },
@@ -111,7 +108,7 @@ function Brand() {
   );
 }
 
-function NavBody({ user, counts, onNavigate }: { user: { username: string; role: string }; counts: NavCounts; onNavigate?: () => void }) {
+function NavBody({ user, counts, onNavigate }: { user: ShellUser; counts: NavCounts; onNavigate?: () => void }) {
   const pathname = usePathname();
 
   async function logout() {
@@ -123,7 +120,7 @@ function NavBody({ user, counts, onNavigate }: { user: { username: string; role:
     <Stack sx={{ height: "100%" }}>
       <Brand />
       <Box component="nav" sx={{ flex: 1, overflowY: "auto", px: 1.5, pb: 2 }}>
-        {groups(user.role, counts).map((group) => (
+        {groups(user.permissions, counts).map((group) => (
           <List
             key={group.title}
             dense
@@ -166,7 +163,8 @@ function NavBody({ user, counts, onNavigate }: { user: { username: string; role:
             {user.username}
           </Typography>
           <Typography variant="caption" sx={{ color: "text.secondary" }}>
-            {ROLE_LABEL[normalizeRole(user.role)]}
+            {user.roleName}
+            {user.limited ? "（密钥限权）" : ""}
           </Typography>
         </Box>
         <Tooltip title="退出登录">
@@ -180,7 +178,7 @@ function NavBody({ user, counts, onNavigate }: { user: { username: string; role:
 }
 
 /** 页面骨架：左边导航（窄屏收进抽屉），上面一条顶栏放任务列表和主题切换。 */
-export function AppShell({ user, counts: initial, children }: { user: { username: string; role: string }; counts: NavCounts; children: React.ReactNode }) {
+export function AppShell({ user, counts: initial, children }: { user: ShellUser; counts: NavCounts; children: React.ReactNode }) {
   const pathname = usePathname();
   const [counts, setCounts] = useState(initial);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -204,7 +202,7 @@ export function AppShell({ user, counts: initial, children }: { user: { username
   }, [pathname]);
 
   return (
-    <RoleProvider role={user.role}>
+    <RoleProvider permissions={user.permissions}>
       <Box sx={{ display: "flex", minHeight: "100vh" }}>
         <Drawer
           variant="permanent"

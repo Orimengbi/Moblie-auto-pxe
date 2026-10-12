@@ -10,7 +10,7 @@ import { SnmpProfileManager } from "@/components/snmp-profile-manager";
 import { SshJumpSettingsForm } from "@/components/ssh-jump-settings-form";
 import { TagSettingsForm } from "@/components/tag-settings-form";
 import { getTagSettings, listAssets, listCustomers } from "@/lib/assets";
-import { authenticate } from "@/lib/auth";
+import { authenticate, can } from "@/lib/auth";
 import { getDisplaySettings } from "@/lib/display-settings";
 import { getMonitorSettings } from "@/lib/monitor";
 import { consolePublicKey } from "@/lib/remote";
@@ -21,8 +21,8 @@ export const dynamic = "force-dynamic";
 
 export default async function SettingsPage() {
   const identity = authenticate(await headers());
-  if (identity?.user.role !== "admin") {
-    return <PageHeader title="设置" description="只有管理员能改设置。" />;
+  if (!can(identity, "settings")) {
+    return <PageHeader title="设置" description="需要「系统设置」权限。" />;
   }
   const samples = listAssets()
     .slice(-8)

@@ -19,14 +19,23 @@ import { CredentialManager } from "@/components/credential-manager";
 import { PasswordForm } from "@/components/password-form";
 import type { PublicUser } from "@/lib/auth";
 import { api } from "@/lib/client-api";
-import { ROLE_HINT, ROLE_LABEL, ROLES, type Role } from "@/lib/roles";
+import type { RoleDef } from "@/lib/roles";
 
-export function UserAdmin({ users, selfId }: { users: PublicUser[]; selfId: string }) {
+/** roles：所有角色；allowed 是当前登录的人能分配的（权限都在自己以内的）。 */
+export function UserAdmin({ users, selfId, roles, allowed }: { users: PublicUser[]; selfId: string; roles: RoleDef[]; allowed: string[] }) {
+  const roleName = (id: string) => roles.find((item) => item.id === id)?.name || "已删除的角色";
+  const assignable = roles.filter((item) => allowed.includes(item.id));
+  /** 访问密钥能限成的角色：权限都在这个账号的角色以内。 */
+  const limitsFor = (user: PublicUser) => {
+    const own = new Set(roles.find((item) => item.id === user.role)?.permissions || []);
+    return roles.filter((item) => item.id !== user.role && item.permissions.every((permission) => own.has(permission))).map((item) => ({ id: item.id, name: item.name }));
+  };
+  const names = Object.fromEntries(roles.map((item) => [item.id, item.name]));
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [role, setRole] = useState<Role>("viewer");
+  const [role, setRole] = useState("viewer");
   const [expanded, setExpanded] = useState("");
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
@@ -55,9 +64,9 @@ export function UserAdmin({ users, selfId }: { users: PublicUser[]; selfId: stri
     setExpanded(String(created.id));
   }
 
-  function changeRole(user: PublicUser, next: Role) {
+  function changeRole(user: PublicUser, next: string) {
     if (next === user.role) return;
-    if (!window.confirm(`把 ${user.username} 从「${ROLE_LABEL[user.role]}」改成「${ROLE_LABEL[next]}」？对方现在的登录会失效，要重新登录。`)) return;
+    if (!window.confirm(`把 ${user.username} 从「${roleName(user.role)}」改成「${roleName(next)}」？对方现在的登录会失效，要重新登录。`)) return;
     send(`/api/users/${user.id}`, "PATCH", { role: next });
   }
 
@@ -79,23 +88,6 @@ export function UserAdmin({ users, selfId }: { users: PublicUser[]; selfId: stri
           新建用户
         </Button>
       </Box>
-      <Paper variant="outlined" sx={{ p: 2, borderRadius: 3 }}>
-        <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
-          角色分四级，高一级包含低一级能做的事
-        </Typography>
-        <Stack spacing={0.25}>
-          {ROLES.map((item) => (
-            <Typography key={item} variant="body2">
-              <Box component="span" sx={{ display: "inline-block", minWidth: 56, fontWeight: 600 }}>
-                {ROLE_LABEL[item]}
-              </Box>
-              <Box component="span" sx={{ color: "text.secondary" }}>
-                {ROLE_HINT[item]}
-              </Box>
-            </Typography>
-          ))}
-        </Stack>
-      </Paper>
       {errorText}
       <Stack spacing={1.5}>
         {users.map((user) => (
@@ -105,7 +97,7 @@ export function UserAdmin({ users, selfId }: { users: PublicUser[]; selfId: stri
                 <Typography variant="subtitle1" component="h2" sx={{ fontWeight: 600 }}>
                   {user.username}
                 </Typography>
-                <Chip label={ROLE_LABEL[user.role]} color={user.role === "admin" ? "primary" : "default"} variant={user.role === "admin" ? "filled" : "outlined"} />
+                <Chip label={roleName(user.role)} color={user.role === "admin" ? "primary" : "default"} variant={user.role === "admin" ? "filled" : "outlined"} />
                 {user.disabled ? <StatusChip tone="error" label="已停用" /> : null}
                 {user.id === selfId ? (
                   <Typography variant="caption" sx={{ color: "text.secondary" }}>
@@ -122,13 +114,13 @@ export function UserAdmin({ users, selfId }: { users: PublicUser[]; selfId: stri
                   size="small"
                   slotProps={{ select: { native: true }, htmlInput: { "aria-label": `${user.username} 的角色` } }}
                   value={user.role}
-                  disabled={pending}
-                  onChange={(event) => changeRole(user, event.target.value as Role)}
+                  disabled={pending || !allowed.includes(user.role)}
+                  onChange={(event) => changeRole(user, event.target.value)}
                   sx={{ minWidth: 112 }}
                 >
-                  {ROLES.map((item) => (
-                    <option key={item} value={item}>
-                      {ROLE_LABEL[item]}
+                  {(allowed.includes(user.role) ? assignable : roles.filter((item) => item.id === user.role)).map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name}
                     </option>
                   ))}
                 </TextField>
@@ -164,7 +156,7 @@ export function UserAdmin({ users, selfId }: { users: PublicUser[]; selfId: stri
                     </Box>
                   ) : null}
                 </Stack>
-                <CredentialManager user={user} />
+                <CredentialManager user={user} limits={limitsFor(user)} roleNames={names} />
               </Stack>
             ) : null}
           </Paper>
@@ -177,10 +169,10 @@ export function UserAdmin({ users, selfId }: { users: PublicUser[]; selfId: stri
             <DialogContentText variant="body2">密码可以不填，建好后再给他添加 SSH 公钥或生成访问密钥。</DialogContentText>
             <TextField label="用户名" value={username} onChange={(event) => setUsername(event.target.value)} placeholder="小写字母、数字、. _ -" required fullWidth />
             <TextField label="密码（至少 8 位，可不填）" type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="new-password" fullWidth />
-            <TextField select slotProps={{ select: { native: true } }} label="角色" value={role} onChange={(event) => setRole(event.target.value as Role)} helperText={ROLE_HINT[role]} fullWidth>
-              {ROLES.map((item) => (
-                <option key={item} value={item}>
-                  {ROLE_LABEL[item]}
+            <TextField select slotProps={{ select: { native: true } }} label="角色" value={role} onChange={(event) => setRole(event.target.value)} helperText={roles.find((item) => item.id === role)?.description} fullWidth>
+              {assignable.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
                 </option>
               ))}
             </TextField>

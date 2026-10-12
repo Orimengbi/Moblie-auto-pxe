@@ -122,8 +122,8 @@ export function ProfileManager({
   const [form, setForm] = useState(EMPTY);
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
-  const canEdit = useCan("engineer");
-  const isAdmin = useCan("admin");
+  const canEdit = useCan("images");
+  const canDelete = useCan("delete");
   const diskImage = images.find((image) => image.id === form.imageId)?.kind === "disk";
   const live = diskImage && form.diskMode === "live";
 
@@ -248,7 +248,7 @@ export function ProfileManager({
                       编辑
                     </Button>
                   ) : null}
-                  {isAdmin ? (
+                  {canDelete ? (
                     <Button color="error" onClick={() => remove(profile.id)}>
                       删除
                     </Button>

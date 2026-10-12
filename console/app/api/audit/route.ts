@@ -1,13 +1,13 @@
 import { jsonError } from "@/lib/api";
 import { listAudit } from "@/lib/assets";
-import { requireAdmin } from "@/lib/auth";
+import { requirePermission } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
 /** 操作审计，新的在前。?q= 关键字，?actor= 用户，?target= 对象 id，?before= 翻页。只有管理员能看。 */
 export function GET(request: Request) {
   try {
-    requireAdmin(request);
+    requirePermission(request, "users");
     const url = new URL(request.url);
     return Response.json(
       listAudit({

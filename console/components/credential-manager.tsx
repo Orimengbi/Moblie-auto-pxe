@@ -14,7 +14,6 @@ import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import type { PublicUser } from "@/lib/auth";
 import { api } from "@/lib/client-api";
-import { atLeast, ROLE_LABEL, ROLES, type Role } from "@/lib/roles";
 
 const MONO = "var(--font-geist-mono), monospace";
 
@@ -48,12 +47,15 @@ async function send(url: string, method: string, body?: unknown) {
 }
 
 /** 一个用户的 SSH 公钥和访问密钥。我的账号页和用户管理页共用。 */
-export function CredentialManager({ user }: { user: PublicUser }) {
+/**
+ * limits：访问密钥能限成的角色（权限都在账号以内的）；roleNames 用来显示已有密钥限的是哪个角色。
+ */
+export function CredentialManager({ user, limits, roleNames }: { user: PublicUser; limits: { id: string; name: string }[]; roleNames: Record<string, string> }) {
   const router = useRouter();
   const [sshName, setSshName] = useState("");
   const [sshKey, setSshKey] = useState("");
   const [keyName, setKeyName] = useState("");
-  const [keyRole, setKeyRole] = useState<Role | "">("");
+  const [keyRole, setKeyRole] = useState("");
   const [created, setCreated] = useState("");
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
@@ -155,7 +157,7 @@ export function CredentialManager({ user }: { user: PublicUser }) {
               <KeyRow
                 key={key.id}
                 name={key.name}
-                detail={`pxe_${key.id}_… · ${key.role ? `限「${ROLE_LABEL[key.role]}」` : "权限同账号"} · 创建于 ${day(key.createdAt)} · 最近使用 ${day(key.lastUsedAt)}`}
+                detail={`pxe_${key.id}_… · ${key.role ? `限「${roleNames[key.role] || "已删除的角色"}」` : "权限同账号"} · 创建于 ${day(key.createdAt)} · 最近使用 ${day(key.lastUsedAt)}`}
                 disabled={pending}
                 onRemove={() => remove("access-keys", key.id, key.name)}
               />
@@ -168,13 +170,13 @@ export function CredentialManager({ user }: { user: PublicUser }) {
             select
             slotProps={{ select: { native: true }, htmlInput: { "aria-label": "密钥权限" } }}
             value={keyRole}
-            onChange={(event) => setKeyRole(event.target.value as Role | "")}
+            onChange={(event) => setKeyRole(event.target.value)}
             sx={{ minWidth: 140 }}
           >
             <option value="">权限同账号</option>
-            {ROLES.filter((item) => item !== user.role && atLeast(user.role, item)).map((item) => (
-              <option key={item} value={item}>
-                限{ROLE_LABEL[item]}
+            {limits.map((item) => (
+              <option key={item.id} value={item.id}>
+                限{item.name}
               </option>
             ))}
           </TextField>

@@ -71,7 +71,7 @@ export function TicketDetail({ id }: { id: string }) {
   const [error, setError] = useState("");
   const [comment, setComment] = useState("");
   const names = useUserNames();
-  const canOperate = useCan("operator");
+  const canOperate = useCan("tickets");
   const [edit, setEdit] = useState({ kind: "", priority: "", assignee: "", vendorCase: "", description: "" });
 
   const load = useCallback(async () => {

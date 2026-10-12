@@ -56,7 +56,7 @@ export function ServerPowerDialog({ targets, onClose }: { targets: Target[]; onC
   const [legacy, setLegacy] = useState(false);
   const [restart, setRestart] = useState(true);
   const [pending, setPending] = useState(false);
-  const canEdit = useCan("engineer");
+  const canEdit = useCan("bmc.settings");
   const [clockOffset, setClockOffset] = useState("+08:00");
   const [ntpMode, setNtpMode] = useState<"keep" | "on" | "off">("keep");
   const [ntpServers, setNtpServers] = useState("");

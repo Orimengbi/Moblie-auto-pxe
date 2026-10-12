@@ -1,5 +1,5 @@
 import { audited, jsonError, readJson } from "@/lib/api";
-import { requireAdmin } from "@/lib/auth";
+import { requirePermission } from "@/lib/auth";
 import { deleteCatalogEntry, getCatalogEntry, heightChanged, saveCatalogEntry, syncAssetHeights, syncDetail, type CatalogInput } from "@/lib/catalog";
 
 export const dynamic = "force-dynamic";
@@ -9,7 +9,7 @@ type Context = { params: Promise<{ id: string }> };
 export async function PATCH(request: Request, context: Context) {
   try {
     const { id } = await context.params;
-    const identity = requireAdmin(request);
+    const identity = requirePermission(request, "catalog");
     const body = await readJson<CatalogInput>(request);
     const before = getCatalogEntry(id);
     const label = before?.model || id;
@@ -30,7 +30,7 @@ export async function PATCH(request: Request, context: Context) {
 export async function DELETE(request: Request, context: Context) {
   try {
     const { id } = await context.params;
-    requireAdmin(request);
+    requirePermission(request, "catalog");
     const label = getCatalogEntry(id)?.model || id;
     await audited(request, { action: "删除字典型号", targetType: "catalog", targetId: id, targetLabel: label }, () => deleteCatalogEntry(id));
     return Response.json({ ok: true });

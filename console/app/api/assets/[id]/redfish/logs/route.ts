@@ -1,6 +1,6 @@
 import { audited, jsonError } from "@/lib/api";
 import { addEvent, getAsset } from "@/lib/assets";
-import { requireAdmin } from "@/lib/auth";
+import { requirePermission } from "@/lib/auth";
 import { assetSession, clearLog, listLogServices, pageLog, readLog } from "@/lib/bmc-redfish";
 import { clearIpmiSel, IPMI_SEL_PATH, ipmiSelService, readIpmiSel } from "@/lib/ipmi-sel";
 
@@ -40,7 +40,7 @@ export async function GET(request: Request, context: Context) {
 export async function DELETE(request: Request, context: Context) {
   try {
     const { id } = await context.params;
-    const identity = requireAdmin(request);
+    const identity = requirePermission(request, "logs.clear");
     const service = new URL(request.url).searchParams.get("service") || "";
     const asset = getAsset(id);
     if (!asset) throw new Error("资产不存在");

@@ -125,8 +125,8 @@ export function ServerBmc({ assetId }: { assetId: string }) {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [reading, setReading] = useState(false);
-  const canOperate = useCan("operator");
-  const canEdit = useCan("engineer");
+  const canOperate = useCan("media");
+  const canEdit = useCan("bmc.settings");
 
   /** refresh 为 true 才去 BMC 读，否则只拿控制台存的上一次结果。 */
   const load = useCallback(

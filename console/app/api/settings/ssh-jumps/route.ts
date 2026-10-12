@@ -1,5 +1,5 @@
 import { audited, jsonError, readJson } from "@/lib/api";
-import { requireAdmin } from "@/lib/auth";
+import { requirePermission } from "@/lib/auth";
 import { forgetJumpChecks } from "@/lib/remote";
 import { listJumpHosts, saveJumpHosts } from "@/lib/ssh-jump";
 
@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 export function GET(request: Request) {
   try {
-    requireAdmin(request);
+    requirePermission(request, "settings");
     return Response.json(listJumpHosts());
   } catch (error) {
     return jsonError(error);
@@ -17,7 +17,7 @@ export function GET(request: Request) {
 /** 整个列表一起存，顺序就是匹配顺序。 */
 export async function PUT(request: Request) {
   try {
-    requireAdmin(request);
+    requirePermission(request, "settings");
     const body = await readJson<unknown>(request);
     return Response.json(
       await audited(request, { action: "修改 SSH 跳板机", targetType: "settings", targetLabel: "SSH 跳板机", detail: JSON.stringify(body).slice(0, 500) }, () => {

@@ -126,7 +126,7 @@ test("cross-site writes and login throttling", () => {
   assert.equal(auth.loginBlocked("10.0.0.9", ""), false);
 });
 
-test("four roles: old user reads as engineer, keys can be limited but not raised", () => {
+test("roles: old user reads as engineer, keys can be limited but not raised", () => {
   const roles = auth.listUsers().map((user) => user.role);
   assert.ok(roles.every((role) => ["viewer", "operator", "engineer", "admin"].includes(role)));
   // 旧文件里的 user 读出来是工程师。
@@ -137,22 +137,49 @@ test("four roles: old user reads as engineer, keys can be limited but not raised
   fs.utimesSync(file, new Date(), new Date(Date.now() + 5000));
   const alice = auth.listUsers().find((user) => user.username === "alice");
   assert.equal(alice?.role, "engineer");
-  assert.throws(() => auth.updateUser(alice!.id, { role: "root" }), /角色只能是/);
+  assert.throws(() => auth.updateUser(alice!.id, { role: "root" }), /没有这个角色/);
 
   const viewer = auth.createUser({ username: "vera", role: "viewer", password: "vera-pass-1" });
-  assert.throws(() => auth.createAccessKey(viewer.id, { role: "admin" }), /不能限成更高/);
+  assert.throws(() => auth.createAccessKey(viewer.id, { role: "admin" }), /账号本身没有的权限/);
   const limited = auth.createAccessKey(alice!.id, { name: "巡检", role: "viewer" });
   const bearer = auth.authenticate(new Headers({ authorization: `Bearer ${limited.secret}` }));
-  assert.equal(bearer?.user.role, "viewer");
+  assert.deepEqual(bearer?.permissions, []);
   assert.equal(bearer?.limited, true);
   // 用限权密钥登录的会话也是限过的。
-  assert.equal(bearer && auth.readSession(auth.createSession(bearer))?.user.role, "viewer");
+  assert.deepEqual(bearer && auth.readSession(auth.createSession(bearer))?.permissions, []);
   // 不能借限权密钥改自己账号。
   const request = new Request("http://x/api/users/x", { method: "POST", headers: { authorization: `Bearer ${limited.secret}` } });
   assert.throws(() => auth.requireSelfOrAdmin(request, alice!.id), /限了权的访问密钥/);
-  assert.throws(() => auth.requireRole(request, "operator"), /值班/);
-  // 和账号同级的限制等于没限。
+  assert.throws(() => auth.requirePermission(request, "power"), /电源和引导/);
+  // 和账号同样的限制等于没限。
   const same = auth.createAccessKey(alice!.id, { role: "engineer" });
   assert.equal(same.key.role, undefined);
   assert.equal(auth.authenticate(new Headers({ authorization: `Bearer ${same.secret}` }))?.limited, undefined);
+});
+
+test("custom roles: pick permissions, change them live, cannot hand out what you lack", () => {
+  const night = auth.saveRole({ name: "夜班", description: "只开关机和看控制台", permissions: ["power", "console", "not-a-permission"] });
+  assert.deepEqual(night.permissions, ["power", "console"]);
+  assert.throws(() => auth.saveRole({ name: "夜班", permissions: [] }), /同名/);
+  const nina = auth.createUser({ username: "nina", role: night.id, password: "nina-pass-1" });
+  const session = auth.createSession({ user: nina, method: "password", credentialId: "" });
+  assert.deepEqual(auth.readSession(session)?.permissions, ["power", "console"]);
+  // 改角色的权限点，已登录的会话马上按新的算。
+  auth.saveRole({ id: night.id, permissions: ["power"] });
+  assert.deepEqual(auth.readSession(session)?.permissions, ["power"]);
+  // 内置角色能改权限点、恢复默认；管理员不能改。
+  assert.deepEqual(auth.saveRole({ id: "viewer", permissions: ["tickets"] }).permissions, ["tickets"]);
+  assert.deepEqual(auth.resetRole("viewer").permissions, []);
+  assert.throws(() => auth.saveRole({ id: "admin", permissions: [] }), /不能改/);
+  // 还有人在用的角色不能删。
+  assert.throws(() => auth.deleteRole(night.id), /nina/);
+  auth.updateUser(nina.id, { role: "viewer" });
+  auth.deleteRole(night.id);
+  assert.equal(auth.getRole(night.id), null);
+  assert.throws(() => auth.deleteRole("engineer"), /内置角色不能删/);
+  // 有「用户」权限但不是管理员的人，不能给出自己没有的权限。
+  const manager = auth.saveRole({ name: "用户管理员", permissions: ["users", "tickets"] });
+  const identity = { permissions: manager.permissions };
+  assert.doesNotThrow(() => auth.assertWithin(identity, auth.rolePermissions("viewer"), "这个角色"));
+  assert.throws(() => auth.assertWithin(identity, auth.rolePermissions("admin"), "这个角色"), /自己没有的权限/);
 });

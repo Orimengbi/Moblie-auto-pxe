@@ -23,7 +23,7 @@ export function AssetTickets({ asset, onChanged }: { asset: { id: string; tag: s
   const [parts, setParts] = useState<Part[]>([]);
   const [sets, setSets] = useState<AssetPartSet[] | null>(null);
   const [creating, setCreating] = useState(false);
-  const canOperate = useCan("operator");
+  const canOperate = useCan("tickets");
 
   const load = useCallback(async () => {
     const [list, installed] = await Promise.all([

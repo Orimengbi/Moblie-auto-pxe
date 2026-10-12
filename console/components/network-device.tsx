@@ -53,8 +53,8 @@ export function NetworkDevice({ assetId }: { assetId: string }) {
   const [busy, setBusy] = useState("");
   const [q, setQ] = useState("");
   const [onlyPhysical, setOnlyPhysical] = useState(true);
-  const canOperate = useCan("operator");
-  const canEdit = useCan("engineer");
+  const canOperate = useCan("refresh");
+  const canEdit = useCan("assets.edit");
 
   const load = useCallback(async () => {
     const response = await fetch(`/api/assets/${assetId}/network`).catch(() => null);

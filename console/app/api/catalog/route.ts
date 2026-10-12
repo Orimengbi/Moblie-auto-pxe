@@ -1,5 +1,5 @@
 import { audited, jsonError, readJson } from "@/lib/api";
-import { requireAdmin } from "@/lib/auth";
+import { requirePermission } from "@/lib/auth";
 import { heightChanged, listCatalog, saveCatalogEntry, syncAssetHeights, syncDetail, type CatalogInput } from "@/lib/catalog";
 
 export const dynamic = "force-dynamic";
@@ -10,7 +10,7 @@ export function GET() {
 
 export async function POST(request: Request) {
   try {
-    const identity = requireAdmin(request);
+    const identity = requirePermission(request, "catalog");
     const body = await readJson<CatalogInput>(request);
     const saved = await audited(
       request,

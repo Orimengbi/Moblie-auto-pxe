@@ -152,7 +152,7 @@ function selSummary(entry: LogEntryView): string {
 
 /** 侧边栏「BMC 日志」：实时推来的事件，以及 BMC 上各个日志（SEL、事件、审计、BIOS…）按页翻。 */
 export function ServerBmcLogs({ assetId }: { assetId: string }) {
-  const isAdmin = useCan("admin");
+  const canClear = useCan("logs.clear");
   const [stream, setStream] = useState<{ stream: StreamStatus; events: BmcEvent[] } | null>(null);
   const [services, setServices] = useState<LogServiceView[] | null>(null);
   /** 日志列表读过了（成功失败都算），下载框可以打开了。 */
@@ -282,7 +282,7 @@ export function ServerBmcLogs({ assetId }: { assetId: string }) {
           <Button size="small" disabled={loading} onClick={() => void loadLog()}>
             刷新
           </Button>
-          {current?.canClear && isAdmin ? (
+          {current?.canClear && canClear ? (
             <Button size="small" color="warning" onClick={() => void clear()}>
               清空
             </Button>

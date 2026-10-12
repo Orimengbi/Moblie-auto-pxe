@@ -124,8 +124,9 @@ export function RackBoard({
   const [importing, setImporting] = useState(false);
   const [view, setView] = useState<"front" | "floor">("front");
   const [focusRack, setFocusRack] = useState<string | null>(null);
-  const canEdit = useCan("engineer");
-  const isAdmin = useCan("admin");
+  const canEdit = useCan("dc.edit");
+  const canPlace = useCan("assets.edit");
+  const canDelete = useCan("delete");
 
   // 正视图还是俯视图，这个浏览器记住上次的。
   useEffect(() => {
@@ -284,7 +285,7 @@ export function RackBoard({
                 编辑数据中心
               </Button>
             ) : null}
-            {isAdmin ? (
+            {canDelete ? (
               <Button type="button" color="error" onClick={() => void removeDatacenter(datacenter)}>
                 删除数据中心
               </Button>
@@ -319,7 +320,7 @@ export function RackBoard({
                 编辑机房
               </Button>
             ) : null}
-            {isAdmin ? (
+            {canDelete ? (
               <Button type="button" color="error" onClick={() => void removeSite(site)}>
                 删除机房
               </Button>
@@ -375,9 +376,9 @@ export function RackBoard({
                   used={usedU(rack)}
                   selected={sideId}
                   onOpen={setSideId}
-                  onPlace={canEdit ? (u) => setPlacing({ rack, u }) : undefined}
+                  onPlace={canPlace ? (u) => setPlacing({ rack, u }) : undefined}
                   onEdit={canEdit ? () => setRackForm(rack) : undefined}
-                  onDelete={isAdmin ? () => void removeRack(rack) : undefined}
+                  onDelete={canDelete ? () => void removeRack(rack) : undefined}
                 />
               ))}
             </Stack>

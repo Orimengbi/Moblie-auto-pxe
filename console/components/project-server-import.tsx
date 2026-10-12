@@ -11,7 +11,7 @@ import { useCan } from "@/components/role-context";
 
 export function ProjectServerImport({ projectId }: { projectId: string }) {
   const router = useRouter();
-  const canEdit = useCan("engineer");
+  const canEdit = useCan("install");
   const [error, setError] = useState("");
   const [summary, setSummary] = useState("");
   const [pending, setPending] = useState(false);
