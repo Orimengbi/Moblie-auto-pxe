@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Button from "@mui/material/Button";
 import Checkbox from "@mui/material/Checkbox";
 import FormControlLabel from "@mui/material/FormControlLabel";
+import Link from "@mui/material/Link";
 import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
@@ -13,6 +14,8 @@ import { ATTR_LABEL, KIND_LABEL, KIND_ORDER, SOURCE_LABEL } from "@/lib/inventor
 import type { Baseline, BaselineIssue, HwComponent, HwKind, InventoryMeta, InventorySnapshot, InventorySource, RemoteTask } from "@/lib/types";
 import { formatTime } from "@/lib/time";
 import { useCan } from "@/components/role-context";
+import { PortSections } from "@/components/server-ports";
+import { portSummary } from "@/lib/ports";
 
 const MONO = "var(--font-geist-mono), monospace";
 
@@ -220,7 +223,7 @@ export function ServerInventory({ projectId, row }: { projectId?: string; row: {
       <Stack spacing={0.5}>
         <Typography variant="h3">硬件配置</Typography>
         <Typography variant="caption" color="text.secondary">
-          系统内是 SSH 进系统读的，BMC 是从 Redfish 读的。和上一次采集比出的变化在「记录」里（可只看硬件变更）。
+          部件和接口（盘位、PCIe 插槽、网口占用）来自同一次采集。系统内是 SSH 进系统读的，BMC 是从 Redfish 读的。和上一次采集比出的变化在「记录」里（可只看硬件变更）。
         </Typography>
       </Stack>
 
@@ -326,6 +329,16 @@ export function ServerInventory({ projectId, row }: { projectId?: string; row: {
             </Stack>
           ) : null}
 
+          {snapshot.ports ? (
+            <Typography variant="body2" color="text.secondary">
+              {(["drive", "pcie", "net"] as const).map((group) => portSummary(snapshot.ports!, group)).join("；")}。
+              <Link href="#hw-ports" underline="hover" onClick={(event) => { event.preventDefault(); document.getElementById("hw-ports")?.scrollIntoView({ behavior: "smooth" }); }}>
+                看接口
+              </Link>
+            </Typography>
+          ) : null}
+
+          <Typography variant="h4">部件</Typography>
           {KIND_ORDER.map((kind) => {
             const items = snapshot.components.filter((item) => item.kind === kind);
             if (!items.length) return null;
@@ -336,6 +349,8 @@ export function ServerInventory({ projectId, row }: { projectId?: string; row: {
               </Stack>
             );
           })}
+
+          <PortSections key={snapshot.id} snapshot={snapshot} />
         </Stack>
       ) : null}
     </Stack>
