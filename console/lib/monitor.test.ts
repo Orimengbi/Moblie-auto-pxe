@@ -45,6 +45,12 @@ test("sdr and sel output is parsed and graded", () => {
   assert.deepEqual(monitor.newSelEntries(sel, ""), [], "第一次只记位置");
   assert.deepEqual(monitor.newSelEntries(sel, monitor.selKey(sel[2])).map((entry) => entry.id), ["4", "5"]);
   assert.equal(monitor.newSelEntries(sel, "zz@gone").length, 5, "清过日志找不到上次那条，全算新的");
+  const fan = monitor.parseSel(`  7b | 10/12/26 | 02:25:08 UTC | Fan GPU_80_FAN_27 | Lower Non-critical going low | Asserted
+  7c | 10/12/26 | 02:25:08 UTC | Fan GPU_80_FAN_27 | Lower Critical going low | Asserted
+  7f | 10/12/26 | 02:25:26 UTC | Fan GPU_80_FAN_27 | Lower Critical going low | Deasserted`);
+  assert.deepEqual(fan.map((entry) => entry.severity), ["warning", "critical", "info"], "Non-critical 是警告");
+  assert.deepEqual([...monitor.clearedSelKeys(fan)], ["sel:Fan GPU_80_FAN_27:Lower Critical going low"]);
+  assert.equal(monitor.sensorSeverity("ok", "Lower Non-critical going low"), "warning");
   assert.ok(monitor.ignoredSensor("NOISY_SENSOR", "foo, noisy*"));
   assert.ok(!monitor.ignoredSensor("CPU0_TEMP", "foo, noisy*"));
 });
@@ -152,6 +158,43 @@ test("bmc checks open, update and resolve alerts", async () => {
   assert.throws(() => alerts.alertToTicket(sticky.id, "bob"), /已经转过/);
   assert.equal(alerts.resolveAlert(sticky.id, "bob").status, "resolved");
   tickets.setTicketStatus(ticket.id, "resolved", "bob");
+});
+
+test("sel alerts close when the bmc deasserts them, and a quick assert+deassert opens nothing", async () => {
+  const asset = assets.createAsset({ sn: "mon-sel", status: "active", bmcIp: "10.0.0.7", bmcUser: "admin", bmcPassword: "pw" }, "alice");
+  let sel = "   1 | 10/12/26 | 01:00:00 UTC | System Event #0x10 | Timestamp Clock Sync | Asserted\n";
+  const exec = async (_host: string, _user: string, _password: string, args: string[]) => {
+    if (args.includes("dump")) {
+      fs.writeFileSync(args[args.length - 1], "sdr");
+      return { code: 0, stdout: "", stderr: "" };
+    }
+    if (args.includes("sdr")) return { code: 0, stdout: SDR_OK, stderr: "" };
+    if (args[0] === "sel") return { code: 0, stdout: sel, stderr: "" };
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  const check = () => monitor.checkBmc(asset, monitor.DEFAULT_MONITOR, exec, async () => []);
+  const fanKey = "sel:Fan FAN_7:Lower Critical going low";
+  const rows = () => alerts.listAlerts({ assetId: asset.id }).filter((alert) => alert.key === fanKey);
+  await check();
+
+  // 这次读到告警，下次读到 Deasserted：自动恢复。
+  sel += "   2 | 10/12/26 | 01:17:18 UTC | Fan FAN_7 | Lower Critical going low | Asserted\n";
+  await check();
+  assert.equal(rows()[0].status, "active");
+  sel += "   3 | 10/12/26 | 02:43:55 UTC | Fan FAN_7 | Lower Critical going low | Deasserted\n";
+  await check();
+  assert.deepEqual(rows().map((alert) => [alert.status, alert.resolvedBy]), [["resolved", "自动恢复"]]);
+
+  // 两次检查之间又拔插了一次（Asserted 后马上 Deasserted）：不开新告警，记到原来那条上。
+  sel += "   4 | 10/12/26 | 03:00:00 UTC | Fan FAN_7 | Lower Critical going low | Asserted\n";
+  sel += "   5 | 10/12/26 | 03:00:20 UTC | Fan FAN_7 | Lower Critical going low | Deasserted\n";
+  await check();
+  assert.deepEqual(rows().map((alert) => [alert.status, alert.count]), [["resolved", 2]]);
+
+  // 没解除的事件照旧开着，要人处理。
+  sel += "   6 | 10/12/26 | 04:00:00 UTC | Fan FAN_7 | Lower Critical going low | Asserted\n";
+  await check();
+  assert.deepEqual(rows().map((alert) => alert.status).sort(), ["active", "resolved"]);
 });
 
 test("os checks catch a missing gpu, xid and a failing disk", async () => {
