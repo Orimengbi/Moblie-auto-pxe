@@ -165,3 +165,45 @@ test("a log bundle has the IPMI output, every Redfish log and a summary", async 
   assert.ok(bundle.lines.some((line) => /Redfish BMC Event Log：redfish\/Manager-EventLog\.txt，2 条/.test(line)));
   assert.equal(fs.readdirSync(bundles.bundleRoot()).filter((name) => name.startsWith("work-")).length, 0);
 });
+
+test("only the chosen kinds of logs are read", async () => {
+  const kinds = await import("./log-kinds.ts");
+  assert.throws(() => kinds.cleanLogKinds([]), /至少选一种/);
+  assert.deepEqual(kinds.cleanLogKinds("ipmi:sel,bogus,rf:svc:/redfish/v1/Managers/Self/LogServices/EventLog,rf:svc:/etc/passwd"), ["ipmi:sel", "rf:svc:/redfish/v1/Managers/Self/LogServices/EventLog"]);
+  assert.equal(kinds.redfishGroup({ owner: "system", source: "HGX_Baseboard_0" }), "rf:hgx-board");
+  assert.equal(kinds.redfishGroup({ owner: "manager", source: "" }), "rf:bmc");
+
+  const bmc = fakeBmc();
+  const asset = makeAsset("l-2");
+  const requested: string[] = [];
+  const docs: Record<string, unknown> = {
+    "/redfish/v1/Managers": { Members: [{ "@odata.id": "/redfish/v1/Managers/Self" }] },
+    "/redfish/v1/Systems": { Members: [{ "@odata.id": "/redfish/v1/Systems/Self" }] },
+    "/redfish/v1/Managers/Self": { LogServices: { "@odata.id": "/redfish/v1/Managers/Self/LogServices" } },
+    "/redfish/v1/Systems/Self": { LogServices: { "@odata.id": "/redfish/v1/Systems/Self/LogServices" } },
+    "/redfish/v1/Managers/Self/LogServices": { Members: [{ "@odata.id": "/redfish/v1/Managers/Self/LogServices/AuditLog" }] },
+    "/redfish/v1/Systems/Self/LogServices": { Members: [{ "@odata.id": "/redfish/v1/Systems/Self/LogServices/BIOS" }] },
+    "/redfish/v1/Managers/Self/LogServices/AuditLog": { "@odata.id": "/redfish/v1/Managers/Self/LogServices/AuditLog", Id: "AuditLog", Name: "Audit Log", Entries: { "@odata.id": "/redfish/v1/Managers/Self/LogServices/AuditLog/Entries" } },
+    "/redfish/v1/Systems/Self/LogServices/BIOS": { "@odata.id": "/redfish/v1/Systems/Self/LogServices/BIOS", Id: "BIOS", Name: "BIOS Log", Entries: { "@odata.id": "/redfish/v1/Systems/Self/LogServices/BIOS/Entries" } },
+    "/redfish/v1/Managers/Self/LogServices/AuditLog/Entries": { "Members@odata.count": 1, Members: [{ Id: "1", Created: "2026-10-10T01:00:00Z", Severity: "OK", Message: "login" }] },
+    "/redfish/v1/Systems/Self/LogServices/BIOS/Entries": { "Members@odata.count": 1, Members: [{ Id: "1", Created: "2026-10-10T02:00:00Z", Severity: "Warning", Message: "POST error" }] },
+  };
+  const request = async (_method: string, target: string) => {
+    requested.push(target);
+    const base = target.split("?")[0];
+    if (!(base in docs)) return { status: 404, body: {}, headers: {} };
+    return { status: 200, body: docs[base] as Record<string, unknown>, headers: {} };
+  };
+  const session = { request, paths: { system: "/redfish/v1/Systems/Self", manager: "/redfish/v1/Managers/Self", chassis: "" }, user: "admin", host: "10.0.0.9" } as unknown as import("./bmc-redfish.ts").BmcSession;
+  const bundle = await bundles.buildLogBundle(asset, path.join(temp, "out2"), { exec: bmc.exec, session: async () => session }, ["ipmi:sel", "rf:host"]);
+  const listed = execFileSync("tar", ["-tzf", bundle.file], { encoding: "utf8" }).split("\n").filter((name) => name && !name.endsWith("/")).map((name) => name.split("/").slice(1).join("/")).sort();
+  assert.deepEqual(listed, ["ipmi/sel-elist.txt", "ipmi/sel-info.txt", "redfish/System-BIOS.json", "redfish/System-BIOS.txt", "summary.txt"]);
+  // 列清单时每份都查一下条数（$top=1），没选的不整份读。
+  assert.ok(!requested.some((target) => target.endsWith("AuditLog/Entries")));
+  assert.ok(!bmc.calls.some((args) => args[0] === "sdr"));
+
+  // 只要 IPMI 时不碰 Redfish。
+  requested.length = 0;
+  await bundles.buildLogBundle(asset, path.join(temp, "out3"), { exec: bmc.exec, session: async () => session }, ["ipmi:fru"]);
+  assert.equal(requested.length, 0);
+});

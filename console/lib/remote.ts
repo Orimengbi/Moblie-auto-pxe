@@ -15,6 +15,7 @@ import { jumpFor, jumpLabel, listJumpHosts, type JumpHost } from "./ssh-jump.ts"
 import { buildLogBundle, cleanupBundles, taskBundleDir } from "./bmc-log-bundle.ts";
 import { applyUserChange, cleanUserChange } from "./ipmi-users.ts";
 import { describeUserChange, type BmcUserChange } from "./ipmi-user-types.ts";
+import { cleanLogKinds, DEFAULT_LOG_KINDS, describeLogKinds } from "./log-kinds.ts";
 import { addEvent, assetBmcAccounts, getAsset } from "./assets.ts";
 import { BMC_SETTING_LABEL } from "./asset-labels.ts";
 import { changeClock, collectSettings, openSession, validOffset, type ClockChange } from "./bmc-redfish.ts";
@@ -96,6 +97,8 @@ export interface TaskInput {
   bmcClock?: ClockChange;
   /** BMC 用户任务在每台上做什么。 */
   bmcUser?: BmcUserChange;
+  /** 收集 BMC 日志任务要哪几类。 */
+  bmcLogs?: string[];
   name?: string;
   script?: string;
   /** 资产 id。 */
@@ -120,6 +123,7 @@ export function createTask(input: TaskInput, context: HostContext = hostContext(
   const kind: TaskKind = (["revoke", "inventory", "bmc-reset", "bmc-clock", "bmc-logs", "bmc-user"] as const).find((item) => item === input.kind) || "script";
   const clock = kind === "bmc-clock" ? cleanClock(input.bmcClock) : undefined;
   const userChange = kind === "bmc-user" ? cleanUserChange(input.bmcUser) : undefined;
+  const logKinds = kind === "bmc-logs" ? cleanLogKinds(input.bmcLogs?.length ? input.bmcLogs : DEFAULT_LOG_KINDS) : undefined;
   const via: BmcResetVia = input.bmcReset === "inband" ? "inband" : "outband";
   const script =
     kind === "revoke"
@@ -133,7 +137,7 @@ export function createTask(input: TaskInput, context: HostContext = hostContext(
           : kind === "bmc-clock"
             ? `# 经 Redfish 改 BMC\n${JSON.stringify(clock, null, 2)}\n`
             : kind === "bmc-logs"
-              ? "# 控制台经 IPMI 和 Redfish 读每台 BMC 的日志（SEL、传感器、FRU、所有 Redfish 日志服务含 HGX），每台打成一个 tar.gz\n"
+              ? `# 控制台经 IPMI 和 Redfish 读每台 BMC 的日志，每台打成一个 tar.gz\n# 类型：${describeLogKinds(logKinds!)}\n`
               : kind === "bmc-user"
                 ? `# 经 IPMI 在每台 BMC 上按用户名改（槽位号各台可以不一样）\n${JSON.stringify({ ...userChange, ...(userChange!.password ? { password: "******" } : {}) }, null, 2)}\n`
                 : (input.script || "").replace(/\r\n/g, "\n");
@@ -145,7 +149,7 @@ export function createTask(input: TaskInput, context: HostContext = hostContext(
   const settingsName = settings.map((item) => BMC_SETTING_LABEL[item]).join("、");
   const inventoryName = sources.length ? `采集硬件配置${settings.length ? `、${settingsName}` : ""}` : `读取 ${settingsName}`;
   const defaultName =
-    kind === "revoke" ? "交付清理：撤掉控制台公钥" : kind === "inventory" ? inventoryName : kind === "bmc-reset" ? `重启 BMC（${via === "inband" ? "带内" : "带外"}）` : kind === "bmc-clock" ? clockName(clock!) : kind === "bmc-logs" ? "收集 BMC 日志" : kind === "bmc-user" ? describeUserChange(userChange!).slice(0, 80) : script.trim().split("\n")[0].slice(0, 80);
+    kind === "revoke" ? "交付清理：撤掉控制台公钥" : kind === "inventory" ? inventoryName : kind === "bmc-reset" ? `重启 BMC（${via === "inband" ? "带内" : "带外"}）` : kind === "bmc-clock" ? clockName(clock!) : kind === "bmc-logs" ? `收集 BMC 日志（${describeLogKinds(logKinds!)}）`.slice(0, 80) : kind === "bmc-user" ? describeUserChange(userChange!).slice(0, 80) : script.trim().split("\n")[0].slice(0, 80);
   const name = (input.name || "").trim().slice(0, 80) || defaultName;
   const fileIds = kind === "script" ? [...new Set(input.fileIds || [])] : [];
   for (const id of fileIds) {
@@ -204,6 +208,7 @@ export function createTask(input: TaskInput, context: HostContext = hostContext(
     ...(kind === "bmc-reset" ? { bmcReset: via } : {}),
     ...(clock ? { bmcClock: clock } : {}),
     ...(userChange ? { bmcUser: userChange } : {}),
+    ...(logKinds ? { bmcLogs: logKinds } : {}),
     createdAt: new Date().toISOString(),
   };
   if (task.status === "done") task.finishedAt = task.createdAt;
@@ -659,7 +664,7 @@ async function clockTarget(task: RemoteTask, target: TaskTarget): Promise<Pick<T
 async function logsTarget(task: RemoteTask, target: TaskTarget): Promise<Pick<TaskTarget, "status" | "exitCode" | "output">> {
   const asset = getAsset(target.serverId);
   if (!asset) return { status: "failed", exitCode: null, output: "资产已经删掉了\n" };
-  const bundle = await buildLogBundle(asset, taskBundleDir(task.id));
+  const bundle = await buildLogBundle(asset, taskBundleDir(task.id), {}, task.bmcLogs);
   const size = fs.statSync(bundle.file).size;
   const output = `${bundle.lines.join("\n")}\n打包：${bundle.name}（${Math.max(1, Math.round(size / 1024))} KB）\n`;
   return { status: bundle.empty ? "unreachable" : "ok", exitCode: bundle.empty ? null : 0, output };

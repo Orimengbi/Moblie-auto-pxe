@@ -5,7 +5,12 @@ import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Checkbox from "@mui/material/Checkbox";
 import FormControlLabel from "@mui/material/FormControlLabel";
+import Dialog from "@mui/material/Dialog";
+import DialogActions from "@mui/material/DialogActions";
+import DialogContent from "@mui/material/DialogContent";
+import DialogTitle from "@mui/material/DialogTitle";
 import LinearProgress from "@mui/material/LinearProgress";
+import { collapseKinds, expandKinds, LogKindPicker, rememberedKinds, rememberKinds } from "@/components/log-kind-picker";
 import MenuItem from "@mui/material/MenuItem";
 import Paper from "@mui/material/Paper";
 import Stack from "@mui/material/Stack";
@@ -62,17 +67,26 @@ export async function saveResponse(response: Response, fallback: string): Promis
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
-/** 把这台所有 BMC 日志现读一遍打成 tar.gz 下载。 */
-function LogDownload({ assetId }: { assetId: string }) {
+/** 选几类 BMC 日志现读一遍，打成 tar.gz 下载。services 是这台有哪些日志（日志列表读到以后才有）。 */
+function LogDownload({ assetId, services, ready }: { assetId: string; services: LogServiceView[] | null; ready: boolean }) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [summary, setSummary] = useState("");
+  const [picking, setPicking] = useState(false);
+  const [kinds, setKinds] = useState<string[]>([]);
+
+  function pick() {
+    setKinds(expandKinds(rememberedKinds(), services || []));
+    setPicking(true);
+  }
 
   async function download() {
+    setPicking(false);
+    rememberKinds(collapseKinds(kinds, services || []));
     setPending(true);
     setError("");
     setSummary("");
-    const response = await fetch(`/api/assets/${assetId}/logs`).catch(() => null);
+    const response = await fetch(`/api/assets/${assetId}/logs?kinds=${encodeURIComponent(kinds.join(","))}`).catch(() => null);
     if (!response) setError("没有连上控制台");
     else if (!response.ok) setError(((await response.json().catch(() => ({}))) as { error?: string }).error || `下载失败（HTTP ${response.status}）`);
     else {
@@ -88,11 +102,11 @@ function LogDownload({ assetId }: { assetId: string }) {
         <Box sx={{ flex: 1 }}>
           <Typography variant="subtitle2">下载日志</Typography>
           <Typography variant="body2" color="text.secondary">
-            现读 IPMI 的 SEL、传感器、FRU 和 Redfish 上所有日志（含 HGX 底板、HGX BMC），打成一个 tar.gz。要一两分钟。
+            选要哪几类：IPMI 的 SEL、传感器、FRU，Redfish 上的各份日志（含 HGX 底板、HGX BMC），现读一遍打成一个 tar.gz。选得多要一两分钟。
           </Typography>
         </Box>
-        <Button variant="outlined" disabled={pending} onClick={() => void download()}>
-          {pending ? "正在读取…" : "打包下载"}
+        <Button variant="outlined" disabled={pending || !ready} onClick={pick}>
+          {pending ? "正在读取…" : !ready ? "正在读日志列表…" : "选择并下载"}
         </Button>
       </Stack>
       {pending ? <LinearProgress sx={{ mt: 1.5 }} /> : null}
@@ -101,6 +115,18 @@ function LogDownload({ assetId }: { assetId: string }) {
           {error}
         </Typography>
       ) : null}
+      <Dialog open={picking} onClose={() => setPicking(false)} fullWidth maxWidth="sm">
+        <DialogTitle>下载哪些日志</DialogTitle>
+        <DialogContent dividers>
+          <LogKindPicker value={kinds} onChange={setKinds} services={services || []} />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setPicking(false)}>取消</Button>
+          <Button variant="contained" disabled={!kinds.length} onClick={() => void download()}>
+            下载（{kinds.length} 项）
+          </Button>
+        </DialogActions>
+      </Dialog>
       {summary ? (
         <Box component="pre" sx={{ mt: 1.5, mb: 0, p: 1, bgcolor: "action.hover", borderRadius: 1, fontSize: 12, whiteSpace: "pre-wrap", maxHeight: 200, overflow: "auto" }}>
           {summary}
@@ -127,6 +153,8 @@ function selSummary(entry: LogEntryView): string {
 export function ServerBmcLogs({ assetId }: { assetId: string }) {
   const [stream, setStream] = useState<{ stream: StreamStatus; events: BmcEvent[] } | null>(null);
   const [services, setServices] = useState<LogServiceView[] | null>(null);
+  /** 日志列表读过了（成功失败都算），下载框可以打开了。 */
+  const [listed, setListed] = useState(false);
   const [service, setService] = useState("");
   const [page, setPage] = useState(0);
   const [log, setLog] = useState<{ total: number; entries: LogEntryView[]; sorted: boolean } | null>(null);
@@ -146,8 +174,10 @@ export function ServerBmcLogs({ assetId }: { assetId: string }) {
   }, [loadEvents]);
 
   useEffect(() => {
+    setListed(false);
     void (async () => {
       const result = await api<{ services: LogServiceView[] }>(`/api/assets/${assetId}/redfish/logs`);
+      setListed(true);
       if (!result.ok) return setError(result.error);
       setServices(result.data.services);
       const first = result.data.services.find((item) => item.id === "ipmi-sel") || result.data.services.find((item) => item.id === "SEL") || result.data.services.find((item) => item.count) || result.data.services[0];
@@ -186,7 +216,7 @@ export function ServerBmcLogs({ assetId }: { assetId: string }) {
 
   return (
     <Stack spacing={2}>
-      <LogDownload assetId={assetId} />
+      <LogDownload assetId={assetId} services={services} ready={listed} />
       <Paper variant="outlined" sx={{ p: 2 }}>
         <Typography variant="subtitle2">实时事件</Typography>
         {stream ? <EventStreamLine status={stream.stream} /> : null}

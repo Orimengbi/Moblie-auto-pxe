@@ -11,6 +11,7 @@ import DialogContentText from "@mui/material/DialogContentText";
 import DialogTitle from "@mui/material/DialogTitle";
 import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
+import { LogKindPicker, rememberedKinds, rememberKinds } from "@/components/log-kind-picker";
 import { randomPassword, UserChangeFields } from "@/components/server-bmc-users";
 import { api } from "@/lib/client-api";
 import { BMC_USER_ACTION_LABEL, type BmcUserAction, type BmcUserChange } from "@/lib/ipmi-user-types";
@@ -28,13 +29,19 @@ export function BmcLogsBatchDialog({ targets, onClose }: { targets: Target[]; on
   const router = useRouter();
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
+  const [kinds, setKinds] = useState<string[]>([]);
   const usable = targets.filter((target) => target.bmcIp);
 
-  useEffect(() => setError(""), [targets]);
+  useEffect(() => {
+    if (!targets.length) return;
+    setError("");
+    setKinds(rememberedKinds().filter((kind) => !kind.startsWith("rf:svc:")));
+  }, [targets]);
 
   async function start() {
+    rememberKinds(kinds);
     setPending(true);
-    const result = await api<{ id: string }>("/api/tasks", "POST", { kind: "bmc-logs", assetIds: usable.map((target) => target.id), concurrency: 8, timeoutSec: 900 });
+    const result = await api<{ id: string }>("/api/tasks", "POST", { kind: "bmc-logs", bmcLogs: kinds, assetIds: usable.map((target) => target.id), concurrency: 8, timeoutSec: 900 });
     setPending(false);
     if (!result.ok) return setError(result.error);
     onClose();
@@ -45,9 +52,10 @@ export function BmcLogsBatchDialog({ targets, onClose }: { targets: Target[]; on
     <Dialog open={targets.length > 0} onClose={onClose} fullWidth maxWidth="sm">
       <DialogTitle>收集 BMC 日志（{usable.length} 台）</DialogTitle>
       <DialogContent>
-        <DialogContentText>
-          每台读 IPMI 的 SEL、传感器、FRU 和 Redfish 上所有日志（含 HGX 底板、HGX BMC），打成一个 tar.gz。同时读 8 台，一台一两分钟。跑完在任务页下载全部或单台的包，包留 7 天。
+        <DialogContentText sx={{ mb: 2 }}>
+          每台按选的类型读，打成一个 tar.gz。同时读 8 台，选得多一台要一两分钟。跑完在任务页下载全部或单台的包，包留 7 天。
         </DialogContentText>
+        <LogKindPicker value={kinds} onChange={setKinds} />
         {usable.length < targets.length ? (
           <Alert severity="info" sx={{ mt: 2 }}>
             选中的里有 {targets.length - usable.length} 台没有 BMC 地址，不收集。
@@ -61,7 +69,7 @@ export function BmcLogsBatchDialog({ targets, onClose }: { targets: Target[]; on
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>取消</Button>
-        <Button variant="contained" disabled={pending || !usable.length} onClick={() => void start()}>
+        <Button variant="contained" disabled={pending || !usable.length || !kinds.length} onClick={() => void start()}>
           开始收集
         </Button>
       </DialogActions>

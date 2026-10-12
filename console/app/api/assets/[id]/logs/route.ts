@@ -6,10 +6,11 @@ import { auditRequest, jsonError } from "@/lib/api";
 import { addEvent, getAsset } from "@/lib/assets";
 import { authenticate, requireUser } from "@/lib/auth";
 import { buildLogBundle, bundleRoot, cleanupBundles } from "@/lib/bmc-log-bundle";
+import { cleanLogKinds, describeLogKinds } from "@/lib/log-kinds";
 
 export const dynamic = "force-dynamic";
 
-/** 现读这台的 BMC 日志打成 tar.gz 下载。要读几十秒到一两分钟。 */
+/** 现读这台的 BMC 日志打成 tar.gz 下载。kinds 是要哪几类，逗号隔开（见 log-kinds.ts），不给就全要。要读几十秒到一两分钟。 */
 export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const identity = requireUser(request);
@@ -17,14 +18,16 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     const asset = getAsset(id);
     if (!asset) throw new Error("资产不存在");
     if (!asset.bmcIp) throw new Error(`${asset.sn} 还没有 BMC 地址`);
+    const raw = new URL(request.url).searchParams.get("kinds");
+    const kinds = raw === null ? undefined : cleanLogKinds(raw);
     cleanupBundles();
     const dir = path.join(bundleRoot(), `once-${crypto.randomUUID()}`);
-    const bundle = await buildLogBundle(asset, dir);
+    const bundle = await buildLogBundle(asset, dir, {}, kinds);
     if (bundle.empty) {
       fs.rmSync(dir, { recursive: true, force: true });
       throw new Error(`一份日志都没读到：${bundle.lines.join("；")}`);
     }
-    auditRequest(request, authenticate(request.headers) || identity, { action: "下载 BMC 日志", targetType: "asset", targetId: id, targetLabel: `${asset.tag} ${asset.sn}`, detail: bundle.name });
+    auditRequest(request, authenticate(request.headers) || identity, { action: "下载 BMC 日志", targetType: "asset", targetId: id, targetLabel: `${asset.tag} ${asset.sn}`, detail: `${bundle.name}（${kinds ? describeLogKinds(kinds) : "全部"}）` });
     addEvent(id, "bmc", `下载 BMC 日志（${bundle.name}）`, identity.user.username);
     const size = fs.statSync(bundle.file).size;
     const stream = fs.createReadStream(bundle.file);
