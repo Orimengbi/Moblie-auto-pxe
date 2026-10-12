@@ -36,7 +36,7 @@ export function MonitorSettingsForm({ settings }: { settings: MonitorSettings })
     setMessage("已保存，下一轮检查（30 秒内）按新设置跑");
   }
 
-  const num = (key: "bmcIntervalMin" | "osIntervalMin" | "gpuTempWarn" | "bmcFailuresToAlert") => ({
+  const num = (key: "bmcIntervalMin" | "osIntervalMin" | "gpuTempWarn" | "bmcFailuresToAlert" | "memEccQuietHours") => ({
     value: String(form[key]),
     onChange: (event: React.ChangeEvent<HTMLInputElement>) => setForm({ ...form, [key]: Number(event.target.value) }),
   });
@@ -58,9 +58,12 @@ export function MonitorSettingsForm({ settings }: { settings: MonitorSettings })
           <Grid size={{ xs: 12, sm: 6, md: 3 }}>
             <TextField label="BMC 连续不通几次报" type="number" slotProps={{ htmlInput: { min: 1 } }} fullWidth {...num("bmcFailuresToAlert")} />
           </Grid>
+          <Grid size={{ xs: 12, sm: 6, md: 3 }}>
+            <TextField label="内存 ECC 几小时没再出现就解除" type="number" slotProps={{ htmlInput: { min: 1, max: 720 } }} fullWidth {...num("memEccQuietHours")} />
+          </Grid>
         </Grid>
         <Typography variant="caption" sx={{ display: "block", mt: 1, color: "text.secondary" }}>
-          系统内间隔填 0 就不 SSH 进系统查 GPU 和硬盘。系统内检查要能用控制台的密钥登录（装机时写入的公钥）。
+          系统内间隔填 0 就不 SSH 进系统查 GPU 和硬盘。系统内检查要能用控制台的密钥登录（装机时写入的公钥）。内存可纠正 ECC（SEL 事件和内存 Health Warning）在这么多小时里没有新的 ECC 事件就自动解除。
         </Typography>
       </Box>
       <Box>

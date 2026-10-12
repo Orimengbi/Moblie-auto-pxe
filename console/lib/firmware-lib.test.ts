@@ -88,6 +88,55 @@ test("release notes give version, models, date, checksum and the latest changes"
   assert.doesNotMatch(notes.changes, /Old stuff/);
 });
 
+const GBT_BMC_NOTES = `                                                                技嘉科技股份有限公司
+                                                                GIGA -BYTE TECHNOLOGY CO., LTD.
+Project Name
+ALL
+
+                  Revision                    Release Date        Checksum
+      BMC        OLD:   N/A   NEW:   N/A           N/A          SUM:0xCHECKSUM
+
+      SMT      OLD:13.06.28   NEW: 13.06.29     2026/08/11   F360, EC68, EA68, 2C28
+      ZIP        OLD:    N/A NEW:    N/A           N/A                  N/A
+    F –Feature, B – Bug fixed
+No. Type                                Issue Description                                      Note             P
+                                          13.06.29(2026/08/11)                                                 P3
+3      F   [feature] Update the version of the pci.ids.gz file to 2026.08.04.
+           [defect] Fix the HTTP Remote Media mount feature to support Fully
+4      B
+                                                                              技嘉科技股份有限公司
+                                   13.06.28(2026/07/06) Deprecated                                             P3
+                                          13.06.27(2026/06/16)                                                 P3
+1      F   [feature] Old stuff
+`;
+
+test("gigabyte generic BMC package: table release notes, projects.txt and .ima_enc", async () => {
+  const notes = pkgs.parseReleaseNotes(GBT_BMC_NOTES.replace("0xCHECKSUM", "0x11d5f360"));
+  assert.equal(notes.kind, "bmc");
+  assert.equal(notes.version, "13.06.29");
+  assert.equal(notes.buildDate, "2026/08/11");
+  assert.equal(notes.checksum, "0x11D5F360");
+  assert.match(notes.changes, /Remote Media/);
+  assert.doesNotMatch(notes.changes, /Old stuff|技嘉/);
+
+  const root = fs.mkdtempSync(path.join(temp, "gbt-bmc-"));
+  const { image, sum } = biosImage();
+  fs.mkdirSync(path.join(root, "130629/fw"), { recursive: true });
+  fs.writeFileSync(path.join(root, "130629/fw/130629.bin"), image);
+  fs.writeFileSync(path.join(root, "130629/fw/rom_v130629.ima_enc"), crypto.randomBytes(300 * 1024));
+  fs.writeFileSync(path.join(root, "130629/projects.txt"), "R182-NA1-00, G894-ZD3-AAX7-000, MZB3-PE2-000,\n");
+  fs.writeFileSync(path.join(root, "130629/BMC_Release_Note_130629.txt"), GBT_BMC_NOTES.replace("0xCHECKSUM", `0x${sum.toString(16)}`));
+  const result = await pkgs.analyzeTree(root, "server_firmware_ast2600_v13.06.29.zip", []);
+  assert.equal(result.vendor, "GIGABYTE");
+  assert.equal(result.kind, "bmc");
+  assert.equal(result.version, "13.06.29");
+  assert.deepEqual(result.models, ["R182-NA1-00", "G894-ZD3-AAX7-000", "MZB3-PE2-000"]);
+  assert.deepEqual(result.checksum, { expected: `0x${sum.toString(16).toUpperCase()}`, file: "130629/fw/130629.bin", ok: true });
+  assert.ok(result.images.some((item) => item.path.endsWith(".ima_enc") && item.type === "ima"));
+  assert.match(result.method, /刷 BMC/);
+  assert.deepEqual(result.warnings, []);
+});
+
 test("versions compare by their numbers", () => {
   assert.equal(pkgs.compareVersions("R05_F04", "R07_F05"), "older");
   assert.equal(pkgs.compareVersions("R05", "R07_F05"), "older");

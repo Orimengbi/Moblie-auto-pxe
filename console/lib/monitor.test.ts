@@ -266,3 +266,33 @@ sda|SMART overall-health self-assessment test result: FAILED!
   assert.throws(() => monitor.saveMonitorSettings({ bmcIntervalMin: 0 }), /BMC 检查间隔/);
   assert.equal(monitor.saveMonitorSettings({ osIntervalMin: 0, statuses: ["active", "bogus" as never] }).statuses.join(), "active");
 });
+
+test("memory correctable ECC resolves after quiet hours and stays quiet until the next SEL ECC", () => {
+  const asset = assets.createAsset({ sn: "mon-ecc", status: "active" }, "alice");
+  const sel = { key: "sel:Memory #0x08:Correctable ECC", source: "sel" as const, severity: "warning" as const, title: "BMC 事件：Memory #0x08 Correctable ECC", detail: "", sticky: true };
+  const dimm = { key: "health:内存 DIMM_P0_C0（CPU2_ChannelC_Dimm0）", source: "bmc" as const, severity: "warning" as const, title: "内存 DIMM_P0_C0 异常", detail: "Health Warning" };
+  const ue = { key: "sel:Memory #0x08:Uncorrectable ECC", source: "sel" as const, severity: "critical" as const, title: "UE", detail: "", sticky: true };
+  const hour = 3_600_000;
+  const check = (findings: import("./alerts.ts").Finding[], at: number) =>
+    alerts.applyFindings(asset.id, alerts.quietMemoryEcc(asset.id, findings, 12, at), ["health:"]);
+  const active = () => alerts.listAlerts({ assetId: asset.id }).filter((alert) => alert.status !== "resolved").map((alert) => alert.key).sort();
+  const now = Date.now();
+
+  check([sel, dimm, ue], now);
+  assert.deepEqual(active(), [dimm.key, ue.key, sel.key].sort());
+  // 11 小时：还没到，BMC 仍报 Health Warning。
+  check([dimm], now + 11 * hour);
+  assert.equal(active().length, 3);
+  // 13 小时没有新的 SEL ECC：可纠正的两条解除，不可纠正的留着。
+  check([dimm], now + 13 * hour);
+  assert.deepEqual(active(), [ue.key]);
+  const resolved = alerts.listAlerts({ assetId: asset.id }).filter((alert) => alert.resolvedBy === "12 小时未再出现");
+  assert.equal(resolved.length, 2);
+  // BMC 还是 Warning，但没有新 ECC：不重开。
+  check([dimm], now + 14 * hour);
+  assert.deepEqual(active(), [ue.key]);
+  // 又来了一条 SEL ECC：两条都重新开。
+  check([sel, dimm], now + 15 * hour);
+  assert.deepEqual(active(), [dimm.key, ue.key, sel.key].sort());
+  assert.equal(alerts.memoryEccKind("health:内存 X", "critical"), null);
+});

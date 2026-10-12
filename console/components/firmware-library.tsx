@@ -311,6 +311,7 @@ function PackageDialog({ id, admin, onClose, onChanged }: { id: string | null; a
   const [error, setError] = useState("");
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({ vendor: "", kind: "other" as FirmwareKind, version: "", models: "", note: "" });
+  const [allModels, setAllModels] = useState(false);
   const [pending, setPending] = useState(false);
   const [relation, setRelation] = useState<VersionRelation | "unread" | "">("");
 
@@ -392,7 +393,7 @@ function PackageDialog({ id, admin, onClose, onChanged }: { id: string | null; a
             </Stack>
             <TextField
               label="适用型号"
-              helperText={`一行一个，整机或主板型号都行。按这个对资产的型号（型号字典里的别名也算）。自动认出的：${pkg.detected.models.join("、") || "无"}`}
+              helperText={`一行一个，整机或主板型号都行。按这个对资产的型号（型号字典里的别名也算）。自动认出的：${pkg.detected.models.slice(0, 30).join("、") || "无"}${pkg.detected.models.length > 30 ? ` 等 ${pkg.detected.models.length} 个` : ""}`}
               multiline
               minRows={3}
               value={form.models}
@@ -416,9 +417,15 @@ function PackageDialog({ id, admin, onClose, onChanged }: { id: string | null; a
               </Row>
               <Row label="适用型号">
                 <Stack direction="row" useFlexGap spacing={0.5} sx={{ flexWrap: "wrap" }}>
-                  {orderedModels(pkg).map((model) => (
-                    <ModelChip key={model} model={model} inFleet={pkg.fleet.models.includes(model)} />
-                  ))}
+                  {/* 技嘉通用 BMC 包适用上千个型号：机群里有的全列，其余先列 30 个。 */}
+                  {orderedModels(pkg)
+                    .filter((model, index) => allModels || pkg.fleet.models.includes(model) || index < pkg.fleet.models.length + 30)
+                    .map((model) => (
+                      <ModelChip key={model} model={model} inFleet={pkg.fleet.models.includes(model)} />
+                    ))}
+                  {!allModels && pkg.models.length > pkg.fleet.models.length + 30 ? (
+                    <Chip size="small" clickable label={`还有 ${pkg.models.length - pkg.fleet.models.length - 30} 个，全部显示`} onClick={() => setAllModels(true)} />
+                  ) : null}
                   {!pkg.models.length ? <Typography variant="body2" color="text.secondary">没认出来{admin ? "，点「编辑」填上" : ""}</Typography> : null}
                 </Stack>
               </Row>
