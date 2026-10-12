@@ -1,0 +1,115 @@
+/** 固件库的类型和标签。页面也要用，这里不能引 Node 模块。 */
+
+export type FirmwareKind = "bios" | "bmc" | "cpld" | "hgx" | "nic" | "other";
+
+export const FIRMWARE_KIND_LABEL: Record<FirmwareKind, string> = {
+  bios: "BIOS",
+  bmc: "BMC",
+  cpld: "CPLD",
+  hgx: "HGX / GPU 底板",
+  nic: "网卡",
+  other: "其他",
+};
+
+/** 包里找到的一个可刷写的镜像。 */
+export interface FirmwareImage {
+  /** 包内相对路径；单个文件上传时就是文件名。 */
+  path: string;
+  size: number;
+  /** rbu 技嘉 BMC 刷 BIOS 用；fwpkg NVIDIA PLDM 包；rom/bin/ima 原始镜像；tool 刷写程序。 */
+  type: "rbu" | "fwpkg" | "rom" | "bin" | "ima" | "tool";
+  note: string;
+}
+
+export interface FirmwareComponent {
+  name: string;
+  version: string;
+}
+
+export interface FirmwareChecksum {
+  /** 发布说明里写的。 */
+  expected: string;
+  /** 算出来跟它一样的那个文件；都不一样时是空。 */
+  file: string;
+  ok: boolean;
+}
+
+/** 自动识别出来的几项，人改过以后还留着对照。 */
+export interface FirmwareDetected {
+  vendor: string;
+  kind: FirmwareKind;
+  version: string;
+  models: string[];
+}
+
+export interface FirmwarePackage {
+  id: string;
+  fileName: string;
+  size: number;
+  sha256: string;
+  uploadedAt: string;
+  uploadedBy: string;
+  vendor: string;
+  kind: FirmwareKind;
+  version: string;
+  /** 适用的整机或主板型号。 */
+  models: string[];
+  buildDate: string;
+  checksum: FirmwareChecksum | null;
+  images: FirmwareImage[];
+  /** PLDM 包（fwpkg）里各部件的版本。 */
+  components: FirmwareComponent[];
+  /** 发布说明里这一版改了什么。 */
+  changes: string;
+  /** 怎么刷：从包里有什么推出来的说明。 */
+  method: string;
+  warnings: string[];
+  detected: FirmwareDetected;
+  /** 人改过厂商、类型、版本或型号。 */
+  edited: boolean;
+  note: string;
+}
+
+/** 机群里一个版本和固件包版本的关系。 */
+export type VersionRelation = "same" | "older" | "newer" | "unknown";
+
+export interface FleetVersionCount {
+  version: string;
+  count: number;
+  relation: VersionRelation;
+}
+
+/** 一个固件包在机群里能用到哪些机器、它们现在是什么版本。 */
+export interface FirmwareFleet {
+  /** 型号对得上的服务器台数。 */
+  matched: number;
+  /** 没读过固件版本、不知道现在是几版的。 */
+  unread: number;
+  /** 比包旧、可以升级的台数。 */
+  upgradable: number;
+  versions: FleetVersionCount[];
+  /** 这类固件对应机器固件清单里的哪一项，如 BIOS、BMCImage1；空表示没法对比。 */
+  inventoryId: string;
+  /** 适用型号里机群真有的那几个。 */
+  models: string[];
+}
+
+export interface FirmwareFleetMachine {
+  id: string;
+  tag: string;
+  sn: string;
+  hostname: string;
+  bmcIp: string;
+  version: string;
+  relation: VersionRelation | "unread";
+}
+
+export type FirmwarePackageView = FirmwarePackage & { fleet: FirmwareFleet };
+
+export const RELATION_LABEL: Record<VersionRelation | "unread", string> = {
+  same: "已是这版",
+  older: "比包旧",
+  newer: "比包新",
+  unknown: "比不出",
+  unread: "没读过",
+};
