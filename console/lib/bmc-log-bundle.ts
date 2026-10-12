@@ -4,25 +4,26 @@ import path from "node:path";
 import { listLogServices, loadSnapshot, openSession, readLogForExport, type BmcSession, type LogEntryView } from "./bmc-redfish.ts";
 import { defaultIpmiExec, type IpmiExec } from "./ipmi-remote.ts";
 import { withAccount } from "./ipmi-sel.ts";
+import { describeLogKinds, serviceSelected } from "./log-kinds.ts";
 import { dataDir } from "./paths.ts";
 import { runProcess } from "./process.ts";
 import type { Asset } from "./types.ts";
 
 /**
- * 打包一台服务器的 BMC 日志：IPMI 直读的 SEL、传感器、FRU、BMC 信息，Redfish 上所有日志服务（含 HGX 底板、HGX BMC），
+ * 打包一台服务器的 BMC 日志：IPMI 直读的 SEL、传感器、FRU、BMC 信息，Redfish 上的日志服务（含 HGX 底板、HGX BMC），按选的类型取，
  * 每份日志存原始 JSON 和一份能直接看的文本，外加 summary.txt 说明读了什么、哪些没读到。打成 tar.gz。
  */
 
 /** 每份 Redfish 日志最多读多少条，超过的不读（HGX BMC 的 Journal 有十万条）。 */
 const PER_LOG_CAP = 5000;
 
-const IPMI_COMMANDS: { file: string; args: string[]; label: string }[] = [
-  { file: "sel-elist.txt", args: ["sel", "elist"], label: "SEL" },
-  { file: "sel-info.txt", args: ["sel", "info"], label: "SEL 信息" },
-  { file: "sdr-elist.txt", args: ["sdr", "elist"], label: "传感器" },
-  { file: "fru.txt", args: ["fru", "print"], label: "FRU" },
-  { file: "mc-info.txt", args: ["mc", "info"], label: "BMC 信息" },
-  { file: "chassis-status.txt", args: ["chassis", "status"], label: "机箱状态" },
+const IPMI_COMMANDS: { part: string; file: string; args: string[]; label: string }[] = [
+  { part: "ipmi:sel", file: "sel-elist.txt", args: ["sel", "elist"], label: "SEL" },
+  { part: "ipmi:sel", file: "sel-info.txt", args: ["sel", "info"], label: "SEL 信息" },
+  { part: "ipmi:sdr", file: "sdr-elist.txt", args: ["sdr", "elist"], label: "传感器" },
+  { part: "ipmi:fru", file: "fru.txt", args: ["fru", "print"], label: "FRU" },
+  { part: "ipmi:info", file: "mc-info.txt", args: ["mc", "info"], label: "BMC 信息" },
+  { part: "ipmi:info", file: "chassis-status.txt", args: ["chassis", "status"], label: "机箱状态" },
 ];
 
 const ipmiExec: IpmiExec = (host, user, password, args) => defaultIpmiExec(host, user, password, args, 120_000, false);
@@ -57,69 +58,82 @@ export interface BundleResult {
   empty: boolean;
 }
 
-/** 收集到 dir（会新建），返回给 summary 用的说明行。 */
-export async function collectLogs(asset: Asset, dir: string, deps: { exec?: IpmiExec; session?: () => Promise<BmcSession> } = {}): Promise<{ lines: string[]; files: number }> {
-  const exec = deps.exec || ipmiExec;
+export interface CollectDeps {
+  exec?: IpmiExec;
+  session?: () => Promise<BmcSession>;
+}
+
+/**
+ * 收集到 dir（会新建），返回给 summary 用的说明行。kinds 是要哪几类（见 log-kinds.ts），不给就全要。
+ */
+export async function collectLogs(asset: Asset, dir: string, deps: CollectDeps = {}, kinds?: string[]): Promise<{ lines: string[]; files: number }> {
+  const all = !kinds;
+  const selection = new Set(kinds || []);
   const lines: string[] = [];
   let files = 0;
-  fs.mkdirSync(path.join(dir, "ipmi"), { recursive: true });
-  fs.mkdirSync(path.join(dir, "redfish"), { recursive: true });
+  fs.mkdirSync(dir, { recursive: true });
 
-  try {
-    await withAccount(asset, exec, async (account) => {
-      for (const command of IPMI_COMMANDS) {
-        const result = await exec(asset.bmcIp, account.user, account.password, command.args);
-        if (result.code === 0) {
+  const commands = IPMI_COMMANDS.filter((command) => all || selection.has(command.part));
+  if (commands.length) {
+    const exec = deps.exec || ipmiExec;
+    fs.mkdirSync(path.join(dir, "ipmi"), { recursive: true });
+    try {
+      await withAccount(asset, exec, async (account) => {
+        for (const command of commands) {
+          const result = await exec(asset.bmcIp, account.user, account.password, command.args);
+          if (result.code !== 0) {
+            lines.push(`IPMI ${command.label}：没读到（${(result.stderr || result.stdout).trim().slice(0, 120)}）`);
+            continue;
+          }
           fs.writeFileSync(path.join(dir, "ipmi", command.file), result.stdout);
           files++;
           const count = command.file === "sel-elist.txt" ? `，${result.stdout.split("\n").filter((line) => line.trim()).length} 条` : "";
           lines.push(`IPMI ${command.label}：ipmi/${command.file}${count}`);
-        } else {
-          lines.push(`IPMI ${command.label}：没读到（${(result.stderr || result.stdout).trim().slice(0, 120)}）`);
         }
-      }
-    });
-  } catch (error) {
-    lines.push(`IPMI：${error instanceof Error ? error.message : "连不上"}`);
-  }
-
-  try {
-    const session = await (deps.session ? deps.session() : openSession(asset));
-    const services = await listLogServices(session);
-    for (const service of services) {
-      const label = `${service.source || (service.owner === "manager" ? "BMC" : "主机")} ${service.name}`;
-      const base = safeName(`${service.source || (service.owner === "manager" ? "Manager" : "System")}-${service.id}`);
-      try {
-        const log = await readLogForExport(session, service.path, PER_LOG_CAP);
-        if (log.skipped) {
-          lines.push(`Redfish ${label}：有 ${log.total} 条，太大没读（要看去 BMC 网页导出）`);
-          continue;
-        }
-        fs.writeFileSync(path.join(dir, "redfish", `${base}.json`), JSON.stringify(log.raw, null, 1));
-        fs.writeFileSync(path.join(dir, "redfish", `${base}.txt`), `# ${label}（${service.path}）共 ${log.total} 条，旧的在前\n${log.entries.map(entryLine).join("\n")}\n`);
-        files += 2;
-        lines.push(`Redfish ${label}：redfish/${base}.txt，${log.entries.length} 条`);
-      } catch (error) {
-        lines.push(`Redfish ${label}：没读到（${error instanceof Error ? error.message.slice(0, 120) : "失败"}）`);
-      }
+      });
+    } catch (error) {
+      lines.push(`IPMI：${error instanceof Error ? error.message : "连不上"}`);
     }
-  } catch (error) {
-    lines.push(`Redfish：${error instanceof Error ? error.message : "连不上"}`);
   }
 
-  // 控制台上次读到的 BMC 概况和固件清单，排查时对照用。
+  if (all || [...selection].some((kind) => kind.startsWith("rf:"))) {
+    try {
+      const session = await (deps.session ? deps.session() : openSession(asset));
+      const services = (await listLogServices(session)).filter((service) => all || serviceSelected(selection, service));
+      if (!services.length) lines.push("Redfish：这台上没有选中的那几类日志");
+      else fs.mkdirSync(path.join(dir, "redfish"), { recursive: true });
+      for (const service of services) {
+        const label = `${service.source || (service.owner === "manager" ? "BMC" : "主机")} ${service.name}`;
+        const base = safeName(`${service.source || (service.owner === "manager" ? "Manager" : "System")}-${service.id}`);
+        try {
+          const log = await readLogForExport(session, service.path, PER_LOG_CAP);
+          if (log.skipped) {
+            lines.push(`Redfish ${label}：有 ${log.total} 条，太大没读（要看去 BMC 网页导出）`);
+            continue;
+          }
+          fs.writeFileSync(path.join(dir, "redfish", `${base}.json`), JSON.stringify(log.raw, null, 1));
+          fs.writeFileSync(path.join(dir, "redfish", `${base}.txt`), `# ${label}（${service.path}）共 ${log.total} 条，旧的在前\n${log.entries.map(entryLine).join("\n")}\n`);
+          files += 2;
+          lines.push(`Redfish ${label}：redfish/${base}.txt，${log.entries.length} 条`);
+        } catch (error) {
+          lines.push(`Redfish ${label}：没读到（${error instanceof Error ? error.message.slice(0, 120) : "失败"}）`);
+        }
+      }
+    } catch (error) {
+      lines.push(`Redfish：${error instanceof Error ? error.message : "连不上"}`);
+    }
+  }
+
+  // 控制台上次读到的 BMC 概况和固件清单，排查时对照用（不算读到的日志）。
   for (const kind of ["overview", "firmware"] as const) {
     const snapshot = loadSnapshot(asset.id, kind);
-    if (snapshot) {
-      fs.writeFileSync(path.join(dir, `console-${kind}.json`), JSON.stringify(snapshot, null, 1));
-      files++;
-    }
+    if (snapshot) fs.writeFileSync(path.join(dir, `console-${kind}.json`), JSON.stringify(snapshot, null, 1));
   }
   return { lines, files };
 }
 
 /** 收集并打成 tar.gz，放在 outDir 里，返回包的路径。临时目录用完删掉。 */
-export async function buildLogBundle(asset: Asset, outDir: string, deps: Parameters<typeof collectLogs>[2] = {}): Promise<BundleResult> {
+export async function buildLogBundle(asset: Asset, outDir: string, deps: CollectDeps = {}, kinds?: string[]): Promise<BundleResult> {
   const started = new Date();
   const name = bundleFileName(asset, started);
   const folder = name.replace(/\.tar\.gz$/, "");
@@ -127,11 +141,12 @@ export async function buildLogBundle(asset: Asset, outDir: string, deps: Paramet
   const dir = path.join(work, folder);
   fs.mkdirSync(outDir, { recursive: true });
   try {
-    const { lines, files } = await collectLogs(asset, dir, deps);
+    const { lines, files } = await collectLogs(asset, dir, deps, kinds);
     const summary = [
       `资产 ${asset.tag}  SN ${asset.sn}  主机名 ${asset.hostname || "-"}  型号 ${asset.vendor} ${asset.model}`,
       `BMC ${asset.bmcIp}`,
       `收集时间 ${started.toISOString()} 到 ${new Date().toISOString()}`,
+      `选的类型 ${kinds ? describeLogKinds(kinds) : "全部"}`,
       "",
       ...lines,
       "",

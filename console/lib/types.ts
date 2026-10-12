@@ -369,6 +369,8 @@ export interface RemoteTask {
   bmcClock?: { offset?: string; ntpEnabled?: boolean; ntpServers?: string[] };
   /** BMC 用户任务在每台上做的改动。密码只在跑的时候用，跑完从任务文件里删掉，接口也不返回。 */
   bmcUser?: import("./ipmi-user-types.ts").BmcUserChange;
+  /** 收集 BMC 日志任务要哪几类（见 log-kinds.ts）；旧任务没有，表示全要。 */
+  bmcLogs?: string[];
   createdAt: string;
   finishedAt?: string;
 }
