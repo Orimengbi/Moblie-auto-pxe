@@ -1,4 +1,4 @@
-import { bootOrigin, normalizeMac } from "./net.ts";
+import { assertIpv4, bootOrigin, normalizeMac, sameSubnet } from "./net.ts";
 import { renderAnswer, renderIpxeMenu } from "./render.ts";
 import {
   getImage,
@@ -9,10 +9,11 @@ import {
   bindServerBoot,
   customizationForMac,
   installServerIp,
+  listProjects,
   profilesForProject,
   touchMachine,
 } from "./store.ts";
-import type { Machine } from "./types.ts";
+import type { Machine, Profile } from "./types.ts";
 
 export async function rememberMac(raw: string | null): Promise<Machine | null> {
   if (!raw) return null;
@@ -57,7 +58,44 @@ export async function menuFor(macRaw: string | null, snRaw: string | null = null
   });
 }
 
-export function answerFile(profileId: string, macRaw: string, filename: string): Response {
+/** 装机口的 nginx 用 X-Real-IP 带过来的目标机地址。 */
+export function clientIp(request: Request): string {
+  return request.headers.get("x-real-ip")?.trim() || "";
+}
+
+/** 机器 PXE 启动（取过菜单）以后这么久内能取应答文件，够慢的整盘镜像下完再取 deploy.sh。 */
+const ANSWER_WINDOW_MS = 24 * 3600_000;
+
+/** 装机网段：全局的 PXE 网络和各批次自己的 DHCP 网段。 */
+function installSubnets(): { address: string; netmask: string }[] {
+  const network = getState().network;
+  const out = [{ address: network.serverIp, netmask: network.netmask }];
+  for (const project of listProjects()) if (project.dhcp) out.push({ address: project.dhcp.start, netmask: project.dhcp.netmask });
+  return out;
+}
+
+/**
+ * 应答文件和整盘镜像的脚本里有用户和 root 的密码哈希、每台机器的定制脚本，/boot/ 又不要登录，
+ * 所以只给正在装机的机器：请求来自装机网段（nginx 用 X-Real-IP 带过来，装机口的 nginx 会覆盖客户端自己填的），
+ * 这个 MAC 最近 PXE 启动过，配置属于当前启用的批次或者就是这台绑定的那个。不给时返回原因，记日志用。
+ */
+export function answerDenied(profile: Profile, mac: string, clientIp: string): string | null {
+  let ip: string;
+  try {
+    ip = assertIpv4(clientIp, "来源地址");
+  } catch {
+    return `认不出来源地址「${clientIp || "空"}」`;
+  }
+  const subnets = installSubnets();
+  if (!subnets.some((item) => { try { return sameSubnet(ip, item.address, item.netmask); } catch { return false; } })) return `${ip} 不在装机网段`;
+  const machine = getMachine(mac);
+  if (!machine?.lastSeen || Date.now() - Date.parse(machine.lastSeen) > ANSWER_WINDOW_MS) return `${mac} 最近没有 PXE 启动过`;
+  const active = activeProject();
+  if (machine.profileId !== profile.id && profile.projectId !== active?.id) return `配置不属于当前启用的批次，也不是 ${mac} 绑定的`;
+  return null;
+}
+
+export function answerFile(profileId: string, macRaw: string, filename: string, clientIp = ""): Response {
   const profile = getProfile(profileId);
   if (!profile) return new Response("安装配置不存在\n", { status: 404 });
   const image = getImage(profile.imageId);
@@ -68,6 +106,11 @@ export function answerFile(profileId: string, macRaw: string, filename: string):
   } catch (error) {
     const message = error instanceof Error ? error.message : "MAC 不合法";
     return new Response(`${message}\n`, { status: 400 });
+  }
+  const denied = answerDenied(profile, mac, clientIp);
+  if (denied) {
+    console.warn(`[boot] 拒绝给 ${filename}：${denied}`);
+    return new Response("这台机器现在不能取应答文件\n", { status: 403 });
   }
   const state = getState();
   const customization = customizationForMac(mac, profile.projectId);
