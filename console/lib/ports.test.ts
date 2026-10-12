@@ -302,3 +302,24 @@ test("NVMe and M.2 slots from the BMC count as drive bays and carry their drive 
     ],
   );
 });
+
+test("parts are located in the slot or bay they sit in", async () => {
+  const { partLocations } = await import("./ports.ts");
+  const gpu = { kind: "gpu" as const, slot: "0000:06:00.0", model: "B300", vendor: "", sn: "", firmware: "", attrs: { index: 0 } };
+  const nic = { kind: "nic" as const, slot: "eth_p1_r1", model: "CX8", vendor: "", sn: "", firmware: "", attrs: { pci: "0000:03:00.0" } };
+  const disk = { kind: "disk" as const, slot: "nvme1n1", model: "SOLIDIGM", vendor: "", sn: "", firmware: "", attrs: {} };
+  const old = { kind: "disk" as const, slot: "nvme2n1", model: "SOLIDIGM", vendor: "", sn: "", firmware: "", attrs: {} };
+  const loose = { kind: "disk" as const, slot: "nvme0n1", model: "SSSTC", vendor: "", sn: "", firmware: "", attrs: {} };
+  const found = partLocations([gpu, nic, disk, old, loose], [
+    { group: "pcie", name: "SXM1_GPU0", type: "", used: true, device: "CX8；NVIDIA Device 3182", parts: ["0000:03:00.0", "0000:03:00.1", "0000:06:00.0"] },
+    { group: "drive", name: "NVME3", type: "", used: true, device: "nvme1n1 SOLIDIGM 7682 GB", parts: ["0000:a1:00.0", "nvme1n1"] },
+    // 以前的采集没有 parts：按盘符对。
+    { group: "drive", name: "NVME2", type: "", used: true, device: "nvme2n1 SOLIDIGM 7682 GB" },
+    { group: "drive", name: "nvme0n1", type: "NVMe", used: true, device: "SSSTC 1024 GB", note: "没对上盘位" },
+  ]);
+  assert.equal(found.get(gpu), "SXM1_GPU0");
+  assert.equal(found.get(nic), "SXM1_GPU0");
+  assert.equal(found.get(disk), "NVME3");
+  assert.equal(found.get(old), "NVME2");
+  assert.equal(found.has(loose), false);
+});

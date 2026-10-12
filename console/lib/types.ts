@@ -514,6 +514,8 @@ export interface HwPort {
   master?: string;
   mac?: string;
   note?: string;
+  /** 插在上面的部件，对应部件的 slot 或 attrs.pci：系统内是 PCI 地址和盘符，BMC 是盘和 PCIe 设备的 Id。 */
+  parts?: string[];
 }
 
 /** 一个网口上的光模块和它当时的收发光。twin-port 模块的两个口会读到同一个序列号。 */
