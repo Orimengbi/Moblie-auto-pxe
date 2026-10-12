@@ -21,7 +21,7 @@ interface UserPatch {
   currentPassword?: string;
 }
 
-/** 管理员能改所有字段；普通用户只能改自己的密码。 */
+/** 管理员能改所有字段；其他人只能改自己的密码。 */
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await context.params;

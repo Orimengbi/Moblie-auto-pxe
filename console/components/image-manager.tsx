@@ -24,6 +24,7 @@ import { formatBytes, fingerprintOf, percent, useUploads, type LiveUpload, type 
 import { ISO_ACCEPT, ISO_FORMATS_LABEL } from "@/lib/iso-name";
 import { FAMILY_LABEL, type ImageRecord } from "@/lib/types";
 import { formatTime } from "@/lib/time";
+import { useCan } from "@/components/role-context";
 
 export type { PendingUpload } from "@/components/upload-provider";
 
@@ -36,6 +37,8 @@ function without(map: Record<string, string>, key: string): Record<string, strin
 export function ImageManager({ images, uploads }: { images: ImageRecord[]; uploads: PendingUpload[] }) {
   const router = useRouter();
   const live = useUploads();
+  const canEdit = useCan("engineer");
+  const isAdmin = useCan("admin");
   const [uploadName, setUploadName] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [pickerKey, setPickerKey] = useState(0);
@@ -113,55 +116,57 @@ export function ImageManager({ images, uploads }: { images: ImageRecord[]; uploa
 
   return (
     <Stack spacing={3}>
-      <Card component="section">
-        <CardHeader title="上传 ISO" />
-        <CardContent>
-          <Stack spacing={2}>
-            <Typography variant="body2" sx={{ color: "text.secondary" }}>
-              支持 Ubuntu、Debian、Rocky Linux、AlmaLinux 的 x86_64 安装 ISO，以及用 dd 导出的 Ubuntu / Debian 整盘镜像（GPT，根分区 ext4 且在最后）。格式：{ISO_FORMATS_LABEL}，压缩的导入后自动解压。按 4MB 一段上传，网络抖动会自动重试；断开的上传会留在下面的任务里，可以继续或取消，传完自动识别抽取。
-            </Typography>
-            <Stack spacing={2} sx={{ maxWidth: { sm: 448 }, alignItems: "flex-start" }}>
-              <TextField id="upload-name" label="显示名称" value={uploadName} placeholder="可留空，默认用文件名" onChange={(event) => setUploadName(event.target.value)} fullWidth />
-              <Stack direction="row" spacing={1} sx={{ alignItems: "center", minWidth: 0, maxWidth: "100%" }}>
-                <Button component="label" variant="outlined" startIcon={<UploadFileOutlined />} sx={{ flexShrink: 0 }}>
-                  选择文件
-                  <input
-                    key={pickerKey}
-                    type="file"
-                    hidden
-                    accept={ISO_ACCEPT}
-                    onChange={(event) => {
-                      setFile(event.target.files?.[0] || null);
-                      setError("");
-                    }}
-                  />
+      {canEdit ? (
+        <Card component="section">
+          <CardHeader title="上传 ISO" />
+          <CardContent>
+            <Stack spacing={2}>
+              <Typography variant="body2" sx={{ color: "text.secondary" }}>
+                支持 Ubuntu、Debian、Rocky Linux、AlmaLinux 的 x86_64 安装 ISO，以及用 dd 导出的 Ubuntu / Debian 整盘镜像（GPT，根分区 ext4 且在最后）。格式：{ISO_FORMATS_LABEL}，压缩的导入后自动解压。按 4MB 一段上传，网络抖动会自动重试；断开的上传会留在下面的任务里，可以继续或取消，传完自动识别抽取。
+              </Typography>
+              <Stack spacing={2} sx={{ maxWidth: { sm: 448 }, alignItems: "flex-start" }}>
+                <TextField id="upload-name" label="显示名称" value={uploadName} placeholder="可留空，默认用文件名" onChange={(event) => setUploadName(event.target.value)} fullWidth />
+                <Stack direction="row" spacing={1} sx={{ alignItems: "center", minWidth: 0, maxWidth: "100%" }}>
+                  <Button component="label" variant="outlined" startIcon={<UploadFileOutlined />} sx={{ flexShrink: 0 }}>
+                    选择文件
+                    <input
+                      key={pickerKey}
+                      type="file"
+                      hidden
+                      accept={ISO_ACCEPT}
+                      onChange={(event) => {
+                        setFile(event.target.files?.[0] || null);
+                        setError("");
+                      }}
+                    />
+                  </Button>
+                  <Typography variant="body2" noWrap title={file?.name} sx={{ minWidth: 0, color: file ? "text.primary" : "text.secondary" }}>
+                    {file ? `${file.name}（${formatBytes(file.size)}）` : "未选择文件"}
+                  </Typography>
+                </Stack>
+                {resumable ? (
+                  <Typography variant="body2" sx={{ color: "text.secondary" }}>
+                    这个文件上次传到 {formatBytes(resumable.offset)}（{percent(resumable.offset, resumable.size)}%），会从这里继续。
+                  </Typography>
+                ) : null}
+                <Button variant="contained" disabled={live.running || !file} onClick={startSelected}>
+                  {resumable ? `从 ${percent(resumable.offset, resumable.size)}% 继续上传` : "上传并抽取"}
                 </Button>
-                <Typography variant="body2" noWrap title={file?.name} sx={{ minWidth: 0, color: file ? "text.primary" : "text.secondary" }}>
-                  {file ? `${file.name}（${formatBytes(file.size)}）` : "未选择文件"}
-                </Typography>
+                {live.running ? (
+                  <Typography variant="body2" sx={{ color: "text.secondary" }}>
+                    一次传一个。切到别的页面会继续传，进度在右下角的小窗里；只是不要刷新或关闭页面。
+                  </Typography>
+                ) : null}
               </Stack>
-              {resumable ? (
-                <Typography variant="body2" sx={{ color: "text.secondary" }}>
-                  这个文件上次传到 {formatBytes(resumable.offset)}（{percent(resumable.offset, resumable.size)}%），会从这里继续。
-                </Typography>
-              ) : null}
-              <Button variant="contained" disabled={live.running || !file} onClick={startSelected}>
-                {resumable ? `从 ${percent(resumable.offset, resumable.size)}% 继续上传` : "上传并抽取"}
-              </Button>
-              {live.running ? (
-                <Typography variant="body2" sx={{ color: "text.secondary" }}>
-                  一次传一个。切到别的页面会继续传，进度在右下角的小窗里；只是不要刷新或关闭页面。
+              {error ? (
+                <Typography variant="body2" sx={{ color: "error.main" }}>
+                  {error}
                 </Typography>
               ) : null}
             </Stack>
-            {error ? (
-              <Typography variant="body2" sx={{ color: "error.main" }}>
-                {error}
-              </Typography>
-            ) : null}
-          </Stack>
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+      ) : null}
 
       <input
         ref={resumePicker}
@@ -174,7 +179,7 @@ export function ImageManager({ images, uploads }: { images: ImageRecord[]; uploa
         }}
       />
 
-      {tasks.length ? (
+      {tasks.length && canEdit ? (
         <Card component="section">
           <CardHeader title="上传任务" />
           <CardContent>
@@ -293,9 +298,11 @@ export function ImageManager({ images, uploads }: { images: ImageRecord[]; uploa
                     ) : null}
                   </TableCell>
                   <TableCell align="right">
-                    <Button color="error" onClick={() => remove(image.id)}>
-                      删除
-                    </Button>
+                    {isAdmin ? (
+                      <Button color="error" onClick={() => remove(image.id)}>
+                        删除
+                      </Button>
+                    ) : null}
                   </TableCell>
                 </TableRow>
               ))}

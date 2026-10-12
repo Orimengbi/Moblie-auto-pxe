@@ -17,6 +17,7 @@ import Typography from "@mui/material/Typography";
 import { StatusChip } from "@/components/mui/status-chip";
 import { api } from "@/lib/client-api";
 import { IPMI_PRIVILEGE_LABEL, type BmcUserAction, type BmcUserChange, type IpmiPrivilege, type IpmiUser } from "@/lib/ipmi-user-types";
+import { useCan } from "@/components/role-context";
 
 const MONO = "var(--font-geist-mono), monospace";
 const NATIVE_LABELED = { select: { native: true }, inputLabel: { shrink: true } } as const;
@@ -80,6 +81,7 @@ export function ServerBmcUsers({ assetId }: { assetId: string }) {
   const [editing, setEditing] = useState<Editing>(null);
   const [form, setForm] = useState<BmcUserChange>({ action: "ensure", name: "", password: "", privilege: "ADMINISTRATOR" });
   const [pending, setPending] = useState(false);
+  const isAdmin = useCan("admin");
   const [showEmpty, setShowEmpty] = useState(false);
 
   const load = useCallback(async () => {
@@ -132,9 +134,11 @@ export function ServerBmcUsers({ assetId }: { assetId: string }) {
           <Button size="small" disabled={loading} onClick={() => void load()}>
             刷新
           </Button>
-          <Button size="small" variant="contained" disabled={!users} onClick={() => open("ensure", null)}>
-            新建用户
-          </Button>
+          {isAdmin ? (
+            <Button size="small" variant="contained" disabled={!users} onClick={() => open("ensure", null)}>
+              新建用户
+            </Button>
+          ) : null}
         </Stack>
         {loading && !users ? <LinearProgress /> : null}
         {error ? (
@@ -167,7 +171,7 @@ export function ServerBmcUsers({ assetId }: { assetId: string }) {
                   <StatusChip tone={user.enabled ? "success" : "neutral"} outlined={!user.enabled} label={user.enabled ? "启用" : "停用"} />
                   <StatusChip tone={user.privilege === "ADMINISTRATOR" ? "primary" : "neutral"} label={IPMI_PRIVILEGE_LABEL[user.privilege]} />
                   {!user.ipmi ? <StatusChip tone="warning" label="IPMI 未开" /> : null}
-                  <Stack direction="row" spacing={0.5} sx={{ ml: "auto" }}>
+                  <Stack direction="row" spacing={0.5} sx={{ ml: "auto", display: isAdmin ? undefined : "none" }}>
                     <Button size="small" onClick={() => open("password", user)}>
                       改密码
                     </Button>

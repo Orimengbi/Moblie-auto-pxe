@@ -22,6 +22,7 @@ import { FONT_SANS } from "@/components/mui/theme";
 import { KIND_LABEL } from "@/lib/inventory";
 import type { InventorySnapshot, MonitorState, NetPort } from "@/lib/types";
 import { formatTime } from "@/lib/time";
+import { useCan } from "@/components/role-context";
 
 const MONO = "var(--font-geist-mono), monospace";
 /** 单元格里的第二行小字。 */
@@ -52,6 +53,8 @@ export function NetworkDevice({ assetId }: { assetId: string }) {
   const [busy, setBusy] = useState("");
   const [q, setQ] = useState("");
   const [onlyPhysical, setOnlyPhysical] = useState(true);
+  const canOperate = useCan("operator");
+  const canEdit = useCan("engineer");
 
   const load = useCallback(async () => {
     const response = await fetch(`/api/assets/${assetId}/network`).catch(() => null);
@@ -90,19 +93,23 @@ export function NetworkDevice({ assetId }: { assetId: string }) {
     <Stack component="section" spacing={2}>
       <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center" }}>
         <Typography variant="h3">端口和部件</Typography>
-        <Button type="button" variant="contained" sx={{ ml: "auto" }} disabled={Boolean(busy)} onClick={() => void post("", "采集")}>
-          {busy === "采集" ? "采集中" : "SNMP 采集"}
-        </Button>
-        <Button
-          type="button"
-          variant="outlined"
-          disabled={Boolean(busy)}
-          onClick={() => {
-            if (window.confirm("把现在没 up 的口都当作不用的口？之后它们不再报掉线。")) void post("/baseline", "重置基线");
-          }}
-        >
-          重置端口基线
-        </Button>
+        {canOperate ? (
+          <Button type="button" variant="contained" sx={{ ml: "auto" }} disabled={Boolean(busy)} onClick={() => void post("", "采集")}>
+            {busy === "采集" ? "采集中" : "SNMP 采集"}
+          </Button>
+        ) : null}
+        {canEdit ? (
+          <Button
+            type="button"
+            variant="outlined"
+            disabled={Boolean(busy)}
+            onClick={() => {
+              if (window.confirm("把现在没 up 的口都当作不用的口？之后它们不再报掉线。")) void post("/baseline", "重置基线");
+            }}
+          >
+            重置端口基线
+          </Button>
+        ) : null}
       </Stack>
       {error ? (
         <Typography variant="body2" color="error">

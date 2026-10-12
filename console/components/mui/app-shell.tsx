@@ -39,6 +39,8 @@ import RocketLaunchOutlined from "@mui/icons-material/RocketLaunchOutlined";
 import SettingsOutlined from "@mui/icons-material/SettingsOutlined";
 import type { SvgIconComponent } from "@mui/icons-material";
 import { TaskCenter } from "@/components/task-center";
+import { RoleProvider } from "@/components/role-context";
+import { normalizeRole, ROLE_LABEL } from "@/lib/roles";
 import { ThemeToggle } from "./theme-toggle";
 
 export type NavCounts = { alerts: { critical: number; warning: number }; tickets: number };
@@ -164,7 +166,7 @@ function NavBody({ user, counts, onNavigate }: { user: { username: string; role:
             {user.username}
           </Typography>
           <Typography variant="caption" sx={{ color: "text.secondary" }}>
-            {user.role === "admin" ? "管理员" : "普通用户"}
+            {ROLE_LABEL[normalizeRole(user.role)]}
           </Typography>
         </Box>
         <Tooltip title="退出登录">
@@ -202,38 +204,40 @@ export function AppShell({ user, counts: initial, children }: { user: { username
   }, [pathname]);
 
   return (
-    <Box sx={{ display: "flex", minHeight: "100vh" }}>
-      <Drawer
-        variant="permanent"
-        sx={{ display: { xs: "none", md: "block" }, width: DRAWER_WIDTH, flexShrink: 0, "& .MuiDrawer-paper": { width: DRAWER_WIDTH, boxSizing: "border-box" } }}
-      >
-        <NavBody user={user} counts={counts} />
-      </Drawer>
-      <Drawer
-        variant="temporary"
-        open={mobileOpen}
-        onClose={() => setMobileOpen(false)}
-        ModalProps={{ keepMounted: true }}
-        sx={{ display: { xs: "block", md: "none" }, "& .MuiDrawer-paper": { width: DRAWER_WIDTH } }}
-      >
-        <NavBody user={user} counts={counts} onNavigate={() => setMobileOpen(false)} />
-      </Drawer>
-      <Box sx={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
-        <AppBar position="sticky" color="inherit" elevation={0} sx={{ borderBottom: 1, borderColor: "divider", bgcolor: "background.default" }}>
-          <Toolbar sx={{ gap: 1, minHeight: { xs: 56 }, px: { xs: 2, md: 4 } }}>
-            <IconButton edge="start" onClick={() => setMobileOpen(true)} sx={{ display: { md: "none" } }} aria-label="打开导航">
-              <MenuOutlined />
-            </IconButton>
-            <Typography sx={{ display: { md: "none" }, fontWeight: 600 }}>资产运维平台</Typography>
-            <Box sx={{ flex: 1 }} />
-            <TaskCenter />
-            <ThemeToggle />
-          </Toolbar>
-        </AppBar>
-        <Box component="main" sx={{ flex: 1, width: "100%", maxWidth: 1600, mx: "auto", px: { xs: 2, md: 4 }, py: { xs: 3, md: 3.5 } }}>
-          {children}
+    <RoleProvider role={user.role}>
+      <Box sx={{ display: "flex", minHeight: "100vh" }}>
+        <Drawer
+          variant="permanent"
+          sx={{ display: { xs: "none", md: "block" }, width: DRAWER_WIDTH, flexShrink: 0, "& .MuiDrawer-paper": { width: DRAWER_WIDTH, boxSizing: "border-box" } }}
+        >
+          <NavBody user={user} counts={counts} />
+        </Drawer>
+        <Drawer
+          variant="temporary"
+          open={mobileOpen}
+          onClose={() => setMobileOpen(false)}
+          ModalProps={{ keepMounted: true }}
+          sx={{ display: { xs: "block", md: "none" }, "& .MuiDrawer-paper": { width: DRAWER_WIDTH } }}
+        >
+          <NavBody user={user} counts={counts} onNavigate={() => setMobileOpen(false)} />
+        </Drawer>
+        <Box sx={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+          <AppBar position="sticky" color="inherit" elevation={0} sx={{ borderBottom: 1, borderColor: "divider", bgcolor: "background.default" }}>
+            <Toolbar sx={{ gap: 1, minHeight: { xs: 56 }, px: { xs: 2, md: 4 } }}>
+              <IconButton edge="start" onClick={() => setMobileOpen(true)} sx={{ display: { md: "none" } }} aria-label="打开导航">
+                <MenuOutlined />
+              </IconButton>
+              <Typography sx={{ display: { md: "none" }, fontWeight: 600 }}>资产运维平台</Typography>
+              <Box sx={{ flex: 1 }} />
+              <TaskCenter />
+              <ThemeToggle />
+            </Toolbar>
+          </AppBar>
+          <Box component="main" sx={{ flex: 1, width: "100%", maxWidth: 1600, mx: "auto", px: { xs: 2, md: 4 }, py: { xs: 3, md: 3.5 } }}>
+            {children}
+          </Box>
         </Box>
       </Box>
-    </Box>
+    </RoleProvider>
   );
 }

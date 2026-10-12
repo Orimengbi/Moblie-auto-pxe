@@ -30,6 +30,7 @@ import type { BmcOverview } from "@/lib/bmc-redfish";
 import { api } from "@/lib/client-api";
 import type { StreamStatus } from "@/lib/redfish-events";
 import { formatTime, UTC_OFFSETS } from "@/lib/time";
+import { useCan } from "@/components/role-context";
 
 const MONO = "var(--font-geist-mono), monospace";
 
@@ -124,6 +125,8 @@ export function ServerBmc({ assetId }: { assetId: string }) {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [reading, setReading] = useState(false);
+  const canOperate = useCan("operator");
+  const canEdit = useCan("engineer");
 
   /** refresh 为 true 才去 BMC 读，否则只拿控制台存的上一次结果。 */
   const load = useCallback(
@@ -171,13 +174,15 @@ export function ServerBmc({ assetId }: { assetId: string }) {
       <Box sx={{ flex: 1 }}>
         <ReadBar readAt={data.readAt} reading={reading} onRead={() => void load(true)} hint="正在经 Redfish 读 BMC，要十几秒" />
       </Box>
-      <BmcResetButton
-        assetId={assetId}
-        onDone={(ok, text) => {
-          setError(ok ? "" : text);
-          setMessage(ok ? text : "");
-        }}
-      />
+      {canEdit ? (
+        <BmcResetButton
+          assetId={assetId}
+          onDone={(ok, text) => {
+            setError(ok ? "" : text);
+            setMessage(ok ? text : "");
+          }}
+        />
+      ) : null}
     </Stack>
   );
   if (!data.overview)
@@ -239,9 +244,9 @@ export function ServerBmc({ assetId }: { assetId: string }) {
         ) : null}
       </Section>
 
-      <BootSection view={view} busy={busy} onSave={(body) => send(`/api/assets/${assetId}/redfish`, "PATCH", body)} />
+      <BootSection view={view} busy={busy || !canEdit} onSave={(body) => send(`/api/assets/${assetId}/redfish`, "PATCH", body)} />
 
-      <ClockSection key={data.readAt} view={view} busy={busy} onSave={(clock) => send(`/api/assets/${assetId}/redfish`, "PATCH", { clock })} />
+      <ClockSection key={data.readAt} view={view} busy={busy || !canEdit} onSave={(clock) => send(`/api/assets/${assetId}/redfish`, "PATCH", { clock })} />
 
       <Section title="定位灯和资产编号">
         <Stack direction="row" useFlexGap spacing={3} sx={{ flexWrap: "wrap", alignItems: "center" }}>
@@ -252,7 +257,7 @@ export function ServerBmc({ assetId }: { assetId: string }) {
                 size="small"
                 exclusive
                 value={view.led}
-                disabled={busy}
+                disabled={busy || !canEdit}
                 onChange={(_, value: string | null) => {
                   if (value && value !== view.led) void send(`/api/assets/${assetId}/redfish`, "PATCH", { led: value });
                 }}
@@ -269,14 +274,14 @@ export function ServerBmc({ assetId }: { assetId: string }) {
               这台 BMC 没有定位灯接口
             </Typography>
           )}
-          <AssetTagField value={view.assetTag} busy={busy} onSave={(assetTag) => send(`/api/assets/${assetId}/redfish`, "PATCH", { assetTag })} />
+          <AssetTagField value={view.assetTag} busy={busy || !canEdit} onSave={(assetTag) => send(`/api/assets/${assetId}/redfish`, "PATCH", { assetTag })} />
         </Stack>
         <Typography variant="caption" sx={{ display: "block", mt: 1, color: "text.secondary" }}>
           BMC 改灯要几秒钟才反映出来。AMI 的「闪烁」大约 15 秒后自己熄灭，要一直亮选「常亮」。
         </Typography>
       </Section>
 
-      <MediaSection view={view} busy={busy} onSend={(body) => send(`/api/assets/${assetId}/redfish/media`, "POST", body)} />
+      <MediaSection view={view} busy={busy || !canOperate} onSend={(body) => send(`/api/assets/${assetId}/redfish/media`, "POST", body)} />
     </Stack>
   );
 }

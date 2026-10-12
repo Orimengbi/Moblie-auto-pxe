@@ -155,6 +155,7 @@ export function RackFloor({
   assets,
   alerts,
   onOpenRack,
+  canEdit = true,
   onSaved,
 }: {
   siteId: string;
@@ -166,6 +167,8 @@ export function RackFloor({
   /** 资产 id → 最严重的未恢复告警。 */
   alerts: Record<string, AlertSeverity>;
   onOpenRack: (rackId: string) => void;
+  /** 没有编辑权限时不显示「编辑平面图」。 */
+  canEdit?: boolean;
   onSaved: () => void;
 }) {
   const [mode, setMode] = useState<Mode>("usage");
@@ -685,11 +688,11 @@ export function RackFloor({
                 {saving ? "保存中" : `保存${changed ? "（有改动）" : ""}`}
               </Button>
             </>
-          ) : (
+          ) : canEdit ? (
             <Button type="button" variant="outlined" onClick={startEdit}>
               编辑平面图
             </Button>
-          )}
+          ) : null}
         </Stack>
       </Stack>
 

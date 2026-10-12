@@ -1,4 +1,5 @@
 import { auditRequest, auditTask, jsonError, readJson, userOrResponse } from "@/lib/api";
+import { atLeast, roleDenied, taskRole } from "@/lib/roles";
 import { createTask, publicTask, startTask, type TaskInput } from "@/lib/remote";
 import { listImages, listAllTasks, listProjects } from "@/lib/store";
 import type { TaskFeed, TaskSummary } from "@/lib/types";
@@ -43,7 +44,8 @@ export async function POST(request: Request) {
   if (identity instanceof Response) return identity;
   try {
     const input = await readJson<TaskInput>(request);
-    if (input.kind === "bmc-user" && identity.user.role !== "admin") return Response.json({ error: "改 BMC 用户要管理员" }, { status: 403 });
+    const min = taskRole(input.kind);
+    if (!atLeast(identity.user.role, min)) return Response.json({ error: roleDenied(min) }, { status: 403 });
     const task = createTask(input);
     startTask(task);
     auditTask(request, identity, task);

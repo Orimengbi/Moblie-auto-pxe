@@ -24,6 +24,7 @@ import { modelKey, specText } from "@/lib/catalog-schema";
 import { SiteOptions } from "@/components/site-options";
 import { formatTime } from "@/lib/time";
 import { api } from "@/lib/client-api";
+import { useCan } from "@/components/role-context";
 
 type AssetRef = { id: string; tag: string };
 
@@ -75,6 +76,8 @@ export function PartsBoard({
   const [kind, setKind] = useState("");
   const [setKey, setSetKey] = useState("");
   const [receiving, setReceiving] = useState(false);
+  const canOperate = useCan("operator");
+  const canEdit = useCan("engineer");
   const [detail, setDetail] = useState<Part | null>(null);
   const [error, setError] = useState("");
   const siteById = useMemo(() => new Map(sites.map((site) => [site.id, site])), [sites]);
@@ -179,24 +182,26 @@ export function PartsBoard({
       disableColumnMenu: true,
       renderCell: ({ row }) => (
         <Stack direction="row" spacing={0.5} sx={{ width: "100%", alignItems: "center", justifyContent: "flex-end" }}>
-          <TextField
-            select
-            slotProps={NATIVE}
-            value=""
-            onChange={(event) => {
-              if (event.target.value) void changeStatus(row, event.target.value as PartStatus);
-            }}
-            sx={{ "& select": { py: 0.5, fontSize: 12 } }}
-          >
-            <option value="">改状态…</option>
-            {(Object.keys(PART_STATUS) as PartStatus[])
-              .filter((value) => value !== "installed" && value !== row.status)
-              .map((value) => (
-                <option key={value} value={value}>
-                  {PART_STATUS[value]}
-                </option>
-              ))}
-          </TextField>
+          {canOperate ? (
+            <TextField
+              select
+              slotProps={NATIVE}
+              value=""
+              onChange={(event) => {
+                if (event.target.value) void changeStatus(row, event.target.value as PartStatus);
+              }}
+              sx={{ "& select": { py: 0.5, fontSize: 12 } }}
+            >
+              <option value="">改状态…</option>
+              {(Object.keys(PART_STATUS) as PartStatus[])
+                .filter((value) => value !== "installed" && value !== row.status)
+                .map((value) => (
+                  <option key={value} value={value}>
+                    {PART_STATUS[value]}
+                  </option>
+                ))}
+            </TextField>
+          ) : null}
           <Button onClick={() => setDetail(row)}>详情</Button>
         </Stack>
       ),
@@ -294,9 +299,11 @@ export function PartsBoard({
             清除筛选
           </Button>
         ) : null}
-        <Button variant="contained" sx={{ ml: "auto" }} onClick={() => setReceiving(true)}>
-          备件入库
-        </Button>
+        {canEdit ? (
+          <Button variant="contained" sx={{ ml: "auto" }} onClick={() => setReceiving(true)}>
+            备件入库
+          </Button>
+        ) : null}
       </Stack>
       {error ? (
         <Typography variant="body2" color="error">
@@ -442,6 +449,7 @@ function ReceiveDialog({ open, catalog, sites, datacenters, onClose, onDone }: {
 
 /** 一件备件的资料和流转记录，可以改资料、挪库位。 */
 function PartDialog({ part, sites, datacenters, onClose, onChanged }: { part: Part | null; sites: Site[]; datacenters: Datacenter[]; onClose: () => void; onChanged: () => void }) {
+  const canEdit = useCan("engineer");
   const [events, setEvents] = useState<PartEvent[]>([]);
   const [asset, setAsset] = useState<{ id: string; tag: string } | null>(null);
   const [hosts, setHosts] = useState<{ id: string; tag: string; installed: number }[] | null>(null);
@@ -530,9 +538,11 @@ function PartDialog({ part, sites, datacenters, onClose, onChanged }: { part: Pa
               ) : null}
               <Stack direction="row" spacing={1} sx={{ justifyContent: "flex-end" }}>
                 <Button onClick={onClose}>关闭</Button>
-                <Button type="submit" variant="contained">
-                  保存资料
-                </Button>
+                {canEdit ? (
+                  <Button type="submit" variant="contained">
+                    保存资料
+                  </Button>
+                ) : null}
               </Stack>
               <Divider />
               <Stack spacing={0.75} component="section">

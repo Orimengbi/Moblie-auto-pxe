@@ -16,6 +16,7 @@ import { TicketCreateDialog } from "@/components/ticket-create-dialog";
 import { OPEN_TICKET_STATUS, priorityTone, TICKET_KINDS, TICKET_PRIORITY, TICKET_STATUS, TICKET_STATUS_TONE } from "@/lib/asset-labels";
 import type { Ticket } from "@/lib/types";
 import { formatTime } from "@/lib/time";
+import { useCan } from "@/components/role-context";
 
 export type TicketRow = Ticket & { assetTag: string; assetSn: string };
 
@@ -78,6 +79,7 @@ export function TicketList({ tickets, me }: { tickets: TicketRow[]; me: string }
   const [mine, setMine] = useState(false);
   const [q, setQ] = useState("");
   const [creating, setCreating] = useState(false);
+  const canOperate = useCan("operator");
 
   useEffect(() => {
     const wanted = search.get("status");
@@ -117,9 +119,11 @@ export function TicketList({ tickets, me }: { tickets: TicketRow[]; me: string }
           ))}
         </TextField>
         <FormControlLabel control={<Checkbox checked={mine} onChange={(event) => setMine(event.target.checked)} />} label="只看我负责的" />
-        <Button variant="contained" sx={{ ml: "auto" }} onClick={() => setCreating(true)}>
-          新建工单
-        </Button>
+        {canOperate ? (
+          <Button variant="contained" sx={{ ml: "auto" }} onClick={() => setCreating(true)}>
+            新建工单
+          </Button>
+        ) : null}
       </Stack>
       <Box sx={{ width: "100%", minWidth: 0 }}>
         <DataGrid

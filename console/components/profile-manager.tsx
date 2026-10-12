@@ -16,6 +16,7 @@ import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import { DISK_LABEL, DISK_MODE_LABEL, FAMILY_LABEL, type DiskMode, type DiskPartition, type DiskPick, type DiskPolicy, type ImageRecord, type PartitionFs } from "@/lib/types";
+import { useCan } from "@/components/role-context";
 
 interface PublicProfile {
   id: string;
@@ -121,6 +122,8 @@ export function ProfileManager({
   const [form, setForm] = useState(EMPTY);
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
+  const canEdit = useCan("engineer");
+  const isAdmin = useCan("admin");
   const diskImage = images.find((image) => image.id === form.imageId)?.kind === "disk";
   const live = diskImage && form.diskMode === "live";
 
@@ -197,7 +200,7 @@ export function ProfileManager({
 
   return (
     <Stack spacing={2}>
-      <Box>
+      <Box sx={{ display: canEdit ? undefined : "none" }}>
         <Button variant="contained" onClick={startCreate} disabled={ready.length === 0}>
           新建安装配置
         </Button>
@@ -240,12 +243,16 @@ export function ProfileManager({
                   <Chip variant="outlined" label={runsLive ? "不碰硬盘" : "将清空所选磁盘"} />
                 </Stack>
                 <Stack direction="row" spacing={1} sx={{ mt: 1.5 }}>
-                  <Button variant="outlined" onClick={() => startEdit(profile)}>
-                    编辑
-                  </Button>
-                  <Button color="error" onClick={() => remove(profile.id)}>
-                    删除
-                  </Button>
+                  {canEdit ? (
+                    <Button variant="outlined" onClick={() => startEdit(profile)}>
+                      编辑
+                    </Button>
+                  ) : null}
+                  {isAdmin ? (
+                    <Button color="error" onClick={() => remove(profile.id)}>
+                      删除
+                    </Button>
+                  ) : null}
                 </Stack>
               </Paper>
             );

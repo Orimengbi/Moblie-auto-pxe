@@ -15,6 +15,7 @@ import type { AssetRow } from "@/lib/asset-view";
 import { ASSET_STATUS, ASSET_STATUS_TONE, ASSET_TYPES, WARRANTY_LABEL } from "@/lib/asset-labels";
 import type { Customer } from "@/lib/types";
 import { api } from "@/lib/client-api";
+import { useCan } from "@/components/role-context";
 
 const MONO = "var(--font-geist-mono), monospace";
 
@@ -26,16 +27,10 @@ export function AssetOverview({ assetId, onChanged }: { assetId: string; onChang
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [error, setError] = useState("");
   const [editing, setEditing] = useState(false);
-  const [admin, setAdmin] = useState(false);
+  const admin = useCan("admin");
+  const canEdit = useCan("engineer");
   const [deleting, setDeleting] = useState(false);
   const [blocked, setBlocked] = useState(false);
-
-  useEffect(() => {
-    void fetch("/api/auth/me")
-      .then((response) => (response.ok ? response.json() : null))
-      .then((me) => setAdmin(me?.role === "admin"))
-      .catch(() => setAdmin(false));
-  }, []);
 
   /** 删资产不能撤销，要输一遍序列号确认。删掉后列表刷新，侧边栏跟着关掉。 */
   async function remove() {
@@ -99,9 +94,11 @@ export function AssetOverview({ assetId, onChanged }: { assetId: string; onChang
         {asset.warranty !== "none" ? (
           <StatusChip tone={asset.warranty === "expired" ? "error" : asset.warranty === "expiring" ? "warning" : "success"} label={WARRANTY_LABEL[asset.warranty]} />
         ) : null}
-        <Button variant="outlined" sx={{ ml: "auto" }} onClick={() => setEditing(true)}>
-          编辑资料
-        </Button>
+        {canEdit ? (
+          <Button variant="outlined" sx={{ ml: "auto" }} onClick={() => setEditing(true)}>
+            编辑资料
+          </Button>
+        ) : null}
         {admin ? (
           <Button variant="outlined" color="error" disabled={deleting} onClick={() => void remove()}>
             删除

@@ -2,6 +2,7 @@ import { auditTask, jsonError, readJson } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
 import { createTask, publicTask, startTask, type TaskInput } from "@/lib/remote";
 import { getProject, listTasks } from "@/lib/store";
+import { atLeast, roleDenied, taskRole } from "@/lib/roles";
 
 export const dynamic = "force-dynamic";
 
@@ -16,7 +17,8 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     const { id } = await context.params;
     const identity = requireUser(request);
     const input = await readJson<TaskInput>(request);
-    if (input.kind === "bmc-user" && identity.user.role !== "admin") return Response.json({ error: "改 BMC 用户要管理员" }, { status: 403 });
+    const min = taskRole(input.kind);
+    if (!atLeast(identity.user.role, min)) return Response.json({ error: roleDenied(min) }, { status: 403 });
     const task = createTask({ ...input, projectId: id });
     startTask(task);
     auditTask(request, identity, task);

@@ -14,6 +14,7 @@ import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import type { PublicUser } from "@/lib/auth";
 import { api } from "@/lib/client-api";
+import { atLeast, ROLE_LABEL, ROLES, type Role } from "@/lib/roles";
 
 const MONO = "var(--font-geist-mono), monospace";
 
@@ -52,6 +53,7 @@ export function CredentialManager({ user }: { user: PublicUser }) {
   const [sshName, setSshName] = useState("");
   const [sshKey, setSshKey] = useState("");
   const [keyName, setKeyName] = useState("");
+  const [keyRole, setKeyRole] = useState<Role | "">("");
   const [created, setCreated] = useState("");
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
@@ -82,8 +84,9 @@ export function CredentialManager({ user }: { user: PublicUser }) {
   function addAccessKey(event: React.FormEvent) {
     event.preventDefault();
     run(async () => {
-      const result = await send(`${base}/access-keys`, "POST", { name: keyName });
+      const result = await send(`${base}/access-keys`, "POST", { name: keyName, role: keyRole || undefined });
       setKeyName("");
+      setKeyRole("");
       setCreated(String(result.secret));
     });
   }
@@ -144,7 +147,7 @@ export function CredentialManager({ user }: { user: PublicUser }) {
           <Box component="code" sx={{ fontFamily: MONO, fontSize: 12 }}>
             curl -H &quot;Authorization: Bearer pxe_...&quot;
           </Box>
-          。权限和这个用户相同。
+          。默认权限和账号相同，也可以限成更低的角色（比如巡检脚本只给只读）；限了权的密钥不能用来改账号的密码和密钥。
         </Typography>
         {user.accessKeys.length ? (
           <Stack component="ul" spacing={1} sx={{ m: 0, p: 0, listStyle: "none" }}>
@@ -152,7 +155,7 @@ export function CredentialManager({ user }: { user: PublicUser }) {
               <KeyRow
                 key={key.id}
                 name={key.name}
-                detail={`pxe_${key.id}_… · 创建于 ${day(key.createdAt)} · 最近使用 ${day(key.lastUsedAt)}`}
+                detail={`pxe_${key.id}_… · ${key.role ? `限「${ROLE_LABEL[key.role]}」` : "权限同账号"} · 创建于 ${day(key.createdAt)} · 最近使用 ${day(key.lastUsedAt)}`}
                 disabled={pending}
                 onRemove={() => remove("access-keys", key.id, key.name)}
               />
@@ -161,6 +164,20 @@ export function CredentialManager({ user }: { user: PublicUser }) {
         ) : null}
         <Stack component="form" onSubmit={addAccessKey} direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center" }}>
           <TextField value={keyName} onChange={(event) => setKeyName(event.target.value)} placeholder="用途，例如 笔记本 / 巡检脚本" sx={{ width: 320, maxWidth: "100%" }} />
+          <TextField
+            select
+            slotProps={{ select: { native: true }, htmlInput: { "aria-label": "密钥权限" } }}
+            value={keyRole}
+            onChange={(event) => setKeyRole(event.target.value as Role | "")}
+            sx={{ minWidth: 140 }}
+          >
+            <option value="">权限同账号</option>
+            {ROLES.filter((item) => item !== user.role && atLeast(user.role, item)).map((item) => (
+              <option key={item} value={item}>
+                限{ROLE_LABEL[item]}
+              </option>
+            ))}
+          </TextField>
           <Button type="submit" variant="outlined" disabled={pending}>
             生成访问密钥
           </Button>

@@ -20,6 +20,7 @@ import { StatusChip } from "@/components/mui/status-chip";
 import { taskTargetTone } from "@/lib/asset-labels";
 import type { RemoteFile, RemoteTask, TaskHostSource, TaskTargetStatus } from "@/lib/types";
 import { formatTime } from "@/lib/time";
+import { useCan } from "@/components/role-context";
 
 export const TARGET: Record<TaskTargetStatus, string> = {
   pending: "排队",
@@ -127,6 +128,8 @@ export function ProjectTaskRunner({
   const [uploading, setUploading] = useState("");
   // 0 表示收起，只看最近 3 条；展开后按页看，一页 10 条。
   const [taskPage, setTaskPage] = useState(0);
+  const canEdit = useCan("engineer");
+  const isAdmin = useCan("admin");
   const list = tasks ?? [];
   const running = list.some((task) => task.status === "running");
   const taskPages = Math.max(1, Math.ceil(list.length / 10));
@@ -210,109 +213,117 @@ export function ProjectTaskRunner({
 
   return (
     <Stack spacing={3}>
-      <Stack component="form" onSubmit={run} spacing={2}>
-        <Typography variant="body2" sx={{ color: "text.secondary" }}>
-          在上面的列表里勾选机器，用 SSH 以 root 执行同一段脚本。装机时已经把小主机的公钥写给 root。上传的文件先推到目标机，脚本里用{" "}
-          <Box component="code" sx={{ fontFamily: MONO }}>
-            $PXE_FILES
-          </Box>{" "}
-          访问，执行完就删掉。
-        </Typography>
+      {canEdit ? (
+        <Stack component="form" onSubmit={run} spacing={2}>
+          <Typography variant="body2" sx={{ color: "text.secondary" }}>
+            在上面的列表里勾选机器，用 SSH 以 root 执行同一段脚本。装机时已经把小主机的公钥写给 root。上传的文件先推到目标机，脚本里用{" "}
+            <Box component="code" sx={{ fontFamily: MONO }}>
+              $PXE_FILES
+            </Box>{" "}
+            访问，执行完就删掉。
+          </Typography>
 
-        <Stack spacing={1}>
-          <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: "wrap", alignItems: "center" }}>
-            <Typography variant="subtitle2">文件</Typography>
-            <Typography variant="caption" sx={{ color: "text.secondary" }}>
-              驱动包、rpm、deb、压缩包都可以，勾上的会推到每台机器。
-            </Typography>
+          <Stack spacing={1}>
+            <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: "wrap", alignItems: "center" }}>
+              <Typography variant="subtitle2">文件</Typography>
+              <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                驱动包、rpm、deb、压缩包都可以，勾上的会推到每台机器。
+              </Typography>
+            </Stack>
+            {files.length ? (
+              <Stack spacing={0.25}>
+                {files.map((file) => (
+                  <Stack key={file.id} direction="row" spacing={1} sx={{ alignItems: "center", minWidth: 0 }}>
+                    <Checkbox checked={fileIds.includes(file.id)} onChange={() => setFileIds((list) => toggle(list, file.id))} slotProps={{ input: { "aria-label": `推送 ${file.name}` } }} sx={{ p: 0.5 }} />
+                    <Typography variant="caption" sx={{ fontFamily: MONO, minWidth: 0, wordBreak: "break-all" }}>
+                      {file.name}
+                    </Typography>
+                    <Typography variant="caption" sx={{ color: "text.secondary", flexShrink: 0 }}>
+                      {formatSize(file.size)}
+                    </Typography>
+                    {isAdmin ? (
+                      <Button color="error" onClick={() => remove(file.id)} sx={{ flexShrink: 0 }}>
+                        删除
+                      </Button>
+                    ) : null}
+                  </Stack>
+                ))}
+              </Stack>
+            ) : null}
+            <Box>
+              <Button component="label" variant="outlined" startIcon={<UploadFileOutlined />} disabled={Boolean(uploading)}>
+                上传文件
+                <input type="file" hidden onChange={upload} disabled={Boolean(uploading)} />
+              </Button>
+            </Box>
+            {uploading ? (
+              <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                正在上传 {uploading}，大文件要等一会
+              </Typography>
+            ) : null}
           </Stack>
-          {files.length ? (
-            <Stack spacing={0.25}>
-              {files.map((file) => (
-                <Stack key={file.id} direction="row" spacing={1} sx={{ alignItems: "center", minWidth: 0 }}>
-                  <Checkbox checked={fileIds.includes(file.id)} onChange={() => setFileIds((list) => toggle(list, file.id))} slotProps={{ input: { "aria-label": `推送 ${file.name}` } }} sx={{ p: 0.5 }} />
-                  <Typography variant="caption" sx={{ fontFamily: MONO, minWidth: 0, wordBreak: "break-all" }}>
-                    {file.name}
-                  </Typography>
-                  <Typography variant="caption" sx={{ color: "text.secondary", flexShrink: 0 }}>
-                    {formatSize(file.size)}
-                  </Typography>
-                  <Button color="error" onClick={() => remove(file.id)} sx={{ flexShrink: 0 }}>
-                    删除
-                  </Button>
-                </Stack>
+
+          <Stack spacing={1}>
+            <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: "wrap", alignItems: "center" }}>
+              <Typography variant="subtitle2" component="label" htmlFor="task-script">
+                脚本
+              </Typography>
+              {TEMPLATES.map((item) => (
+                <Button key={item.label} variant="outlined" onClick={() => setScript(item.body)}>
+                  {item.label}
+                </Button>
               ))}
             </Stack>
-          ) : null}
-          <Box>
-            <Button component="label" variant="outlined" startIcon={<UploadFileOutlined />} disabled={Boolean(uploading)}>
-              上传文件
-              <input type="file" hidden onChange={upload} disabled={Boolean(uploading)} />
-            </Button>
-          </Box>
-          {uploading ? (
-            <Typography variant="caption" sx={{ color: "text.secondary" }}>
-              正在上传 {uploading}，大文件要等一会
-            </Typography>
-          ) : null}
-        </Stack>
-
-        <Stack spacing={1}>
-          <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: "wrap", alignItems: "center" }}>
-            <Typography variant="subtitle2" component="label" htmlFor="task-script">
-              脚本
-            </Typography>
-            {TEMPLATES.map((item) => (
-              <Button key={item.label} variant="outlined" onClick={() => setScript(item.body)}>
-                {item.label}
-              </Button>
-            ))}
+            <TextField
+              id="task-script"
+              multiline
+              minRows={8}
+              value={script}
+              onChange={(event) => setScript(event.target.value)}
+              placeholder="以 root 身份用 bash 执行，当前目录就是 $PXE_FILES"
+              required
+              fullWidth
+              slotProps={{ htmlInput: { style: { fontFamily: MONO, fontSize: 12 } } }}
+            />
           </Stack>
-          <TextField
-            id="task-script"
-            multiline
-            minRows={8}
-            value={script}
-            onChange={(event) => setScript(event.target.value)}
-            placeholder="以 root 身份用 bash 执行，当前目录就是 $PXE_FILES"
-            required
-            fullWidth
-            slotProps={{ htmlInput: { style: { fontFamily: MONO, fontSize: 12 } } }}
-          />
-        </Stack>
 
-        <Stack direction="row" spacing={1.5} useFlexGap sx={{ flexWrap: "wrap", alignItems: "flex-end" }}>
-          <TextField id="task-name" label="任务名称" value={name} onChange={(event) => setName(event.target.value)} placeholder="不填就用脚本第一行" sx={{ width: 224 }} />
-          <TextField
-            id="task-concurrency"
-            label="同时执行"
-            type="number"
-            value={concurrency}
-            onChange={(event) => setConcurrency(event.target.value)}
-            slotProps={{ htmlInput: { min: 1, max: 50 } }}
-            sx={{ width: 96 }}
-          />
-          <TextField
-            id="task-timeout"
-            label="单台超时（秒）"
-            type="number"
-            value={timeoutSec}
-            onChange={(event) => setTimeoutSec(event.target.value)}
-            slotProps={{ htmlInput: { min: 10, max: 7200 } }}
-            sx={{ width: 128 }}
-          />
-          <Button type="submit" variant="contained" disabled={pending || !picked.length}>
-            {pending ? "正在创建" : picked.length ? `对选中的 ${picked.length} 台执行` : "先在列表里勾选机器"}
-          </Button>
+          <Stack direction="row" spacing={1.5} useFlexGap sx={{ flexWrap: "wrap", alignItems: "flex-end" }}>
+            <TextField id="task-name" label="任务名称" value={name} onChange={(event) => setName(event.target.value)} placeholder="不填就用脚本第一行" sx={{ width: 224 }} />
+            <TextField
+              id="task-concurrency"
+              label="同时执行"
+              type="number"
+              value={concurrency}
+              onChange={(event) => setConcurrency(event.target.value)}
+              slotProps={{ htmlInput: { min: 1, max: 50 } }}
+              sx={{ width: 96 }}
+            />
+            <TextField
+              id="task-timeout"
+              label="单台超时（秒）"
+              type="number"
+              value={timeoutSec}
+              onChange={(event) => setTimeoutSec(event.target.value)}
+              slotProps={{ htmlInput: { min: 10, max: 7200 } }}
+              sx={{ width: 128 }}
+            />
+            <Button type="submit" variant="contained" disabled={pending || !picked.length}>
+              {pending ? "正在创建" : picked.length ? `对选中的 ${picked.length} 台执行` : "先在列表里勾选机器"}
+            </Button>
+          </Stack>
+          {error ? (
+            <Typography variant="body2" sx={{ color: "error.main" }}>
+              {error}
+            </Typography>
+          ) : null}
         </Stack>
-        {error ? (
-          <Typography variant="body2" sx={{ color: "error.main" }}>
-            {error}
-          </Typography>
-        ) : null}
-      </Stack>
+      ) : (
+        <Typography variant="body2" sx={{ color: "text.secondary" }}>
+          跑脚本需要「工程师」及以上权限。
+        </Typography>
+      )}
 
-      {canRevoke ? (
+      {canRevoke && canEdit ? (
         <Paper variant="outlined" sx={{ p: 1.5 }}>
           <Stack spacing={1} sx={{ alignItems: "flex-start" }}>
             <Typography variant="subtitle2">交付清理</Typography>

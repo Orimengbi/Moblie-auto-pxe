@@ -13,6 +13,7 @@ import { DataGrid, type GridColDef } from "@mui/x-data-grid";
 import { ReadBar } from "@/components/server-bmc";
 import type { BiosAttribute, BiosView } from "@/lib/bmc-redfish";
 import { api } from "@/lib/client-api";
+import { useCan } from "@/components/role-context";
 
 const MONO = "var(--font-geist-mono), monospace";
 
@@ -30,6 +31,7 @@ export function ServerBios({ assetId }: { assetId: string }) {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const isAdmin = useCan("admin");
   const [query, setQuery] = useState("");
   const [menu, setMenu] = useState("");
   const [onlyChanged, setOnlyChanged] = useState(false);
@@ -208,7 +210,7 @@ export function ServerBios({ assetId }: { assetId: string }) {
             </Box>
           ) : null}
         </Typography>
-        {drafts.length ? (
+        {drafts.length && isAdmin ? (
           <>
             <Button size="small" disabled={busy} onClick={() => setDraft({})}>
               放弃 {drafts.length} 项修改
@@ -234,12 +236,12 @@ export function ServerBios({ assetId }: { assetId: string }) {
             </Button>
           </>
         ) : null}
-        {view.pendingCount ? (
+        {view.pendingCount && isAdmin ? (
           <Button size="small" disabled={busy} onClick={() => void send("DELETE", undefined, "撤销所有还没生效的 BIOS 修改？")}>
             撤销待生效
           </Button>
         ) : null}
-        {view.canReset ? (
+        {view.canReset && isAdmin ? (
           <Button size="small" color="warning" disabled={busy} onClick={() => void send("POST", { action: "reset" }, "下次开机把 BIOS 全部恢复成默认值？之前改过的设置都会丢掉。")}>
             恢复默认
           </Button>

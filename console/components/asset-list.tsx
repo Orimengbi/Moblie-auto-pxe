@@ -28,6 +28,7 @@ import type { AssetHealth, AssetStatus, Customer, Datacenter, RemoteFile, Site }
 import { SiteOptions } from "@/components/site-options";
 import { matchesSearch, pasteAsList, searchTerms } from "@/lib/search";
 import { formatTime } from "@/lib/time";
+import { useCan } from "@/components/role-context";
 
 const MONO = "var(--font-geist-mono), monospace";
 const WIDTH_KEY = "pxe-asset-columns";
@@ -126,6 +127,9 @@ export function AssetList({
   const [picked, setPicked] = useState<string[]>([]);
   const [sideId, setSideId] = useState<string | null>(null);
   const [sideTab, setSideTab] = useState<SidebarTab>("overview");
+  const canOperate = useCan("operator");
+  const canEdit = useCan("engineer");
+  const isAdmin = useCan("admin");
   const [creating, setCreating] = useState(false);
   const [importing, setImporting] = useState(false);
   // 从右上角任务列表点开的后台导入。
@@ -365,7 +369,7 @@ export function AssetList({
         disableColumnMenu: true,
         align: "right",
         renderCell: ({ row }) => (
-          <Box sx={{ whiteSpace: "nowrap" }}>
+          <Box sx={{ whiteSpace: "nowrap", display: canOperate ? undefined : "none" }}>
             <Button disabled={!row.bmcIp} onClick={() => setConsoleRow(row)}>
               远程控制台
             </Button>
@@ -377,7 +381,7 @@ export function AssetList({
       },
     ];
     return list.map((column) => (widths[column.field] ? { ...column, width: widths[column.field] } : column));
-  }, [widths]);
+  }, [widths, canOperate]);
 
   return (
     <Stack spacing={2}>
@@ -438,12 +442,16 @@ export function AssetList({
           <Button variant="outlined" onClick={() => window.location.assign("/api/assets/export")}>
             导出 Excel
           </Button>
-          <Button variant="outlined" onClick={() => setImporting(true)}>
-            Excel 导入
-          </Button>
-          <Button variant="contained" onClick={() => setCreating(true)}>
-            资产入库
-          </Button>
+          {canEdit ? (
+            <Button variant="outlined" onClick={() => setImporting(true)}>
+              Excel 导入
+            </Button>
+          ) : null}
+          {canEdit ? (
+            <Button variant="contained" onClick={() => setCreating(true)}>
+              资产入库
+            </Button>
+          ) : null}
         </Stack>
       </Stack>
       {terms.length > 1 ? (
@@ -459,50 +467,62 @@ export function AssetList({
         </Typography>
         {picked.length ? (
           <>
-            <TextField select slotProps={NATIVE} value={bulkStatus} onChange={(event) => setBulkStatus(event.target.value)}>
-              <option value="">改状态为…</option>
-              {Object.entries(ASSET_STATUS).map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </TextField>
-            <Button variant="outlined" disabled={!bulkStatus} onClick={() => void bulkUpdate({ status: bulkStatus }, `改成「${ASSET_STATUS[bulkStatus as AssetStatus]}」`)}>
-              改状态
-            </Button>
-            <TextField select slotProps={NATIVE} value={bulkCustomer} onChange={(event) => setBulkCustomer(event.target.value)}>
-              <option value="">改归属为…</option>
-              <option value="none">无（自有）</option>
-              {customers.map((customer) => (
-                <option key={customer.id} value={customer.id}>
-                  {customer.code} · {customer.name}
-                </option>
-              ))}
-            </TextField>
-            <Button
-              variant="outlined"
-              disabled={!bulkCustomer}
-              onClick={() =>
-                void bulkUpdate(
-                  { customerId: bulkCustomer === "none" ? null : bulkCustomer },
-                  `归属改成「${bulkCustomer === "none" ? "无" : customers.find((item) => item.id === bulkCustomer)?.name}」`,
-                )
-              }
-            >
-              改归属
-            </Button>
-            <Button variant="outlined" onClick={() => setPowerTargets(pickedRows.filter((row) => row.bmcIp))}>
-              电源和引导
-            </Button>
-            <Button variant="outlined" onClick={() => setCollectTargets(pickedRows.map((row) => ({ id: row.id, sn: row.sn, type: row.type, bmcIp: row.bmcIp })))}>
-              采集硬件配置
-            </Button>
-            <Button variant="outlined" onClick={() => setLogTargets(pickedRows.filter((row) => row.type === "server"))}>
-              收集日志
-            </Button>
-            <Button variant="outlined" onClick={() => setUserTargets(pickedRows.filter((row) => row.type === "server"))}>
-              BMC 用户
-            </Button>
+{canEdit ? (
+              <>
+                            <TextField select slotProps={NATIVE} value={bulkStatus} onChange={(event) => setBulkStatus(event.target.value)}>
+                  <option value="">改状态为…</option>
+                  {Object.entries(ASSET_STATUS).map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </TextField>
+                <Button variant="outlined" disabled={!bulkStatus} onClick={() => void bulkUpdate({ status: bulkStatus }, `改成「${ASSET_STATUS[bulkStatus as AssetStatus]}」`)}>
+                  改状态
+                </Button>
+                <TextField select slotProps={NATIVE} value={bulkCustomer} onChange={(event) => setBulkCustomer(event.target.value)}>
+                  <option value="">改归属为…</option>
+                  <option value="none">无（自有）</option>
+                  {customers.map((customer) => (
+                    <option key={customer.id} value={customer.id}>
+                      {customer.code} · {customer.name}
+                    </option>
+                  ))}
+                </TextField>
+                <Button
+                  variant="outlined"
+                  disabled={!bulkCustomer}
+                  onClick={() =>
+                    void bulkUpdate(
+                      { customerId: bulkCustomer === "none" ? null : bulkCustomer },
+                      `归属改成「${bulkCustomer === "none" ? "无" : customers.find((item) => item.id === bulkCustomer)?.name}」`,
+                    )
+                  }
+                >
+                  改归属
+                </Button>
+              </>
+            ) : null}
+            {canOperate ? (
+              <Button variant="outlined" onClick={() => setPowerTargets(pickedRows.filter((row) => row.bmcIp))}>
+                电源和引导
+              </Button>
+            ) : null}
+            {canEdit ? (
+              <Button variant="outlined" onClick={() => setCollectTargets(pickedRows.map((row) => ({ id: row.id, sn: row.sn, type: row.type, bmcIp: row.bmcIp })))}>
+                采集硬件配置
+              </Button>
+            ) : null}
+            {canOperate ? (
+              <Button variant="outlined" onClick={() => setLogTargets(pickedRows.filter((row) => row.type === "server"))}>
+                收集日志
+              </Button>
+            ) : null}
+            {isAdmin ? (
+              <Button variant="outlined" onClick={() => setUserTargets(pickedRows.filter((row) => row.type === "server"))}>
+                BMC 用户
+              </Button>
+            ) : null}
             <Button onClick={() => setPicked([])}>取消选择</Button>
           </>
         ) : null}

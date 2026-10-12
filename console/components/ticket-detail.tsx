@@ -19,6 +19,7 @@ import { ASSET_STATUS, PART_KINDS, PART_STATUS, partStatusTone, priorityTone, TI
 import type { AssetStatus, HwComponent, HwKind, InventorySnapshot, Part, PartKind, Ticket, TicketLog, TicketStatus } from "@/lib/types";
 import { formatTime } from "@/lib/time";
 import { api } from "@/lib/client-api";
+import { useCan } from "@/components/role-context";
 
 interface View {
   ticket: Ticket;
@@ -70,6 +71,7 @@ export function TicketDetail({ id }: { id: string }) {
   const [error, setError] = useState("");
   const [comment, setComment] = useState("");
   const names = useUserNames();
+  const canOperate = useCan("operator");
   const [edit, setEdit] = useState({ kind: "", priority: "", assignee: "", vendorCase: "", description: "" });
 
   const load = useCallback(async () => {
@@ -124,7 +126,7 @@ export function TicketDetail({ id }: { id: string }) {
         </Typography>
       </Stack>
       <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap" }}>
-        {NEXT[ticket.status].map(([status, label]) => (
+        {(canOperate ? NEXT[ticket.status] : []).map(([status, label]) => (
           <Button
             key={status}
             variant={status === "resolved" ? "contained" : "outlined"}
@@ -189,9 +191,11 @@ export function TicketDetail({ id }: { id: string }) {
                 </Grid>
                 <TextField label="描述" multiline minRows={5} fullWidth value={edit.description} onChange={(event) => setEdit({ ...edit, description: event.target.value })} />
                 <Box>
-                  <Button variant="contained" disabled={!dirty} onClick={() => void act(post(`/api/tickets/${id}`, edit, "PATCH"))}>
-                    保存修改
-                  </Button>
+                  {canOperate ? (
+                    <Button variant="contained" disabled={!dirty} onClick={() => void act(post(`/api/tickets/${id}`, edit, "PATCH"))}>
+                      保存修改
+                    </Button>
+                  ) : null}
                 </Box>
               </Stack>
             </CardContent>
@@ -204,7 +208,7 @@ export function TicketDetail({ id }: { id: string }) {
               <CardHeader title="换件" />
               <CardContent>
                 <Stack spacing={2}>
-                  <ReplaceForm ticketId={id} assetId={asset.id} onDone={(failed) => act(Promise.resolve(failed))} />
+                  {canOperate ? <ReplaceForm ticketId={id} assetId={asset.id} onDone={(failed) => act(Promise.resolve(failed))} /> : null}
                   {view.parts.length ? (
                     <Stack spacing={1} component="section">
                       <Typography variant="caption" sx={{ fontWeight: 500, color: "text.secondary" }}>
@@ -255,22 +259,24 @@ export function TicketDetail({ id }: { id: string }) {
                 </Box>
               ))}
             </Stack>
-            <Stack
-              component="form"
-              spacing={1}
-              onSubmit={(event: React.FormEvent) => {
-                event.preventDefault();
-                if (!comment.trim()) return;
-                void act(post(`/api/tickets/${id}/comments`, { text: comment })).then(() => setComment(""));
-              }}
-            >
-              <TextField multiline minRows={3} fullWidth value={comment} onChange={(event) => setComment(event.target.value)} placeholder="写一条处理记录或评论" />
-              <Box>
-                <Button type="submit" variant="contained" disabled={!comment.trim()}>
-                  发表
-                </Button>
-              </Box>
-            </Stack>
+            {canOperate ? (
+              <Stack
+                component="form"
+                spacing={1}
+                onSubmit={(event: React.FormEvent) => {
+                  event.preventDefault();
+                  if (!comment.trim()) return;
+                  void act(post(`/api/tickets/${id}/comments`, { text: comment })).then(() => setComment(""));
+                }}
+              >
+                <TextField multiline minRows={3} fullWidth value={comment} onChange={(event) => setComment(event.target.value)} placeholder="写一条处理记录或评论" />
+                <Box>
+                  <Button type="submit" variant="contained" disabled={!comment.trim()}>
+                    发表
+                  </Button>
+                </Box>
+              </Stack>
+            ) : null}
           </Stack>
         </CardContent>
       </Card>

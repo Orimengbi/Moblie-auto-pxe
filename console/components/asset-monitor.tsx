@@ -15,6 +15,7 @@ import { StatusChip } from "@/components/mui/status-chip";
 import { ALERT_SEVERITY, ALERT_SEVERITY_TONE, ALERT_STATUS } from "@/lib/asset-labels";
 import type { Alert, MonitorState } from "@/lib/types";
 import { formatTime } from "@/lib/time";
+import { useCan } from "@/components/role-context";
 
 const MONO = "var(--font-geist-mono), monospace";
 const LIST = { m: 0, p: 0, listStyle: "none" } as const;
@@ -31,6 +32,7 @@ function when(at: string): string {
 
 /** 侧边栏「监控」：这台的告警、传感器（异常的在前）、最近的 BMC 事件、GPU 和硬盘。 */
 export function AssetMonitor({ assetId }: { assetId: string }) {
+  const canOperate = useCan("operator");
   const [view, setView] = useState<View | null>(null);
   const [error, setError] = useState("");
   const [checking, setChecking] = useState(false);
@@ -84,9 +86,11 @@ export function AssetMonitor({ assetId }: { assetId: string }) {
           {state.bmcAt ? (state.bmcOk ? "，正常" : `，${state.bmcError}`) : ""}；系统内 {when(state.osAt)}
           {state.osAt ? (state.osOk ? "，正常" : `，${state.osError}`) : ""}
         </Typography>
-        <Button variant="contained" sx={{ ml: "auto" }} disabled={checking} onClick={() => void checkNow()}>
-          {checking ? "检查中，读 BMC 要几十秒" : "立即检查"}
-        </Button>
+        {canOperate ? (
+          <Button variant="contained" sx={{ ml: "auto" }} disabled={checking} onClick={() => void checkNow()}>
+            {checking ? "检查中，读 BMC 要几十秒" : "立即检查"}
+          </Button>
+        ) : null}
       </Stack>
       {error ? (
         <Typography variant="body2" color="error">
@@ -130,9 +134,9 @@ export function AssetMonitor({ assetId }: { assetId: string }) {
                 </MuiLink>
               ) : null}
               <Stack direction="row" spacing={0.5} sx={{ ml: "auto" }}>
-                {alert.status === "active" ? <Button onClick={() => void act(alert, "ack")}>确认</Button> : null}
-                {alert.status !== "resolved" && !alert.ticketId ? <Button onClick={() => void act(alert, "ticket")}>转工单</Button> : null}
-                {alert.status !== "resolved" ? <Button onClick={() => void act(alert, "resolve")}>处理完</Button> : null}
+                {alert.status === "active" && canOperate ? <Button onClick={() => void act(alert, "ack")}>确认</Button> : null}
+                {alert.status !== "resolved" && !alert.ticketId && canOperate ? <Button onClick={() => void act(alert, "ticket")}>转工单</Button> : null}
+                {alert.status !== "resolved" && canOperate ? <Button onClick={() => void act(alert, "resolve")}>处理完</Button> : null}
               </Stack>
             </Stack>
           </Paper>

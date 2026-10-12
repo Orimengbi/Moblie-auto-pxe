@@ -18,6 +18,7 @@ import Switch from "@mui/material/Switch";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import type { Project } from "@/lib/types";
+import { useCan } from "@/components/role-context";
 
 export function ProjectManager({ projects }: { projects: Project[] }) {
   const router = useRouter();
@@ -27,6 +28,8 @@ export function ProjectManager({ projects }: { projects: Project[] }) {
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
   const [switching, setSwitching] = useState("");
+  const canEdit = useCan("engineer");
+  const isAdmin = useCan("admin");
 
   async function create(event: React.FormEvent) {
     event.preventDefault();
@@ -85,11 +88,13 @@ export function ProjectManager({ projects }: { projects: Project[] }) {
 
   return (
     <Stack spacing={2}>
-      <Box>
-        <Button variant="contained" onClick={() => setOpen(true)}>
-          新建装机批次
-        </Button>
-      </Box>
+      {canEdit ? (
+        <Box>
+          <Button variant="contained" onClick={() => setOpen(true)}>
+            新建装机批次
+          </Button>
+        </Box>
+      ) : null}
       {error ? (
         <Typography variant="body2" sx={{ color: "error.main" }}>
           {error}
@@ -114,7 +119,7 @@ export function ProjectManager({ projects }: { projects: Project[] }) {
                     </Typography>
                   </Box>
                   <FormControlLabel
-                    control={<Switch checked={project.enabled} disabled={Boolean(switching)} onChange={() => toggle(project)} />}
+                    control={<Switch checked={project.enabled} disabled={Boolean(switching) || !canEdit} onChange={() => toggle(project)} />}
                     label={switching === project.id ? "切换中" : project.enabled ? "已启用" : "未启用"}
                     sx={{ mr: 0 }}
                   />
@@ -127,9 +132,11 @@ export function ProjectManager({ projects }: { projects: Project[] }) {
                   <Button variant="outlined" component={Link} href={`/projects/${project.id}`}>
                     进入批次
                   </Button>
-                  <Button color="error" onClick={() => remove(project.id)}>
-                    删除
-                  </Button>
+                  {isAdmin ? (
+                    <Button color="error" onClick={() => remove(project.id)}>
+                      删除
+                    </Button>
+                  ) : null}
                 </Stack>
               </CardContent>
             </Card>

@@ -9,9 +9,11 @@ import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import type { Project } from "@/lib/types";
+import { useCan } from "@/components/role-context";
 
 export function ProjectDhcpForm({ project }: { project: Project }) {
   const router = useRouter();
+  const canEdit = useCan("engineer");
   const [form, setForm] = useState({
     dhcpStart: project.dhcp?.start || "",
     dhcpEnd: project.dhcp?.end || "",
@@ -82,11 +84,13 @@ export function ProjectDhcpForm({ project }: { project: Project }) {
           {saved}
         </Typography>
       ) : null}
-      <Box>
-        <Button type="submit" variant="contained" disabled={pending}>
-          {pending ? "保存中" : "保存 DHCP"}
-        </Button>
-      </Box>
+      {canEdit ? (
+        <Box>
+          <Button type="submit" variant="contained" disabled={pending}>
+            {pending ? "保存中" : "保存 DHCP"}
+          </Button>
+        </Box>
+      ) : null}
     </Stack>
   );
 }
