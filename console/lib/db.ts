@@ -342,6 +342,11 @@ const MIGRATIONS: string[] = [
   `
   ALTER TABLE monitor_state ADD COLUMN health TEXT NOT NULL DEFAULT 'null';
   `,
+  // 服务器电源状态：监控每次连 BMC 顺带读到的，开关机操作后也会更新。
+  `
+  ALTER TABLE monitor_state ADD COLUMN power TEXT NOT NULL DEFAULT 'unknown';
+  ALTER TABLE monitor_state ADD COLUMN power_at TEXT NOT NULL DEFAULT '';
+  `,
 ];
 
 let opened: { file: string; db: Database } | null = null;

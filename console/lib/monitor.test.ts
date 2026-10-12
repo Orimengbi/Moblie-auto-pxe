@@ -104,6 +104,8 @@ test("bmc checks open, update and resolve alerts", async () => {
   await monitor.checkBmc(asset, settings, exec, health);
   assert.equal(alerts.listAlerts({ assetId: asset.id }).length, 0);
   assert.equal(monitor.getMonitorState(asset.id).health?.overall, "ok");
+  assert.equal(monitor.getMonitorState(asset.id).power, "on", "找账号时的 chassis power status 顺带记下开关机");
+  assert.equal(monitor.powerByAsset().get(asset.id)?.state, "on");
 
   // Redfish 说电源没供电：健康变成警告并开告警，恢复后告警自动关。
   unhealthy = [{ name: "电源 PS6", severity: "warning", detail: "在位但没在工作（State Disabled），多半是没接电", source: "redfish" }];
@@ -139,6 +141,7 @@ test("bmc checks open, update and resolve alerts", async () => {
   assert.ok(!alerts.listAlerts({ assetId: asset.id }).some((alert) => alert.key === "bmc:down" && alert.status === "active"));
   await monitor.checkBmc(asset, settings, exec, health);
   assert.equal(monitor.getMonitorState(asset.id).health?.overall, "unreachable");
+  assert.equal(monitor.getMonitorState(asset.id).power, "unknown", "BMC 连不上够次数后开关机变成未知");
   const keys = alerts.listAlerts({ assetId: asset.id }).filter((alert) => alert.status === "active").map((alert) => alert.key);
   assert.ok(keys.includes("bmc:down"));
   assert.ok(keys.includes("sensor:CPU0_TEMP"), "连不上时传感器告警保持原样");
