@@ -152,6 +152,10 @@ const PUSH_DEFAULTS: Partial<Record<FirmwareKind, { image: FirmwareImage["type"]
   hgx: { image: ["fwpkg"], target: "/redfish/v1/UpdateService/FirmwareInventory/HGX_FW_BMC_0", oem: { ImageType: "HMC" }, prepareHmc: true },
 };
 
+function isUpgrade(choice: FirmwareChoice): boolean {
+  return Boolean(choice.current) && compareVersions(choice.current, choice.version) === "older";
+}
+
 export function choicesForAsset(asset: Asset): FirmwareChoice[] {
   const inventory = loadSnapshot<FirmwareItem[]>(asset.id, "firmware")?.data || null;
   return allPackages()
@@ -177,7 +181,8 @@ export function choicesForAsset(asset: Asset): FirmwareChoice[] {
       };
     })
     .filter((choice) => choice.images.length)
-    .sort((a, b) => Number(b.fits) - Number(a.fits));
+    // 型号对得上的在前；其中比这台现在新的在前；再按版本从新到旧。
+    .sort((a, b) => Number(b.fits) - Number(a.fits) || Number(isUpgrade(b)) - Number(isUpgrade(a)) || (compareVersions(a.version, b.version) === "older" ? 1 : compareVersions(a.version, b.version) === "newer" ? -1 : 0));
 }
 
 /** 推之前取镜像：包要在、镜像要是包里列出来的那几个之一。 */
