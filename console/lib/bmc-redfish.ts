@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { assetBmcAccounts, getAsset } from "./assets.ts";
 import { dataDir } from "./paths.ts";
-import { link, members, RedfishAuthError, redfishError, redfishRequester, type RedfishDoc, type RedfishRequest, type RedfishResponse } from "./redfish.ts";
+import { link, members, RedfishAuthError, redfishError, redfishRequester, UploadBody, type RedfishDoc, type RedfishRequest, type RedfishResponse } from "./redfish.ts";
 import { BMC_SETTING_LABEL, isHgxFirmware } from "./asset-labels.ts";
 import type { Asset, BmcSettingKind, HealthProblem } from "./types.ts";
 
@@ -1089,6 +1089,41 @@ export async function simpleUpdate(session: BmcSession, input: FirmwareUpdateInp
   if (input.password) body.Password = input.password;
   const response = ok(await session.request("POST", target, body), "提交固件升级失败");
   return response.headers.location || str(response.body?.["@odata.id"]);
+}
+
+export interface FirmwarePushInput {
+  /** 镜像在控制台上的路径。 */
+  file: string;
+  fileName: string;
+  /** multipart 里的 UpdateParameters.Targets。 */
+  targets: string[];
+  /** multipart 里的 OemParameters，AMI 靠 ImageType 认是刷哪个部件。 */
+  oem: Record<string, unknown>;
+  /** HGX 底板（HMC）升级前要先让 BMC 腾出内存（技嘉 H100_tool 的做法）。 */
+  prepareHmc?: boolean;
+}
+
+/** 把控制台上的镜像直接推给 BMC 刷写（MultipartHttpPushUri），BMC 不用能访问控制台。返回 BMC 的任务路径。 */
+export async function pushUpdate(session: BmcSession, input: FirmwarePushInput): Promise<string> {
+  const update = await rfGet(session, "/redfish/v1/UpdateService");
+  const uri = str(update.MultipartHttpPushUri);
+  if (!uri) throw new RedfishFailure("这台 BMC 不支持直接上传固件（没有 MultipartHttpPushUri）");
+  const size = fs.statSync(input.file).size;
+  const max = num(update.MaxImageSizeBytes);
+  if (max && size > max) throw new RedfishFailure(`镜像 ${size} 字节，超过 BMC 允许的 ${max} 字节`);
+  if (input.prepareHmc) {
+    const prepared = ok(await session.request("POST", "/redfish/v1/UpdateService/Action/Oem/Gbt/HMCUpdate.PrepareFreeMemory", {}), "让 BMC 腾内存失败");
+    const status = str(prepared.body?.Status);
+    if (status && !/success/i.test(status)) throw new RedfishFailure(`让 BMC 腾内存失败：${status}`);
+  }
+  const body = new UploadBody([
+    { name: "UpdateParameters", json: { Targets: input.targets } },
+    { name: "OemParameters", json: input.oem },
+    { name: "UpdateFile", file: input.file, filename: input.fileName },
+  ]);
+  const response = ok(await session.request("POST", uri, body), "上传固件失败");
+  // 有的 BMC 在 Location 里给完整网址，只留路径。
+  return (response.headers.location || str(response.body?.["@odata.id"])).replace(/^https?:\/\/[^/]+/i, "");
 }
 
 /** 读 BMC 的任务（固件升级、虚拟介质等异步操作）。 */

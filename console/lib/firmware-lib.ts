@@ -5,7 +5,7 @@ import { listAssets } from "./assets.ts";
 import { loadSnapshot, type FirmwareItem } from "./bmc-redfish.ts";
 import { listCatalog } from "./catalog.ts";
 import { analyzeTree, compareVersions, extractNested, extractTar, extractZip, isTar, isZip } from "./firmware-pkg.ts";
-import { FIRMWARE_KIND_LABEL, type FirmwareFleet, type FirmwareFleetMachine, type FirmwareKind, type FirmwarePackage, type FirmwarePackageView } from "./firmware-types.ts";
+import { FIRMWARE_KIND_LABEL, type FirmwareChoice, type FirmwareFleet, type FirmwareFleetMachine, type FirmwareImage, type FirmwareKind, type FirmwarePackage, type FirmwarePackageView } from "./firmware-types.ts";
 import { dataDir } from "./paths.ts";
 import { safeFileName } from "./store.ts";
 import type { Asset } from "./types.ts";
@@ -140,6 +140,55 @@ export function packageFilePath(pkg: FirmwarePackage, relative: string): string 
   const full = path.resolve(base, relative);
   if (!full.startsWith(base + path.sep)) throw new Error("路径不对");
   return full;
+}
+
+/* ---------- 给一台机器刷 ---------- */
+
+/** 各类固件推给 AMI BMC 时的默认参数；ImageType 取 SimpleUpdate 的 UpdateComponent 那一套名字。对话框里还能改。 */
+const PUSH_DEFAULTS: Partial<Record<FirmwareKind, { image: FirmwareImage["type"][]; target: string; oem: Record<string, unknown>; prepareHmc?: boolean }>> = {
+  bios: { image: ["rbu", "bin", "rom"], target: "/redfish/v1/UpdateService/FirmwareInventory/BIOS", oem: { ImageType: "BIOS" } },
+  bmc: { image: ["ima", "bin"], target: "/redfish/v1/UpdateService/FirmwareInventory/BMCImage1", oem: { ImageType: "BMC" } },
+  cpld: { image: ["bin", "rom"], target: "/redfish/v1/UpdateService/FirmwareInventory/MB_CPLD1", oem: { ImageType: "MB_CPLD" } },
+  hgx: { image: ["fwpkg"], target: "/redfish/v1/UpdateService/FirmwareInventory/HGX_FW_BMC_0", oem: { ImageType: "HMC" }, prepareHmc: true },
+};
+
+export function choicesForAsset(asset: Asset): FirmwareChoice[] {
+  const inventory = loadSnapshot<FirmwareItem[]>(asset.id, "firmware")?.data || null;
+  return allPackages()
+    .map((pkg) => {
+      const defaults = PUSH_DEFAULTS[pkg.kind];
+      const images = pkg.images.filter((image) => image.type !== "tool").map(({ path: file, size, type }) => ({ path: file, size, type }));
+      const preferred = defaults ? defaults.image.map((type) => images.find((image) => image.type === type)).find(Boolean) : undefined;
+      const inventoryId = INVENTORY_ID[pkg.kind];
+      return {
+        id: pkg.id,
+        fileName: pkg.fileName,
+        vendor: pkg.vendor,
+        kind: pkg.kind,
+        version: pkg.version,
+        models: pkg.models,
+        fits: modelMatcher(pkg.models)(asset.model),
+        current: (inventoryId && inventory?.find((item) => item.id === inventoryId)?.version) || "",
+        images,
+        image: (preferred || images[0])?.path || "",
+        targets: defaults ? [defaults.target] : [],
+        oem: defaults ? { ...defaults.oem } : {},
+        prepareHmc: Boolean(defaults?.prepareHmc),
+      };
+    })
+    .filter((choice) => choice.images.length)
+    .sort((a, b) => Number(b.fits) - Number(a.fits));
+}
+
+/** 推之前取镜像：包要在、镜像要是包里列出来的那几个之一。 */
+export function choiceImage(packageId: string, image: string): { pkg: FirmwarePackage; file: string } {
+  const pkg = readMeta(packageId);
+  if (!pkg) throw new Error("固件包不存在");
+  const listed = pkg.images.find((item) => item.path === image && item.type !== "tool");
+  if (!listed) throw new Error("固件包里没有这个镜像");
+  const file = packageFilePath(pkg, listed.path);
+  if (!fs.existsSync(file)) throw new Error("镜像文件不见了，到固件库点「重新识别」");
+  return { pkg, file };
 }
 
 /* ---------- 识别 ---------- */

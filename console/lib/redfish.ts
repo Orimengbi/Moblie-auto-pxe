@@ -1,3 +1,5 @@
+import crypto from "node:crypto";
+import fs from "node:fs";
 import https from "node:https";
 
 /**
@@ -77,17 +79,77 @@ export interface RedfishResponse {
 /** 写操作用的请求：PATCH、POST、DELETE。返回状态码和响应体，401 照样抛 RedfishAuthError。 */
 export type RedfishRequest = (method: string, path: string, body?: unknown, headers?: Record<string, string>) => Promise<RedfishResponse>;
 
+/** 一段 multipart：JSON 参数或一个文件。 */
+export type UploadPart = { name: string; json: unknown } | { name: string; file: string; filename: string };
+
+/**
+ * 推固件用的 multipart/form-data 请求体（Redfish MultipartHttpPushUri）。文件边读边发，不整个读进内存。
+ * timeoutMs 是传完以后等 BMC 回话的上限：BMC 收完要先校验镜像，比平常的请求慢。
+ */
+export class UploadBody {
+  readonly boundary = `----pxe${crypto.randomBytes(12).toString("hex")}`;
+  readonly parts: UploadPart[];
+  readonly timeoutMs: number;
+  constructor(parts: UploadPart[], timeoutMs = 10 * 60_000) {
+    this.parts = parts;
+    this.timeoutMs = timeoutMs;
+  }
+
+  /** 每段的头和 JSON 内容；文件段只有头，内容另读。 */
+  private chunks(): (Buffer | { file: string })[] {
+    const out: (Buffer | { file: string })[] = [];
+    for (const part of this.parts) {
+      if ("json" in part) {
+        out.push(Buffer.from(`--${this.boundary}\r\nContent-Disposition: form-data; name="${part.name}"\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(part.json)}\r\n`));
+      } else {
+        out.push(Buffer.from(`--${this.boundary}\r\nContent-Disposition: form-data; name="${part.name}"; filename="${part.filename.replace(/["\r\n]/g, "_")}"\r\nContent-Type: application/octet-stream\r\n\r\n`));
+        out.push({ file: part.file });
+        out.push(Buffer.from("\r\n"));
+      }
+    }
+    out.push(Buffer.from(`--${this.boundary}--\r\n`));
+    return out;
+  }
+
+  get contentType(): string {
+    return `multipart/form-data; boundary=${this.boundary}`;
+  }
+
+  get length(): number {
+    return this.chunks().reduce((sum, chunk) => sum + (Buffer.isBuffer(chunk) ? chunk.length : fs.statSync(chunk.file).size), 0);
+  }
+
+  /** 按顺序写进请求，写完 end。 */
+  async writeTo(stream: NodeJS.WritableStream): Promise<void> {
+    for (const chunk of this.chunks()) {
+      if (Buffer.isBuffer(chunk)) {
+        if (!stream.write(chunk)) await new Promise((resolve) => stream.once("drain", resolve));
+        continue;
+      }
+      for await (const data of fs.createReadStream(chunk.file, { highWaterMark: 1024 * 1024 })) {
+        if (!stream.write(data as Buffer)) await new Promise((resolve) => stream.once("drain", resolve));
+      }
+    }
+    stream.end();
+  }
+}
+
 export function redfishRequester(host: string, user: string, password: string, timeoutMs = 30_000): RedfishRequest {
   const auth = `Basic ${Buffer.from(`${user}:${password}`).toString("base64")}`;
   return (method, path, body, extra = {}) =>
     new Promise((resolve, reject) => {
-      const payload = body === undefined ? undefined : Buffer.from(JSON.stringify(body));
+      const upload = body instanceof UploadBody ? body : null;
+      const payload = body === undefined || upload ? undefined : Buffer.from(JSON.stringify(body));
       const headers: Record<string, string | number> = { Authorization: auth, Accept: "application/json", ...extra };
       if (payload) {
         headers["Content-Type"] = "application/json";
         headers["Content-Length"] = payload.length;
       }
-      const request = https.request({ host, port: bmcPort(), path, method, agent, timeout: timeoutMs, headers }, (response) => {
+      if (upload) {
+        headers["Content-Type"] = upload.contentType;
+        headers["Content-Length"] = upload.length;
+      }
+      const request = https.request({ host, port: bmcPort(), path, method, agent, timeout: upload ? upload.timeoutMs : timeoutMs, headers }, (response) => {
         const chunks: Buffer[] = [];
         response.on("data", (chunk: Buffer) => chunks.push(chunk));
         response.on("error", reject);
@@ -108,7 +170,8 @@ export function redfishRequester(host: string, user: string, password: string, t
       });
       request.on("timeout", () => request.destroy(new Error("超时")));
       request.on("error", reject);
-      request.end(payload);
+      if (upload) upload.writeTo(request).catch((error: Error) => request.destroy(error));
+      else request.end(payload);
     });
 }
 
