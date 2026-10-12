@@ -25,6 +25,26 @@ export class UploadConflict extends Error {
 }
 
 const MAX_ISO = 64 * 1024 * 1024 * 1024;
+/** 上传完还要解压一份、留点给数据库和日志，所以收完这次上传后至少还要剩这么多。 */
+const FREE_RESERVE = 2 * 1024 * 1024 * 1024;
+
+function gb(bytes: number): string {
+  return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+}
+
+/** 数据盘放不下这次上传（加上其他没传完的）就直接拒绝，别传到一半把盘写满。 */
+export function assertUploadFits(size: number, pending: UploadSession[], free = diskFree()): void {
+  const owed = pending.reduce((sum, item) => sum + Math.max(0, item.size - item.offset), 0);
+  if (size + owed + FREE_RESERVE > free) {
+    const others = owed ? `，其他没传完的上传还要 ${gb(owed)}` : "";
+    throw new Error(`数据盘空间不够：这个文件 ${gb(size)}${others}，盘上只剩 ${gb(free)}（要留 ${gb(FREE_RESERVE)} 余量）`);
+  }
+}
+
+function diskFree(): number {
+  const stat = fs.statfsSync(dataDir());
+  return stat.bavail * stat.bsize;
+}
 
 function metaPath(id: string): string {
   return path.join(uploadDir(id), "meta.json");
@@ -90,6 +110,7 @@ export function openUpload(input: { filename: string; size: number; name?: strin
     writeSession(existing);
     return existing;
   }
+  assertUploadFits(input.size, listUploadSessions());
   const now = new Date().toISOString();
   const session: UploadSession = {
     id: crypto.randomUUID(),

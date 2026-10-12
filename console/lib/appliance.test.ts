@@ -13,7 +13,7 @@ import { ipmiFailure, parseIpmiUserList, setBootDevice } from "./ipmi-remote.ts"
 import { parseServerTable } from "./server-sheet.ts";
 import { menuFor, serialProbe } from "./boot.ts";
 import { createTask, resolveHost, runTask, type Exec } from "./remote.ts";
-import { UploadConflict, appendUpload, discardUpload, listUploadSessions, openUpload } from "./uploads.ts";
+import { UploadConflict, appendUpload, assertUploadFits, discardUpload, listUploadSessions, openUpload } from "./uploads.ts";
 import { applyHostname, normalizeMac } from "./net.ts";
 import {
   renderDebianPreseed,
@@ -918,4 +918,12 @@ test("power and boot device go to the BMC with the account it accepts now", asyn
   await setBootDevice("h", "u", "p", { device: "pxe", persistent: true }, async (_h, _u, _p, a) => (args.push(a), { code: 0, stdout: "", stderr: "" }));
   assert.deepEqual(args[0], ["chassis", "bootdev", "pxe", "options=efiboot,persistent"]);
   await deleteProject(project.id);
+});
+
+test("uploads are refused when the data disk cannot hold them", () => {
+  const GB = 1024 ** 3;
+  assertUploadFits(5 * GB, [], 8 * GB);
+  assert.throws(() => assertUploadFits(7 * GB, [], 8 * GB), /空间不够.*只剩 8\.0 GB/);
+  const pending = [{ size: 4 * GB, offset: 1 * GB }] as Parameters<typeof assertUploadFits>[1];
+  assert.throws(() => assertUploadFits(4 * GB, pending, 8 * GB), /其他没传完的上传还要 3\.0 GB/);
 });

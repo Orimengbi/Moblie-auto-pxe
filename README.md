@@ -121,6 +121,8 @@ sudo ip link set eth1 up
 docker compose up -d --build
 ```
 
+`fetch-ipxe.sh` 会检查下载的确实是 iPXE 固件并打出 SHA-256；要锁定版本，设 `IPXE_EFI_SHA256`、`IPXE_KPXE_SHA256`，对不上就不替换。
+
 控制台是 [http://127.0.0.1:43123](http://127.0.0.1:43123)。目标机通过 80 端口取内核、ISO 和应答文件。
 
 改过装机网口或地址池之后，执行：
