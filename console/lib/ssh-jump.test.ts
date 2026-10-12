@@ -8,7 +8,7 @@ const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pxe-ssh-jump-test-"));
 process.env.PXE_DATA_DIR = temp;
 
 const { jumpFor, listJumpHosts, saveJumpHosts } = await import("./ssh-jump.ts");
-const { runOnHost, sshArgs, sshFailure } = await import("./remote.ts");
+const { forgetJumpChecks, runOnHost, runSsh, sshArgs, sshFailure } = await import("./remote.ts");
 
 const jump = { name: "jp", host: "129.227.183.169", port: 5422, networks: ["22.142.0.0/16"], targetPort: 56000, targetKey: "~/.ssh/manage250" };
 
@@ -45,6 +45,7 @@ test("ssh goes through the jump host with the target's own port and key", () => 
 
 test("files are streamed through the jump host as tar instead of scp", async () => {
   saveJumpHosts([jump]);
+  forgetJumpChecks();
   const calls: { command: string; args: string[] }[] = [];
   const exec = async (command: string, args: string[]) => {
     calls.push({ command, args });
@@ -52,6 +53,29 @@ test("files are streamed through the jump host as tar instead of scp", async () 
   };
   const result = await runOnHost({ id: "t1", script: "ls", timeoutSec: 30 }, { host: "22.142.13.2", sn: "SN1" }, ["/data/files/a/drv.run"], exec);
   assert.equal(result.status, "ok");
-  assert.deepEqual(calls.map((call) => call.command), ["ssh", "sh", "ssh"]);
-  assert.match(calls[1].args[1], /^'tar' '-cf' '-' '-C' '\/data\/files\/a' 'drv\.run' \| 'ssh' .*'tar -xpf - -C .*pxe-task-t1/);
+  // 第一条是先试连跳板机本身，之后复用它的连接。
+  assert.equal(calls[0].args.at(-1), "true");
+  assert.ok(calls[0].args.some((arg) => arg.startsWith("ControlPath=")));
+  assert.deepEqual(calls.map((call) => call.command), ["ssh", "ssh", "sh", "ssh"]);
+  assert.match(calls[2].args[1], /^'tar' '-cf' '-' '-C' '\/data\/files\/a' 'drv\.run' \| 'ssh' .*'tar -xpf - -C .*pxe-task-t1/);
+});
+
+test("a jump host that refuses us is tried once, then skipped for a while", async () => {
+  saveJumpHosts([jump]);
+  forgetJumpChecks();
+  let calls = 0;
+  const exec = async () => {
+    calls++;
+    return { code: 255, output: "kex_exchange_identification: banner line 0: Not allowed at this time\n", timedOut: false };
+  };
+  const results = await Promise.all(["22.142.27.28", "22.142.27.29", "22.142.13.2"].map((host) => runSsh(host, "true", 10_000, exec)));
+  assert.equal(calls, 1);
+  for (const ran of results) {
+    assert.equal(ran.code, 255);
+    assert.match(ran.output, /跳板机 jp .*登不上.*暂时把控制台封了/);
+  }
+  assert.match(sshFailure("22.142.27.28"), /暂时把控制台封了/);
+  await runSsh("22.142.27.30", "true", 10_000, exec);
+  assert.equal(calls, 1);
+  forgetJumpChecks();
 });

@@ -1,6 +1,6 @@
 import { jsonError, readJson } from "@/lib/api";
 import { requireAdmin } from "@/lib/auth";
-import { defaultExec, jumpSshArgs, sshArgs } from "@/lib/remote";
+import { checkJump, defaultExec, forgetJumpChecks, sshArgs } from "@/lib/remote";
 import { assertIpv4 } from "@/lib/net";
 import { normalizeJumpHost, type JumpHost } from "@/lib/ssh-jump";
 
@@ -12,8 +12,9 @@ export async function POST(request: Request) {
     requireAdmin(request);
     const body = await readJson<{ jump?: Partial<JumpHost>; target?: string }>(request);
     const jump = { ...normalizeJumpHost(body.jump || {}), enabled: true };
-    const first = await defaultExec("ssh", jumpSshArgs(jump, "hostname"), null, Date.now() + 20_000);
-    const result: { jumpOk: boolean; jumpOutput: string; targetOk?: boolean; targetOutput?: string } = { jumpOk: first.code === 0, jumpOutput: first.output.trim().slice(-500) };
+    forgetJumpChecks();
+    const down = await checkJump(jump);
+    const result: { jumpOk: boolean; jumpOutput: string; targetOk?: boolean; targetOutput?: string } = { jumpOk: !down, jumpOutput: down };
     const target = (body.target || "").trim();
     if (result.jumpOk && target) {
       assertIpv4(target, "目标地址");
