@@ -7,7 +7,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   try {
     const { id } = await context.params;
     requireSelfOrAdmin(request, id);
-    const body = await readJson<{ name?: string }>(request);
+    const body = await readJson<{ name?: string; role?: string }>(request);
     return Response.json(createAccessKey(id, body));
   } catch (error) {
     return jsonError(error);

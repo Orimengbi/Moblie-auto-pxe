@@ -16,6 +16,7 @@ import type { SensorGroup, SensorRow, SensorsReading } from "@/lib/ipmi-sensors"
 import { powerLevel } from "@/lib/optics";
 import type { OpticsPort, OpticsReading } from "@/lib/types";
 import { formatTime } from "@/lib/time";
+import { useCan } from "@/components/role-context";
 
 const MONO = "var(--font-geist-mono), monospace";
 
@@ -160,6 +161,7 @@ export function ServerSensors({ assetId }: { assetId: string }) {
   const [onlyBad, setOnlyBad] = useState(false);
   const [hideEmpty, setHideEmpty] = useState(true);
   const [query, setQuery] = useState("");
+  const canOperate = useCan("operator");
 
   useEffect(() => {
     let alive = true;
@@ -212,9 +214,11 @@ export function ServerSensors({ assetId }: { assetId: string }) {
         <Typography variant="caption" sx={{ color: "text.secondary" }}>
           {loading ? "正在读 BMC 传感器和光模块，光模块要十几秒…" : status}
         </Typography>
-        <Button size="small" variant="contained" disabled={loading} onClick={() => void read()}>
-          {loading ? "正在读取" : "读取"}
-        </Button>
+        {canOperate ? (
+          <Button size="small" variant="contained" disabled={loading} onClick={() => void read()}>
+            {loading ? "正在读取" : "读取"}
+          </Button>
+        ) : null}
       </Stack>
       {error ? (
         <Typography variant="body2" color="error">

@@ -30,6 +30,7 @@ import { ServerPowerDialog } from "@/components/server-power-dialog";
 import type { Tone } from "@/lib/asset-labels";
 import type { InstallState, InventoryStatus, IpmiLink, IpSource, PowerState, RemoteFile, RemoteTask, ServerImportReport, ServerRow, ServerStage, TaskHostSource } from "@/lib/types";
 import { formatTime } from "@/lib/time";
+import { useCan } from "@/components/role-context";
 
 const STAGE: Record<ServerStage, string> = {
   waiting: "等待发现",
@@ -254,6 +255,9 @@ export function ProjectServerList({
   const [collectTargets, setCollectTargets] = useState<CollectTarget[]>([]);
   const [consoleRow, setConsoleRow] = useState<ServerListRow | null>(null);
   const [sideId, setSideId] = useState<string | null>(null);
+  const canOperate = useCan("operator");
+  const canEdit = useCan("engineer");
+  const isAdmin = useCan("admin");
   // 按 id 找，列表刷新后侧边栏里显示的状态也跟着更新。
   const sideRow = rows.find((row) => row.id === sideId) || null;
   const assetOf = (ids: string[]) => ids.map((id) => rows.find((row) => row.id === id)?.assetId).filter((id): id is string => Boolean(id));
@@ -315,11 +319,11 @@ export function ProjectServerList({
   );
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || !canEdit) return;
     void check(false);
     const timer = setInterval(() => void check(false), AUTO_CHECK_MS);
     return () => clearInterval(timer);
-  }, [enabled, check]);
+  }, [enabled, canEdit, check]);
 
   async function reinstall(row: ServerListRow) {
     const prompt = liveOsNames.includes(row.osName)
@@ -467,22 +471,28 @@ export function ProjectServerList({
       align: "right",
       renderCell: ({ row }) => (
         <Stack direction="row" sx={{ flexWrap: "wrap", justifyContent: "flex-end" }}>
-          <Button disabled={!row.bmcIp} onClick={() => setConsoleRow(row)}>
-            远程控制台
-          </Button>
-          <Button disabled={!row.bmcIp} onClick={() => setPowerTargets([row])}>
-            电源
-          </Button>
-          <Button onClick={() => setEditing(row)}>编辑</Button>
-          {row.installed === "yes" ? <Button onClick={() => void actions.current.reinstall(row)}>重装</Button> : null}
-          <Button color="error" onClick={() => void actions.current.remove(row)}>
-            删除
-          </Button>
+          {canOperate ? (
+            <Button disabled={!row.bmcIp} onClick={() => setConsoleRow(row)}>
+              远程控制台
+            </Button>
+          ) : null}
+          {canOperate ? (
+            <Button disabled={!row.bmcIp} onClick={() => setPowerTargets([row])}>
+              电源
+            </Button>
+          ) : null}
+          {canEdit ? <Button onClick={() => setEditing(row)}>编辑</Button> : null}
+          {row.installed === "yes" && canEdit ? <Button onClick={() => void actions.current.reinstall(row)}>重装</Button> : null}
+          {isAdmin ? (
+            <Button color="error" onClick={() => void actions.current.remove(row)}>
+              删除
+            </Button>
+          ) : null}
         </Stack>
       ),
     });
     return list;
-  }, [widths]);
+  }, [widths, canOperate, canEdit, isAdmin]);
 
   const selection = useMemo<GridRowSelectionModel>(() => ({ type: "include", ids: new Set(picked) }), [picked]);
 
@@ -500,7 +510,7 @@ export function ProjectServerList({
               <Button color="inherit" size="small" component={Link} href={`/assets?open=${encodeURIComponent(handoff.assetId)}`}>
                 回到资产继续删除
               </Button>
-            ) : handoffRow ? (
+            ) : handoffRow && isAdmin ? (
               <Button
                 color="inherit"
                 size="small"
@@ -526,12 +536,16 @@ export function ProjectServerList({
               清除筛选
             </Button>
           ) : null}
-          <Button variant="outlined" onClick={() => setAdding(true)}>
-            新增一台
-          </Button>
-          <Button variant="outlined" disabled={checking || rows.length === 0} onClick={() => void check(true)}>
-            {checking ? "检查中" : "立即检查"}
-          </Button>
+          {canEdit ? (
+            <Button variant="outlined" onClick={() => setAdding(true)}>
+              新增一台
+            </Button>
+          ) : null}
+          {canEdit ? (
+            <Button variant="outlined" disabled={checking || rows.length === 0} onClick={() => void check(true)}>
+              {checking ? "检查中" : "立即检查"}
+            </Button>
+          ) : null}
           <Typography variant="caption" sx={{ color: "text.secondary" }}>
             {enabled ? "批次开着，每 30 秒自动检查一次，密码不对的机器不自动重试。" : "批次关着，不自动检查；立即检查只读取状态，不改 BMC。"}
             {checkedAt ? ` 上次检查 ${formatTime(checkedAt, "time")}` : ""}
@@ -541,12 +555,12 @@ export function ProjectServerList({
               <Button variant="outlined" onClick={() => setPicked(installed)}>
                 选中已安装的
               </Button>
-              {picked.length ? (
+              {picked.length && canOperate ? (
                 <Button variant="outlined" onClick={() => setPowerTargets(rows.filter((row) => picked.includes(row.id)))}>
                   电源和引导（{picked.length}）
                 </Button>
               ) : null}
-              {picked.length ? (
+              {picked.length && canEdit ? (
                 <Button variant="outlined" onClick={() => setCollectTargets(rows.filter((row) => picked.includes(row.id)).map((row) => ({ id: row.assetId, sn: row.sn, bmcIp: row.bmcIp || "" })))}>
                   采集硬件配置（{picked.length}）
                 </Button>

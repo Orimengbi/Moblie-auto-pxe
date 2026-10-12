@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { dataDir } from "./paths.ts";
+import { atLeast, lowerRole, normalizeRole, roleDenied, ROLE_LABEL, ROLES, type Role } from "./roles.ts";
 
 /**
  * 控制台登录。账号存在 data/auth/users.json，三种登录方式：
@@ -11,7 +12,7 @@ import { dataDir } from "./paths.ts";
  * 会话放在签名 cookie 里；改密码、停用、改角色或删掉登录所用的密钥后，旧会话立即失效。
  */
 
-export type Role = "admin" | "user";
+export type { Role } from "./roles.ts";
 
 export interface SshKey {
   id: string;
@@ -25,6 +26,8 @@ export interface AccessKey {
   id: string;
   name: string;
   hash: string;
+  /** 限权：用这把钥匙时最多有这个角色（比账号本身低才有用），不填就和账号一样。 */
+  role?: Role;
   createdAt: string;
   lastUsedAt?: string;
 }
@@ -61,6 +64,8 @@ export interface Identity {
   method: LoginMethod;
   /** 用访问密钥或 SSH 公钥登录时是那把钥匙的 id，删掉钥匙会话就失效。 */
   credentialId: string;
+  /** 用的是限了权的访问密钥：user.role 已经是限过的，不能再改账号的密码和密钥。 */
+  limited?: boolean;
 }
 
 export const SESSION_COOKIE = "pxe_session";
@@ -114,7 +119,10 @@ export function listUsers(): User[] {
   bootstrap();
   const mtimeMs = fs.statSync(usersPath()).mtimeMs;
   if (cache?.mtimeMs !== mtimeMs) {
-    cache = { mtimeMs, users: JSON.parse(fs.readFileSync(usersPath(), "utf8")) as User[] };
+    const users = JSON.parse(fs.readFileSync(usersPath(), "utf8")) as User[];
+    // 旧的 user 角色读出来当工程师，下次写文件时就存成新名字。
+    for (const user of users) user.role = normalizeRole(user.role);
+    cache = { mtimeMs, users };
   }
   return cache.users;
 }
@@ -239,7 +247,7 @@ export function readSession(token: string): Identity | null {
   const user = listUsers().find((item) => item.id === payload.u);
   if (!user || user.disabled || user.version !== payload.v) return null;
   if (!credentialAlive(user, payload.m, payload.k)) return null;
-  return { user, method: payload.m, credentialId: payload.k };
+  return withKeyLimit({ user, method: payload.m, credentialId: payload.k });
 }
 
 export function sessionCookie(value: string): string {
@@ -275,9 +283,18 @@ export function verifyAccessKey(raw: string): Identity | null {
     if (!key) continue;
     if (user.disabled || !crypto.timingSafeEqual(hash, Buffer.from(key.hash))) return null;
     touchAccessKey(user.id, id);
-    return { user, method: "key", credentialId: id };
+    return withKeyLimit({ user, method: "key", credentialId: id });
   }
   return null;
+}
+
+/** 用限了权的访问密钥（直接 Bearer 或用它登录的会话）时，identity.user.role 换成限过的角色。 */
+function withKeyLimit(identity: Identity): Identity {
+  if (identity.method !== "key") return identity;
+  const limit = identity.user.accessKeys.find((key) => key.id === identity.credentialId)?.role;
+  if (!limit) return identity;
+  const role = lowerRole(identity.user.role, normalizeRole(limit));
+  return role === identity.user.role ? identity : { ...identity, limited: true, user: { ...identity.user, role } };
 }
 
 /** 最近使用时间一小时最多写一次，脚本频繁调 API 也不会一直改文件。 */
@@ -318,16 +335,22 @@ export function requireUser(request: Request): Identity {
   return identity;
 }
 
-export function requireAdmin(request: Request): Identity {
+export function requireRole(request: Request, min: Role): Identity {
   const identity = requireUser(request);
-  if (identity.user.role !== "admin") throw new AuthError("需要管理员权限", 403);
+  if (!atLeast(identity.user.role, min)) throw new AuthError(roleDenied(min), 403);
   return identity;
 }
 
-/** 管理员可以管所有人，普通用户只能管自己。 */
+export function requireAdmin(request: Request): Identity {
+  return requireRole(request, "admin");
+}
+
+/** 管理员可以管所有人，其他人只能管自己。 */
 export function requireSelfOrAdmin(request: Request, userId: string): Identity {
   const identity = requireUser(request);
   if (identity.user.role !== "admin" && identity.user.id !== userId) throw new AuthError("只能修改自己的账号", 403);
+  // 不然限权密钥能给自己改密码或者新建一把不限权的密钥。
+  if (identity.limited) throw new AuthError("限了权的访问密钥不能修改账号", 403);
   return identity;
 }
 
@@ -473,6 +496,12 @@ function assertAdminRemains(users: User[]): void {
   if (!users.some((user) => user.role === "admin" && !user.disabled)) throw new Error("至少要保留一个启用的管理员");
 }
 
+function parseRole(value: string | undefined): Role {
+  if (value === "user") return "engineer";
+  if (!ROLES.includes(value as Role)) throw new Error(`角色只能是 ${ROLES.map((role) => `${role}（${ROLE_LABEL[role]}）`).join("、")}`);
+  return value as Role;
+}
+
 export function getUser(id: string): User | null {
   return listUsers().find((user) => user.id === id) || null;
 }
@@ -480,7 +509,7 @@ export function getUser(id: string): User | null {
 export function createUser(input: { username?: string; role?: string; password?: string }): User {
   const username = String(input.username || "").trim().toLowerCase();
   if (!USERNAME_RE.test(username)) throw new Error("用户名只能用小写字母、数字、点、下划线和横线，最长 32 位");
-  const role: Role = input.role === "admin" ? "admin" : "user";
+  const role = parseRole(input.role ?? "engineer");
   const user = newUser(username, role);
   if (input.password) user.passwordHash = hashLoginPassword(String(input.password));
   return mutate((users) => {
@@ -495,8 +524,7 @@ export function updateUser(id: string, input: { role?: string; disabled?: boolea
   return mutate((users) => {
     const user = findUser(users, id);
     if (input.role !== undefined) {
-      if (input.role !== "admin" && input.role !== "user") throw new Error("角色只能是 admin 或 user");
-      user.role = input.role;
+      user.role = parseRole(input.role);
     }
     if (input.disabled !== undefined) user.disabled = Boolean(input.disabled);
     if (passwordHash) user.passwordHash = passwordHash;
@@ -543,12 +571,16 @@ export function removeSshKey(userId: string, keyId: string): void {
 }
 
 /** 返回完整密钥，只有这一次能看到。 */
-export function createAccessKey(userId: string, input: { name?: string }): { key: Omit<AccessKey, "hash">; secret: string } {
+export function createAccessKey(userId: string, input: { name?: string; role?: string }): { key: Omit<AccessKey, "hash">; secret: string } {
   const id = crypto.randomBytes(8).toString("hex");
   const secretPart = crypto.randomBytes(32).toString("base64url");
   const record: AccessKey = { id, name: String(input.name || "").trim() || "访问密钥", hash: hashSecret(secretPart), createdAt: now() };
+  if (input.role) record.role = parseRole(input.role);
   mutate((users) => {
     const user = findUser(users, userId);
+    // 不能比账号本身权限高，填高了就当没限。
+    if (record.role && !atLeast(user.role, record.role)) throw new Error(`账号是「${ROLE_LABEL[user.role]}」，密钥不能限成更高的「${ROLE_LABEL[record.role]}」`);
+    if (record.role === user.role) delete record.role;
     user.accessKeys.push(record);
     user.updatedAt = now();
   });

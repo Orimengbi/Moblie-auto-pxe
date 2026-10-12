@@ -14,6 +14,7 @@ import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import { DataGrid, type GridColDef } from "@mui/x-data-grid";
 import type { Customer } from "@/lib/types";
+import { useCan } from "@/components/role-context";
 
 type Form = { code: string; name: string; contact: string; note: string };
 
@@ -27,6 +28,8 @@ export function CustomerManager({ customers, counts }: { customers: Customer[]; 
   const [form, setForm] = useState<Form>({ code: "", name: "", contact: "", note: "" });
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
+  const canEdit = useCan("engineer");
+  const isAdmin = useCan("admin");
 
   function start(customer: Customer | null) {
     setEditing(customer);
@@ -101,10 +104,12 @@ export function CustomerManager({ customers, counts }: { customers: Customer[]; 
       disableColumnMenu: true,
       renderCell: ({ row }) => (
         <Stack direction="row" spacing={0.5} sx={{ width: "100%", justifyContent: "flex-end" }}>
-          <Button onClick={() => start(row)}>编辑</Button>
-          <Button color="error" onClick={() => void remove(row)}>
-            删除
-          </Button>
+          {canEdit ? <Button onClick={() => start(row)}>编辑</Button> : null}
+          {isAdmin ? (
+            <Button color="error" onClick={() => void remove(row)}>
+              删除
+            </Button>
+          ) : null}
         </Stack>
       ),
     },
@@ -112,11 +117,13 @@ export function CustomerManager({ customers, counts }: { customers: Customer[]; 
 
   return (
     <Stack spacing={2}>
-      <Box>
-        <Button variant="contained" onClick={() => start(null)}>
-          新建客户
-        </Button>
-      </Box>
+      {canEdit ? (
+        <Box>
+          <Button variant="contained" onClick={() => start(null)}>
+            新建客户
+          </Button>
+        </Box>
+      ) : null}
       {customers.length === 0 ? (
         <Typography variant="body2" sx={{ color: "text.secondary" }}>
           还没有客户。没有归属客户的资产算自有。

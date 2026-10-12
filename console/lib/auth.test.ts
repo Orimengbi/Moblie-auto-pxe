@@ -125,3 +125,34 @@ test("cross-site writes and login throttling", () => {
   auth.clearLoginFailures("10.0.0.9");
   assert.equal(auth.loginBlocked("10.0.0.9", ""), false);
 });
+
+test("four roles: old user reads as engineer, keys can be limited but not raised", () => {
+  const roles = auth.listUsers().map((user) => user.role);
+  assert.ok(roles.every((role) => ["viewer", "operator", "engineer", "admin"].includes(role)));
+  // 旧文件里的 user 读出来是工程师。
+  const file = path.join(temp, "auth", "users.json");
+  const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+  raw.find((user: { username: string }) => user.username === "alice").role = "user";
+  fs.writeFileSync(file, JSON.stringify(raw));
+  fs.utimesSync(file, new Date(), new Date(Date.now() + 5000));
+  const alice = auth.listUsers().find((user) => user.username === "alice");
+  assert.equal(alice?.role, "engineer");
+  assert.throws(() => auth.updateUser(alice!.id, { role: "root" }), /角色只能是/);
+
+  const viewer = auth.createUser({ username: "vera", role: "viewer", password: "vera-pass-1" });
+  assert.throws(() => auth.createAccessKey(viewer.id, { role: "admin" }), /不能限成更高/);
+  const limited = auth.createAccessKey(alice!.id, { name: "巡检", role: "viewer" });
+  const bearer = auth.authenticate(new Headers({ authorization: `Bearer ${limited.secret}` }));
+  assert.equal(bearer?.user.role, "viewer");
+  assert.equal(bearer?.limited, true);
+  // 用限权密钥登录的会话也是限过的。
+  assert.equal(bearer && auth.readSession(auth.createSession(bearer))?.user.role, "viewer");
+  // 不能借限权密钥改自己账号。
+  const request = new Request("http://x/api/users/x", { method: "POST", headers: { authorization: `Bearer ${limited.secret}` } });
+  assert.throws(() => auth.requireSelfOrAdmin(request, alice!.id), /限了权的访问密钥/);
+  assert.throws(() => auth.requireRole(request, "operator"), /值班/);
+  // 和账号同级的限制等于没限。
+  const same = auth.createAccessKey(alice!.id, { role: "engineer" });
+  assert.equal(same.key.role, undefined);
+  assert.equal(auth.authenticate(new Headers({ authorization: `Bearer ${same.secret}` }))?.limited, undefined);
+});

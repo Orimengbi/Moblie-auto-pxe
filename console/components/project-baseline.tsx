@@ -16,6 +16,7 @@ import Typography from "@mui/material/Typography";
 import { ATTR_LABEL, KIND_LABEL, KIND_ORDER, SOURCE_LABEL } from "@/lib/inventory";
 import type { Baseline, BaselineRule, HwKind } from "@/lib/types";
 import { formatTime } from "@/lib/time";
+import { useCan } from "@/components/role-context";
 
 const MONO = "var(--font-geist-mono), monospace";
 
@@ -25,6 +26,8 @@ export function ProjectBaseline({ projectId, baseline, matched, mismatched }: { 
   const [rules, setRules] = useState<BaselineRule[]>(baseline?.rules || []);
   const [dirty, setDirty] = useState(false);
   const [pending, setPending] = useState(false);
+  const canEdit = useCan("engineer");
+  const isAdmin = useCan("admin");
   const [error, setError] = useState("");
   const [kind, setKind] = useState<HwKind>("gpu");
   const [model, setModel] = useState("");
@@ -119,16 +122,18 @@ export function ProjectBaseline({ projectId, baseline, matched, mismatched }: { 
                   />
                 </TableCell>
                 <TableCell>
-                  <Button
-                    type="button"
-                    color="error"
-                    onClick={() => {
-                      setRules((list) => list.filter((_, i) => i !== index));
-                      setDirty(true);
-                    }}
-                  >
-                    删除
-                  </Button>
+                  {canEdit ? (
+                    <Button
+                      type="button"
+                      color="error"
+                      onClick={() => {
+                        setRules((list) => list.filter((_, i) => i !== index));
+                        setDirty(true);
+                      }}
+                    >
+                      删除
+                    </Button>
+                  ) : null}
                 </TableCell>
               </TableRow>
             ))}
@@ -144,15 +149,21 @@ export function ProjectBaseline({ projectId, baseline, matched, mismatched }: { 
           ))}
         </TextField>
         <TextField value={model} placeholder="型号，和采集结果里的写法一致" onChange={(event) => setModel(event.target.value)} sx={{ width: 288, maxWidth: "100%" }} />
-        <Button type="button" variant="outlined" onClick={add}>
-          加一条
-        </Button>
-        <Button type="button" variant="contained" sx={{ ml: "auto" }} disabled={!dirty || pending} onClick={() => void send("PUT")}>
-          {pending ? "正在保存" : "保存基准"}
-        </Button>
-        <Button type="button" variant="outlined" color="error" disabled={pending} onClick={() => void send("DELETE")}>
-          删除基准
-        </Button>
+        {canEdit ? (
+          <Button type="button" variant="outlined" onClick={add}>
+            加一条
+          </Button>
+        ) : null}
+        {canEdit ? (
+          <Button type="button" variant="contained" sx={{ ml: "auto" }} disabled={!dirty || pending} onClick={() => void send("PUT")}>
+            {pending ? "正在保存" : "保存基准"}
+          </Button>
+        ) : null}
+        {isAdmin ? (
+          <Button type="button" variant="outlined" color="error" disabled={pending} onClick={() => void send("DELETE")}>
+            删除基准
+          </Button>
+        ) : null}
       </Stack>
       {error ? (
         <Typography variant="body2" color="error">

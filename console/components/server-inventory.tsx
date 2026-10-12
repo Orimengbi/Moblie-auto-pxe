@@ -12,6 +12,7 @@ import { DataGrid, type GridColDef, type GridEventListener } from "@mui/x-data-g
 import { ATTR_LABEL, KIND_LABEL, KIND_ORDER, SOURCE_LABEL } from "@/lib/inventory";
 import type { Baseline, BaselineIssue, HwComponent, HwKind, InventoryMeta, InventorySnapshot, InventorySource, RemoteTask } from "@/lib/types";
 import { formatTime } from "@/lib/time";
+import { useCan } from "@/components/role-context";
 
 const MONO = "var(--font-geist-mono), monospace";
 
@@ -119,6 +120,7 @@ export function ServerInventory({ projectId, row }: { projectId?: string; row: {
   const [message, setMessage] = useState("");
   const [sources, setSources] = useState<InventorySource[]>(["os", "bmc"]);
   const [collecting, setCollecting] = useState("");
+  const canEdit = useCan("engineer");
 
   const load = useCallback(
     async (query: string) => {
@@ -221,24 +223,26 @@ export function ServerInventory({ projectId, row }: { projectId?: string; row: {
         </Typography>
       </Stack>
 
-      <Stack direction="row" useFlexGap spacing={1.5} sx={{ flexWrap: "wrap", alignItems: "center" }}>
-        {(["os", "bmc"] as const).map((value) => (
-          <FormControlLabel
-            key={value}
-            sx={{ mr: 0 }}
-            control={
-              <Checkbox
-                checked={sources.includes(value)}
-                onChange={() => setSources((list) => (list.includes(value) ? list.filter((item) => item !== value) : [...list, value]))}
-              />
-            }
-            label={<Typography variant="body2">{value === "os" ? "系统内（SSH）" : "BMC（Redfish）"}</Typography>}
-          />
-        ))}
-        <Button type="button" variant="contained" disabled={Boolean(collecting) || !sources.length} onClick={collect}>
-          {collecting ? "采集中，一两分钟" : "采集硬件配置"}
-        </Button>
-      </Stack>
+      {canEdit ? (
+        <Stack direction="row" useFlexGap spacing={1.5} sx={{ flexWrap: "wrap", alignItems: "center" }}>
+          {(["os", "bmc"] as const).map((value) => (
+            <FormControlLabel
+              key={value}
+              sx={{ mr: 0 }}
+              control={
+                <Checkbox
+                  checked={sources.includes(value)}
+                  onChange={() => setSources((list) => (list.includes(value) ? list.filter((item) => item !== value) : [...list, value]))}
+                />
+              }
+              label={<Typography variant="body2">{value === "os" ? "系统内（SSH）" : "BMC（Redfish）"}</Typography>}
+            />
+          ))}
+          <Button type="button" variant="contained" disabled={Boolean(collecting) || !sources.length} onClick={collect}>
+            {collecting ? "采集中，一两分钟" : "采集硬件配置"}
+          </Button>
+        </Stack>
+      ) : null}
 
       <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center" }}>
         {(["os", "bmc"] as const).map((value) => (
@@ -262,7 +266,7 @@ export function ServerInventory({ projectId, row }: { projectId?: string; row: {
             ))}
           </TextField>
         ) : null}
-        {snapshot && projectId ? (
+        {snapshot && projectId && canEdit ? (
           <Button type="button" variant="outlined" sx={{ ml: "auto" }} onClick={makeBaseline}>
             设为批次基准
           </Button>

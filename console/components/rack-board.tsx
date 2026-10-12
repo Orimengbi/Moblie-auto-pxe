@@ -34,6 +34,7 @@ import type { RackImportRow } from "@/lib/racks";
 import type { AlertSeverity, AssetStatus, Datacenter, FloorItem, Rack, Site } from "@/lib/types";
 import { SiteOptions } from "@/components/site-options";
 import { api } from "@/lib/client-api";
+import { useCan } from "@/components/role-context";
 
 const U_PX = 20;
 const MONO = "var(--font-geist-mono), monospace";
@@ -123,6 +124,8 @@ export function RackBoard({
   const [importing, setImporting] = useState(false);
   const [view, setView] = useState<"front" | "floor">("front");
   const [focusRack, setFocusRack] = useState<string | null>(null);
+  const canEdit = useCan("engineer");
+  const isAdmin = useCan("admin");
 
   // 正视图还是俯视图，这个浏览器记住上次的。
   useEffect(() => {
@@ -251,9 +254,11 @@ export function RackBoard({
             {item.code} · {item.name}
           </Button>
         ))}
-        <Button type="button" onClick={() => setDcForm("new")}>
-          新建数据中心
-        </Button>
+        {canEdit ? (
+          <Button type="button" onClick={() => setDcForm("new")}>
+            新建数据中心
+          </Button>
+        ) : null}
       </Stack>
       {datacenter ? (
         <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center" }}>
@@ -263,21 +268,27 @@ export function RackBoard({
               {item.code} · {item.name}
             </Button>
           ))}
-          <Button type="button" onClick={() => setSiteForm("new")}>
-            新建机房
-          </Button>
+          {canEdit ? (
+            <Button type="button" onClick={() => setSiteForm("new")}>
+              新建机房
+            </Button>
+          ) : null}
           <Stack direction="row" useFlexGap spacing={1} sx={{ ml: "auto", flexWrap: "wrap", alignItems: "center" }}>
             <Typography variant="body2" sx={{ color: "text.secondary" }}>
               {datacenter.address ? `${datacenter.address} · ` : ""}
               {dcSites.length} 个机房，{dcRacks.length} 个机柜，U 位用了 {dcUsed} / {dcTotal}
               {percent(dcUsed, dcTotal)}
             </Typography>
-            <Button type="button" variant="outlined" onClick={() => setDcForm(datacenter)}>
-              编辑数据中心
-            </Button>
-            <Button type="button" color="error" onClick={() => void removeDatacenter(datacenter)}>
-              删除数据中心
-            </Button>
+            {canEdit ? (
+              <Button type="button" variant="outlined" onClick={() => setDcForm(datacenter)}>
+                编辑数据中心
+              </Button>
+            ) : null}
+            {isAdmin ? (
+              <Button type="button" color="error" onClick={() => void removeDatacenter(datacenter)}>
+                删除数据中心
+              </Button>
+            ) : null}
           </Stack>
         </Stack>
       ) : null}
@@ -303,12 +314,16 @@ export function RackBoard({
               {siteRacks.length} 个机柜，U 位用了 {siteUsed} / {siteTotal}
               {percent(siteUsed, siteTotal)}
             </Typography>
-            <Button type="button" variant="outlined" onClick={() => setSiteForm(site)}>
-              编辑机房
-            </Button>
-            <Button type="button" color="error" onClick={() => void removeSite(site)}>
-              删除机房
-            </Button>
+            {canEdit ? (
+              <Button type="button" variant="outlined" onClick={() => setSiteForm(site)}>
+                编辑机房
+              </Button>
+            ) : null}
+            {isAdmin ? (
+              <Button type="button" color="error" onClick={() => void removeSite(site)}>
+                删除机房
+              </Button>
+            ) : null}
             <ToggleButtonGroup exclusive value={view} onChange={(_, next: "front" | "floor" | null) => next && chooseView(next)} aria-label="视图" sx={{ ml: "auto" }}>
               <ToggleButton value="front" sx={{ px: 1.5 }}>
                 正视图
@@ -317,12 +332,16 @@ export function RackBoard({
                 俯视图
               </ToggleButton>
             </ToggleButtonGroup>
-            <Button type="button" variant="outlined" onClick={() => setImporting(true)}>
-              Excel 导入机柜
-            </Button>
-            <Button type="button" variant="contained" onClick={() => setRackForm("new")}>
-              新建机柜
-            </Button>
+            {canEdit ? (
+              <Button type="button" variant="outlined" onClick={() => setImporting(true)}>
+                Excel 导入机柜
+              </Button>
+            ) : null}
+            {canEdit ? (
+              <Button type="button" variant="contained" onClick={() => setRackForm("new")}>
+                新建机柜
+              </Button>
+            ) : null}
           </Stack>
           {siteRacks.length === 0 && view !== "floor" ? (
             <Typography variant="body2" sx={{ color: "text.secondary" }}>
@@ -341,6 +360,7 @@ export function RackBoard({
                 setFocusRack(rackId);
                 chooseView("front");
               }}
+              canEdit={canEdit}
               onSaved={() => router.refresh()}
             />
           ) : (
@@ -355,9 +375,9 @@ export function RackBoard({
                   used={usedU(rack)}
                   selected={sideId}
                   onOpen={setSideId}
-                  onPlace={(u) => setPlacing({ rack, u })}
-                  onEdit={() => setRackForm(rack)}
-                  onDelete={() => void removeRack(rack)}
+                  onPlace={canEdit ? (u) => setPlacing({ rack, u }) : undefined}
+                  onEdit={canEdit ? () => setRackForm(rack) : undefined}
+                  onDelete={isAdmin ? () => void removeRack(rack) : undefined}
                 />
               ))}
             </Stack>
@@ -412,9 +432,10 @@ function RackColumn({
   used: number;
   selected: string | null;
   onOpen: (id: string) => void;
-  onPlace: (u: number) => void;
-  onEdit: () => void;
-  onDelete: () => void;
+  /** 没权限时不给，对应的按钮就不显示。 */
+  onPlace?: (u: number) => void;
+  onEdit?: () => void;
+  onDelete?: () => void;
 }) {
   const placed = assets.filter((asset) => asset.uStart && asset.uHeight > 0);
   const loose = assets.filter((asset) => !asset.uStart || asset.uHeight === 0);
@@ -450,12 +471,16 @@ function RackColumn({
             {rack.heightU}U{rack.powerKw ? ` · ${rack.powerKw}` : ""}
           </Typography>
           <Stack direction="row" spacing={1} sx={{ ml: "auto" }}>
-            <MuiLink component="button" type="button" variant="caption" underline="hover" color="text.secondary" onClick={onEdit}>
-              编辑
-            </MuiLink>
-            <MuiLink component="button" type="button" variant="caption" underline="hover" color="text.secondary" onClick={onDelete}>
-              删除
-            </MuiLink>
+            {onEdit ? (
+              <MuiLink component="button" type="button" variant="caption" underline="hover" color="text.secondary" onClick={onEdit}>
+                编辑
+              </MuiLink>
+            ) : null}
+            {onDelete ? (
+              <MuiLink component="button" type="button" variant="caption" underline="hover" color="text.secondary" onClick={onDelete}>
+                删除
+              </MuiLink>
+            ) : null}
           </Stack>
         </Stack>
         <Box title={`用了 ${used}U / ${rack.heightU}U`}>
@@ -487,14 +512,14 @@ function RackColumn({
             >
               {u}
             </Box>
-            {taken.has(u) || rack.disabled ? (
+            {taken.has(u) || rack.disabled || !onPlace ? (
               <Box component="span" sx={cell} />
             ) : (
               <Box
                 component="button"
                 type="button"
                 title={`把一台资产放到 U${u}`}
-                onClick={() => onPlace(u)}
+                onClick={() => onPlace?.(u)}
                 sx={{
                   ...cell,
                   border: 0,

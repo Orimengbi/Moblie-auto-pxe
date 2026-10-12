@@ -13,6 +13,7 @@ import { StatusChip } from "@/components/mui/status-chip";
 import { PART_KINDS, priorityTone, TICKET_PRIORITY, TICKET_STATUS } from "@/lib/asset-labels";
 import type { AssetPartSet, Part, Ticket } from "@/lib/types";
 import { formatTime } from "@/lib/time";
+import { useCan } from "@/components/role-context";
 
 const MONO = "var(--font-geist-mono), monospace";
 
@@ -22,6 +23,7 @@ export function AssetTickets({ asset, onChanged }: { asset: { id: string; tag: s
   const [parts, setParts] = useState<Part[]>([]);
   const [sets, setSets] = useState<AssetPartSet[] | null>(null);
   const [creating, setCreating] = useState(false);
+  const canOperate = useCan("operator");
 
   const load = useCallback(async () => {
     const [list, installed] = await Promise.all([
@@ -41,9 +43,11 @@ export function AssetTickets({ asset, onChanged }: { asset: { id: string; tag: s
     <Stack spacing={2}>
       <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
         <Typography variant="h3">工单</Typography>
-        <Button variant="contained" sx={{ ml: "auto" }} onClick={() => setCreating(true)}>
-          新建工单
-        </Button>
+        {canOperate ? (
+          <Button variant="contained" sx={{ ml: "auto" }} onClick={() => setCreating(true)}>
+            新建工单
+          </Button>
+        ) : null}
       </Stack>
       {!tickets ? <Muted>正在读取</Muted> : null}
       {tickets && !tickets.length ? <Muted>这台还没有工单。</Muted> : null}

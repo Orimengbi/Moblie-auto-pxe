@@ -16,6 +16,7 @@ import { matchesSearch, pasteAsList, searchTerms } from "@/lib/search";
 import type { Alert } from "@/lib/types";
 import { formatTime } from "@/lib/time";
 import { api } from "@/lib/client-api";
+import { useCan } from "@/components/role-context";
 
 export type AlertRow = Alert & { assetTag: string; assetSn: string };
 
@@ -34,6 +35,7 @@ function when(at: string): string {
 /** 告警列表：默认只看没恢复的，严重的在前。每 30 秒刷新一次。 */
 export function AlertBoard({ alerts, summary }: { alerts: AlertRow[]; summary: string }) {
   const router = useRouter();
+  const canOperate = useCan("operator");
   const [status, setStatus] = useState("open");
   const [severity, setSeverity] = useState("");
   const [source, setSource] = useState("");
@@ -150,9 +152,9 @@ export function AlertBoard({ alerts, summary }: { alerts: AlertRow[]; summary: s
               工单
             </MuiLink>
           ) : null}
-          {row.status === "active" ? <Button onClick={() => void act(row, "ack")}>确认</Button> : null}
-          {row.status !== "resolved" && !row.ticketId ? <Button onClick={() => void act(row, "ticket")}>转工单</Button> : null}
-          {row.status !== "resolved" ? <Button onClick={() => void act(row, "resolve")}>处理完</Button> : null}
+          {row.status === "active" && canOperate ? <Button onClick={() => void act(row, "ack")}>确认</Button> : null}
+          {row.status !== "resolved" && !row.ticketId && canOperate ? <Button onClick={() => void act(row, "ticket")}>转工单</Button> : null}
+          {row.status !== "resolved" && canOperate ? <Button onClick={() => void act(row, "resolve")}>处理完</Button> : null}
         </Stack>
       ),
     },

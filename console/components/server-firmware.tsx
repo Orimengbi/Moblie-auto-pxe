@@ -17,6 +17,7 @@ import { ReadBar } from "@/components/server-bmc";
 import { isHgxFirmware } from "@/lib/asset-labels";
 import type { BmcOverview, FirmwareItem } from "@/lib/bmc-redfish";
 import { api } from "@/lib/client-api";
+import { useCan } from "@/components/role-context";
 
 const MONO = "var(--font-geist-mono), monospace";
 
@@ -33,6 +34,7 @@ export function ServerFirmware({ assetId }: { assetId: string }) {
   const [scope, setScope] = useState<"all" | "hgx" | "other">("all");
   const [reading, setReading] = useState(false);
   const [busy, setBusy] = useState(false);
+  const isAdmin = useCan("admin");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [open, setOpen] = useState(false);
@@ -116,7 +118,7 @@ export function ServerFirmware({ assetId }: { assetId: string }) {
                 ? "没有进行中的升级"
                 : "这台 BMC 不支持从网址升级"}
           </Typography>
-          {update ? (
+          {update && isAdmin ? (
             <Button size="small" variant="outlined" disabled={busy} onClick={() => setOpen(true)}>
               升级
             </Button>

@@ -18,6 +18,7 @@ import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
 import Typography from "@mui/material/Typography";
 import { api } from "@/lib/client-api";
 import { UTC_OFFSETS } from "@/lib/time";
+import { useCan } from "@/components/role-context";
 
 type PowerAction = "on" | "soft" | "off" | "reset" | "cycle";
 type BootDevice = "pxe" | "usb" | "cdrom" | "disk" | "bios";
@@ -55,6 +56,7 @@ export function ServerPowerDialog({ targets, onClose }: { targets: Target[]; onC
   const [legacy, setLegacy] = useState(false);
   const [restart, setRestart] = useState(true);
   const [pending, setPending] = useState(false);
+  const canEdit = useCan("engineer");
   const [clockOffset, setClockOffset] = useState("+08:00");
   const [ntpMode, setNtpMode] = useState<"keep" | "on" | "off">("keep");
   const [ntpServers, setNtpServers] = useState("");
@@ -160,39 +162,41 @@ export function ServerPowerDialog({ targets, onClose }: { targets: Target[]; onC
           </Typography>
         </Stack>
 
-        <Stack component="section" spacing={1} sx={{ borderTop: 1, borderColor: "divider", pt: 2, mt: 2 }}>
-          <Typography variant="subtitle2">BMC</Typography>
-          <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap" }}>
-            <Button variant="outlined" disabled={pending} onClick={() => void resetBmc("outband")}>
-              重启 BMC（带外）
-            </Button>
-            <Button variant="outlined" disabled={pending} onClick={() => void resetBmc("inband")}>
-              重启 BMC（带内）
-            </Button>
+        {canEdit ? (
+          <Stack component="section" spacing={1} sx={{ borderTop: 1, borderColor: "divider", pt: 2, mt: 2 }}>
+            <Typography variant="subtitle2">BMC</Typography>
+            <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap" }}>
+              <Button variant="outlined" disabled={pending} onClick={() => void resetBmc("outband")}>
+                重启 BMC（带外）
+              </Button>
+              <Button variant="outlined" disabled={pending} onClick={() => void resetBmc("inband")}>
+                重启 BMC（带内）
+              </Button>
+            </Stack>
+            <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center", pt: 1 }}>
+              <TextField select size="small" label="BMC 时区" value={clockOffset} onChange={(event) => setClockOffset(event.target.value)} slotProps={{ select: { native: true } }} sx={{ width: 130 }}>
+                <option value="">不改</option>
+                {UTC_OFFSETS.map((value) => (
+                  <option key={value} value={value}>
+                    UTC{value}
+                  </option>
+                ))}
+              </TextField>
+              <TextField select size="small" label="NTP" value={ntpMode} onChange={(event) => setNtpMode(event.target.value as "keep" | "on" | "off")} slotProps={{ select: { native: true } }} sx={{ width: 100 }}>
+                <option value="keep">不改</option>
+                <option value="on">打开</option>
+                <option value="off">关闭</option>
+              </TextField>
+              {ntpMode === "on" ? <TextField size="small" label="NTP 服务器" placeholder="ntp.aliyun.com, 192.168.68.1" value={ntpServers} onChange={(event) => setNtpServers(event.target.value)} sx={{ minWidth: 220 }} /> : null}
+              <Button variant="outlined" disabled={pending || (!clockOffset && ntpMode === "keep") || (ntpMode === "on" && !ntpServers.trim())} onClick={() => void applyClock()}>
+                设置时区
+              </Button>
+            </Stack>
+            <Typography variant="caption" color="text.secondary">
+              重启 BMC 是冷重启，服务器系统照常运行：带外经 BMC 网口发 IPMI；带内 SSH 进系统用系统里的 ipmitool 发，BMC 网络不通或账号不对时用，重启后 1~3 分钟连不上 BMC。时区和 NTP 经 Redfish 改。都建成任务，在右上角「任务」里看结果。
+            </Typography>
           </Stack>
-          <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center", pt: 1 }}>
-            <TextField select size="small" label="BMC 时区" value={clockOffset} onChange={(event) => setClockOffset(event.target.value)} slotProps={{ select: { native: true } }} sx={{ width: 130 }}>
-              <option value="">不改</option>
-              {UTC_OFFSETS.map((value) => (
-                <option key={value} value={value}>
-                  UTC{value}
-                </option>
-              ))}
-            </TextField>
-            <TextField select size="small" label="NTP" value={ntpMode} onChange={(event) => setNtpMode(event.target.value as "keep" | "on" | "off")} slotProps={{ select: { native: true } }} sx={{ width: 100 }}>
-              <option value="keep">不改</option>
-              <option value="on">打开</option>
-              <option value="off">关闭</option>
-            </TextField>
-            {ntpMode === "on" ? <TextField size="small" label="NTP 服务器" placeholder="ntp.aliyun.com, 192.168.68.1" value={ntpServers} onChange={(event) => setNtpServers(event.target.value)} sx={{ minWidth: 220 }} /> : null}
-            <Button variant="outlined" disabled={pending || (!clockOffset && ntpMode === "keep") || (ntpMode === "on" && !ntpServers.trim())} onClick={() => void applyClock()}>
-              设置时区
-            </Button>
-          </Stack>
-          <Typography variant="caption" color="text.secondary">
-            重启 BMC 是冷重启，服务器系统照常运行：带外经 BMC 网口发 IPMI；带内 SSH 进系统用系统里的 ipmitool 发，BMC 网络不通或账号不对时用，重启后 1~3 分钟连不上 BMC。时区和 NTP 经 Redfish 改。都建成任务，在右上角「任务」里看结果。
-          </Typography>
-        </Stack>
+        ) : null}
 
         <Stack component="section" spacing={1.5} sx={{ borderTop: 1, borderColor: "divider", pt: 2, mt: 2 }}>
           <Typography variant="subtitle2">引导设备</Typography>

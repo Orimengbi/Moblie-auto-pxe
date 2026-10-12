@@ -7,9 +7,11 @@ import MuiLink from "@mui/material/Link";
 import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
 import UploadFileOutlined from "@mui/icons-material/UploadFileOutlined";
+import { useCan } from "@/components/role-context";
 
 export function ProjectServerImport({ projectId }: { projectId: string }) {
   const router = useRouter();
+  const canEdit = useCan("engineer");
   const [error, setError] = useState("");
   const [summary, setSummary] = useState("");
   const [pending, setPending] = useState(false);
@@ -37,6 +39,9 @@ export function ProjectServerImport({ projectId }: { projectId: string }) {
     setFileName("");
     router.refresh();
   }
+
+  // 导入服务器表要工程师。
+  if (!canEdit) return null;
 
   return (
     <Stack component="form" onSubmit={upload} spacing={1.5}>
