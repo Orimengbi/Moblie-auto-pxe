@@ -2,6 +2,7 @@ import http from "node:http";
 import https from "node:https";
 import type { Duplex } from "node:stream";
 import zlib from "node:zlib";
+import { BmcAgent } from "./bmc-tls.ts";
 import { authenticate, clientAddress, sameOrigin } from "./auth.ts";
 import { assetBmcAccounts, audit, getAsset } from "./assets.ts";
 
@@ -30,7 +31,9 @@ function bmcPort(): number {
   return Number(process.env.PXE_KVM_BMC_PORT || 443);
 }
 
-const agent = new https.Agent({ keepAlive: true, rejectUnauthorized: false, maxSockets: 16 });
+const agent = new BmcAgent({ keepAlive: true, maxSockets: 16 });
+/** WebSocket 升级用的连接不复用，升级后就从 Agent 里摘出去。 */
+const upgradeAgent = new BmcAgent();
 
 interface BmcSession {
   host: string;
@@ -514,8 +517,7 @@ function handleUpgrade(req: http.IncomingMessage, socket: Duplex, head: Buffer):
         method: req.method,
         path: target.rest,
         headers: bmcRequestHeaders(req.headers, bmc, target.prefix, true),
-        rejectUnauthorized: false,
-        agent: false,
+        agent: upgradeAgent,
       });
       // BMC 卡住不回握手时别让浏览器一直挂着；握手成功后这个超时就不再管。
       upstream.setTimeout(30_000, () => upstream.destroy(new Error("BMC 30 秒没有回应")));

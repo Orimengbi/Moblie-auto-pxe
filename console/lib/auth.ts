@@ -354,6 +354,11 @@ export function requireSelfOrAdmin(request: Request, userId: string): Identity {
   if (!can(identity, "users") && identity.user.id !== userId) throw new AuthError("只能修改自己的账号", 403);
   // 不然限权密钥能给自己改密码或者新建一把不限权的密钥。
   if (identity.limited) throw new AuthError("限了权的访问密钥不能修改账号", 403);
+  // 改别人的账号（包括给它加 SSH 公钥、访问密钥）不能碰比自己权限大的，不然加把钥匙就能用对方身份登录。
+  if (identity.user.id !== userId) {
+    const target = getUser(userId);
+    if (target) assertWithin(identity, rolePermissions(target.role), "这个账号");
+  }
   return identity;
 }
 

@@ -25,6 +25,7 @@ import Typography from "@mui/material/Typography";
 import ArrowDownwardOutlined from "@mui/icons-material/ArrowDownwardOutlined";
 import ArrowUpwardOutlined from "@mui/icons-material/ArrowUpwardOutlined";
 import { StatusChip } from "@/components/mui/status-chip";
+import { BmcCertSection } from "@/components/server-bmc-cert";
 import type { Tone } from "@/lib/asset-labels";
 import type { BmcOverview } from "@/lib/bmc-redfish";
 import { api } from "@/lib/client-api";
@@ -200,6 +201,7 @@ export function ServerBmc({ assetId }: { assetId: string }) {
           </Typography>
         ) : null}
         <EventStreamLine status={data.events} />
+        <BmcCertSection assetId={assetId} canEdit={canEdit} onChanged={() => void load(true)} />
       </Stack>
     );
   // 2026-10-11 以前存的快照没有 clock。
@@ -282,6 +284,7 @@ export function ServerBmc({ assetId }: { assetId: string }) {
       </Section>
 
       <MediaSection view={view} busy={busy || !canOperate} onSend={(body) => send(`/api/assets/${assetId}/redfish/media`, "POST", body)} />
+      <BmcCertSection assetId={assetId} canEdit={canEdit} onChanged={() => void load(true)} />
     </Stack>
   );
 }

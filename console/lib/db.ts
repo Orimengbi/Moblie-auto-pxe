@@ -347,6 +347,18 @@ const MIGRATIONS: string[] = [
   ALTER TABLE monitor_state ADD COLUMN power TEXT NOT NULL DEFAULT 'unknown';
   ALTER TABLE monitor_state ADD COLUMN power_at TEXT NOT NULL DEFAULT '';
   `,
+  // BMC 的 HTTPS 证书指纹：第一次连上时记下，以后变了就不连，等人确认（lib/bmc-tls.ts）。
+  `
+  CREATE TABLE bmc_certs (
+    endpoint TEXT PRIMARY KEY,
+    fingerprint TEXT NOT NULL,
+    subject TEXT NOT NULL DEFAULT '',
+    valid_to TEXT NOT NULL DEFAULT '',
+    first_seen TEXT NOT NULL,
+    seen_fingerprint TEXT NOT NULL DEFAULT '',
+    seen_at TEXT NOT NULL DEFAULT ''
+  );
+  `,
 ];
 
 let opened: { file: string; db: Database } | null = null;
