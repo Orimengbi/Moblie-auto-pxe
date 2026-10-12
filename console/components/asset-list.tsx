@@ -20,6 +20,7 @@ import { InventoryCollectDialog, type CollectTarget } from "@/components/invento
 import { HOST_SOURCE, ProjectTaskRunner } from "@/components/project-task-runner";
 import { RemoteConsole } from "@/components/remote-console";
 import { ServerPowerDialog } from "@/components/server-power-dialog";
+import { BmcLogsBatchDialog, BmcUserBatchDialog } from "@/components/bmc-batch-dialogs";
 import { ServerSidebar, type Tab as SidebarTab } from "@/components/server-sidebar";
 import type { AssetRow } from "@/lib/asset-view";
 import { ASSET_STATUS, ASSET_STATUS_TONE, ASSET_TYPES, HEALTH_LABEL, HEALTH_TONE, WARRANTY_LABEL } from "@/lib/asset-labels";
@@ -131,6 +132,8 @@ export function AssetList({
   const [importJob, setImportJob] = useState<string | null>(null);
   const [powerTargets, setPowerTargets] = useState<AssetRow[]>([]);
   const [collectTargets, setCollectTargets] = useState<CollectTarget[]>([]);
+  const [logTargets, setLogTargets] = useState<AssetRow[]>([]);
+  const [userTargets, setUserTargets] = useState<AssetRow[]>([]);
   const [consoleRow, setConsoleRow] = useState<AssetRow | null>(null);
   const [bulkStatus, setBulkStatus] = useState("");
   const [bulkCustomer, setBulkCustomer] = useState("");
@@ -494,6 +497,12 @@ export function AssetList({
             <Button variant="outlined" onClick={() => setCollectTargets(pickedRows.map((row) => ({ id: row.id, sn: row.sn, type: row.type, bmcIp: row.bmcIp })))}>
               采集硬件配置
             </Button>
+            <Button variant="outlined" onClick={() => setLogTargets(pickedRows.filter((row) => row.type === "server"))}>
+              收集日志
+            </Button>
+            <Button variant="outlined" onClick={() => setUserTargets(pickedRows.filter((row) => row.type === "server"))}>
+              BMC 用户
+            </Button>
             <Button onClick={() => setPicked([])}>取消选择</Button>
           </>
         ) : null}
@@ -562,6 +571,8 @@ export function AssetList({
       />
       <ServerPowerDialog targets={powerTargets} onClose={() => setPowerTargets([])} />
       <InventoryCollectDialog targets={collectTargets} onClose={() => setCollectTargets([])} />
+      <BmcLogsBatchDialog targets={logTargets} onClose={() => setLogTargets([])} />
+      <BmcUserBatchDialog targets={userTargets} onClose={() => setUserTargets([])} />
       {consoleRow ? <RemoteConsole row={consoleRow} port={bmcPort} onClose={() => setConsoleRow(null)} /> : null}
       <ServerSidebar
         row={sideRow ? { id: sideRow.id, sn: sideRow.sn, tag: sideRow.tag, type: sideRow.type, description: [sideRow.tag, ASSET_STATUS[sideRow.status], sideRow.place, sideRow.customerName, [sideRow.vendor, sideRow.model].filter(Boolean).join(" ")].filter(Boolean).join(" · ") } : null}

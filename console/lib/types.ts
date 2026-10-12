@@ -325,7 +325,7 @@ export const DEFAULT_STATE: ApplianceState = {
   },
 };
 
-export type TaskKind = "script" | "revoke" | "inventory" | "bmc-reset" | "bmc-clock";
+export type TaskKind = "script" | "revoke" | "inventory" | "bmc-reset" | "bmc-clock" | "bmc-logs" | "bmc-user";
 /** 重启 BMC 的方式：outband 经 BMC 网口发 IPMI，inband SSH 进系统用系统里的 ipmitool 发。 */
 export type BmcResetVia = "outband" | "inband";
 export type TaskStatus = "running" | "done";
@@ -367,6 +367,8 @@ export interface RemoteTask {
   bmcReset?: BmcResetVia;
   /** 设 BMC 时区和 NTP 任务要改成什么，给了哪项改哪项。 */
   bmcClock?: { offset?: string; ntpEnabled?: boolean; ntpServers?: string[] };
+  /** BMC 用户任务在每台上做的改动。密码只在跑的时候用，跑完从任务文件里删掉，接口也不返回。 */
+  bmcUser?: import("./ipmi-user-types.ts").BmcUserChange;
   createdAt: string;
   finishedAt?: string;
 }

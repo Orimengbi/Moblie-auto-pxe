@@ -1,5 +1,5 @@
 import { auditRequest, auditTask, jsonError, readJson, userOrResponse } from "@/lib/api";
-import { createTask, startTask, type TaskInput } from "@/lib/remote";
+import { createTask, publicTask, startTask, type TaskInput } from "@/lib/remote";
 import { listImages, listAllTasks, listProjects } from "@/lib/store";
 import type { TaskFeed, TaskSummary } from "@/lib/types";
 import { listUploadSessions } from "@/lib/uploads";
@@ -42,10 +42,12 @@ export async function POST(request: Request) {
   const identity = userOrResponse(request);
   if (identity instanceof Response) return identity;
   try {
-    const task = createTask(await readJson<TaskInput>(request));
+    const input = await readJson<TaskInput>(request);
+    if (input.kind === "bmc-user" && identity.user.role !== "admin") return Response.json({ error: "改 BMC 用户要管理员" }, { status: 403 });
+    const task = createTask(input);
     startTask(task);
     auditTask(request, identity, task);
-    return Response.json(task);
+    return Response.json(publicTask(task));
   } catch (error) {
     auditRequest(request, identity, { action: "发起任务", targetType: "task", detail: error instanceof Error ? error.message : "", ok: false });
     return jsonError(error);

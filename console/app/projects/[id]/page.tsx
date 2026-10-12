@@ -12,7 +12,7 @@ import CardContent from "@mui/material/CardContent";
 import CardHeader from "@mui/material/CardHeader";
 import Grid from "@mui/material/Grid";
 import Stack from "@mui/material/Stack";
-import { hostContext, resolveHost } from "@/lib/remote";
+import { hostContext, publicTask, resolveHost } from "@/lib/remote";
 import { getBaseline, getProject, getServerImportReport, inventoryStatus, listFiles, listImages, listProfiles, listServers, listTasks, publicProfile, publicServer, runsInRam } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
@@ -75,7 +75,7 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
               liveOsNames={profileRecords.filter(runsInRam).map((profile) => profile.name)}
               report={getServerImportReport(project.id)}
               files={listFiles()}
-              tasks={listTasks(project.id).slice(0, 10)}
+              tasks={listTasks(project.id).slice(0, 10).map(publicTask)}
               bmcPort={process.env.PXE_BMC_PORT || ""}
             />
           </Stack>

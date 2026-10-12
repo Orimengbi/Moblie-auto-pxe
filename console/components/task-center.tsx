@@ -62,14 +62,20 @@ function UploadItem({ item }: { item: LiveUpload }) {
   return (
     <Stack spacing={0.5}>
       <Row
-        title={item.name || item.filename}
+        title={`${item.kind === "firmware" ? "固件包 " : ""}${item.name || item.filename}`}
         titleHint={item.filename}
         error={item.state === "error"}
         state={item.state === "running" ? `${percent(item.offset, item.size)}%` : item.state === "done" ? "已传完" : item.state === "error" ? "已中断" : "已暂停"}
       />
       <Bar value={percent(item.offset, item.size)} active={item.state === "running" || item.state === "done"} />
       <Typography variant="caption" sx={{ color: "text.secondary" }}>
-        {item.state === "done" ? "后台正在识别和抽取" : `${formatBytes(item.offset)} / ${formatBytes(item.size)}`}
+        {item.state === "done"
+          ? item.kind === "firmware"
+            ? "已识别好，在固件库里"
+            : "后台正在识别和抽取"
+          : item.kind === "firmware" && item.state === "running" && item.offset >= item.size
+            ? "传完了，正在解包识别…"
+            : `${formatBytes(item.offset)} / ${formatBytes(item.size)}`}
       </Typography>
       {item.error ? (
         <Typography variant="caption" sx={{ color: "error.main" }}>
@@ -86,8 +92,8 @@ function UploadItem({ item }: { item: LiveUpload }) {
             继续
           </Button>
         ) : item.state !== "done" ? (
-          <MuiLink component={Link} href="/images" variant="caption" color="text.secondary" sx={{ alignSelf: "center", px: 1 }}>
-            到镜像页选文件继续
+          <MuiLink component={Link} href={item.kind === "firmware" ? "/firmware-lib" : "/images"} variant="caption" color="text.secondary" sx={{ alignSelf: "center", px: 1 }}>
+            {item.kind === "firmware" ? "到固件库重新选文件" : "到镜像页选文件继续"}
           </MuiLink>
         ) : null}
         {item.state === "done" ? (
@@ -275,7 +281,8 @@ export function TaskCenter() {
     }
   }
 
-  const floatUploads = prefs.upload && !pathname.startsWith("/images") ? live : [];
+  // 在发起上传的那一页上，页面自己显示进度，不另外浮出来。
+  const floatUploads = prefs.upload ? live.filter((item) => (item.kind === "firmware" ? !pathname.startsWith("/firmware-lib") : !pathname.startsWith("/images"))) : [];
   const floatBatch = prefs.batch
     ? feed.tasks.filter((task) => followed.includes(task.id) && !dismissed.includes(task.id) && pathname !== `/tasks/${task.id}`)
     : [];
@@ -426,7 +433,9 @@ function TaskFloat({
       <Stack spacing={1.5} sx={{ p: 1.5 }}>
         {uploads.length ? (
           <Stack spacing={1}>
-            {heading("镜像上传", "upload", { href: "/images", label: "打开镜像页" })}
+            {uploads.every((item) => item.kind === "firmware")
+              ? heading("固件包上传", "upload", { href: "/firmware-lib", label: "打开固件库" })
+              : heading("上传", "upload", { href: "/images", label: "打开镜像页" })}
             {uploads.map((item) => (
               <UploadItem key={item.id} item={item} />
             ))}
