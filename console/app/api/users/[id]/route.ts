@@ -34,8 +34,6 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     if (!manager && (body.role !== undefined || body.disabled !== undefined || body.password === null)) {
       throw new AuthError("需要「用户、角色和审计」权限", 403);
     }
-    const target = getUser(id);
-    if (target && target.id !== identity.user.id) assertWithin(identity, rolePermissions(target.role), "这个账号");
     if (body.role !== undefined) assertWithin(identity, rolePermissions(String(body.role)), "这个角色");
     // 改自己的密码要输当前密码，会话被人捡到也改不了。
     const current = identity.user.passwordHash;

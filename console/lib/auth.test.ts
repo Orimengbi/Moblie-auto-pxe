@@ -182,4 +182,12 @@ test("custom roles: pick permissions, change them live, cannot hand out what you
   const identity = { permissions: manager.permissions };
   assert.doesNotThrow(() => auth.assertWithin(identity, auth.rolePermissions("viewer"), "这个角色"));
   assert.throws(() => auth.assertWithin(identity, auth.rolePermissions("admin"), "这个角色"), /自己没有的权限/);
+  // 也不能给权限比自己大的账号加 SSH 公钥、访问密钥（加了就能用对方身份登录）；权限不超过自己的可以。
+  const mia = auth.createUser({ username: "mia", role: manager.id, password: "mia-pass-12" });
+  const boss = auth.createUser({ username: "boss", role: "admin", password: "boss-pass-12" });
+  const cookie = auth.sessionCookie(auth.createSession({ user: mia, method: "password", credentialId: "" })).split(";")[0];
+  const asMia = new Request("http://x/api/users/x/ssh-keys", { method: "POST", headers: { cookie } });
+  assert.throws(() => auth.requireSelfOrAdmin(asMia, boss.id), /自己没有的权限/);
+  assert.doesNotThrow(() => auth.requireSelfOrAdmin(asMia, nina.id));
+  assert.doesNotThrow(() => auth.requireSelfOrAdmin(asMia, mia.id));
 });

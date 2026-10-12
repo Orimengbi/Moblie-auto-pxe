@@ -1,10 +1,14 @@
 import https from "node:https";
+import { BmcAgent } from "./bmc-tls.ts";
 import { applyFindings } from "./alerts.ts";
 import { assetBmcAccounts, getAsset, listAssets } from "./assets.ts";
 import { openSession, rfGet } from "./bmc-redfish.ts";
 import { db, type SqlValue } from "./db.ts";
 import { getMonitorSettings, monitored } from "./monitor.ts";
 import type { Asset } from "./types.ts";
+
+/** 事件流是长连接，不复用。 */
+const sseAgent = new BmcAgent();
 
 /**
  * BMC 事件的实时推送。不用 Redfish 的推送订阅（要 BMC 能连回控制台，控制台不在 BMC 网段上），
@@ -199,7 +203,7 @@ async function connect(assetId: string, stream: Stream): Promise<void> {
   if (stream.stopped || !account) return;
   const auth = `Basic ${Buffer.from(`${account.user}:${account.password}`).toString("base64")}`;
   const request = https.request(
-    { host: asset.bmcIp, port: Number(process.env.PXE_KVM_BMC_PORT || 443), path: ssePath, method: "GET", rejectUnauthorized: false, headers: { Authorization: auth, Accept: "text/event-stream" } },
+    { host: asset.bmcIp, port: Number(process.env.PXE_KVM_BMC_PORT || 443), path: ssePath, method: "GET", agent: sseAgent, headers: { Authorization: auth, Accept: "text/event-stream" } },
     (response) => {
       if (response.statusCode !== 200) {
         stream.status.error = `事件流 HTTP ${response.statusCode}`;

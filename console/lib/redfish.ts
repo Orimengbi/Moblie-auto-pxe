@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import https from "node:https";
+import { BmcAgent } from "./bmc-tls.ts";
 
 /**
  * 从 BMC 的 Redfish 读整机配置，不需要系统，关机也能读。
@@ -31,7 +32,7 @@ export interface RedfishRaw {
   errors: string[];
 }
 
-const agent = new https.Agent({ keepAlive: true, rejectUnauthorized: false, maxSockets: 8 });
+const agent = new BmcAgent({ keepAlive: true, maxSockets: 8 });
 
 /** BMC 的网页端口。只有测试会改它。 */
 function bmcPort(): number {
