@@ -113,3 +113,22 @@ export const RELATION_LABEL: Record<VersionRelation | "unread", string> = {
   unknown: "比不出",
   unread: "没读过",
 };
+
+/** 一个固件包给这台机器用时：能推哪些镜像、默认推哪个、带什么参数，型号对不对得上。 */
+export interface FirmwareChoice {
+  id: string;
+  fileName: string;
+  vendor: string;
+  kind: FirmwareKind;
+  version: string;
+  models: string[];
+  /** 这台机器的型号在适用型号里（含型号字典别名）。 */
+  fits: boolean;
+  /** 这台上次读到的这类固件版本，没读过或没法比是空。 */
+  current: string;
+  images: { path: string; size: number; type: FirmwareImage["type"] }[];
+  image: string;
+  targets: string[];
+  oem: Record<string, unknown>;
+  prepareHmc: boolean;
+}

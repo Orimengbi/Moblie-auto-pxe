@@ -197,6 +197,17 @@ test("an uploaded Gigabyte BIOS zip is recognised and matched against the fleet"
   const detail = lib.getPackage(pkg.id)!;
   assert.deepEqual(detail.machines.map((machine) => [machine.sn, machine.relation]).sort(), [["FW-1", "older"], ["FW-2", "same"], ["FW-3", "unread"]]);
 
+  // 给一台机器挑包：型号对上的排前面，BIOS 默认推 RBU，带 AMI 的 Targets 和 ImageType。
+  const [choice] = lib.choicesForAsset(assets.getAsset(old.id)!);
+  assert.deepEqual(
+    { fits: choice.fits, current: choice.current, image: choice.image, targets: choice.targets, oem: choice.oem },
+    { fits: true, current: "R05_F04", image: "RBU/image.RBU", targets: ["/redfish/v1/UpdateService/FirmwareInventory/BIOS"], oem: { ImageType: "BIOS" } },
+  );
+  const other = assets.listAssets().find((asset) => asset.sn === "FW-4")!;
+  assert.equal(lib.choicesForAsset(other)[0].fits, false);
+  assert.ok(lib.choiceImage(pkg.id, "RBU/image.RBU").file.endsWith("RBU/image.RBU"));
+  assert.throws(() => lib.choiceImage(pkg.id, "../meta.json"), /没有这个镜像/);
+
   await assert.rejects(uploadBuffer("copy.zip", zip), /已经在固件库里了/);
 });
 

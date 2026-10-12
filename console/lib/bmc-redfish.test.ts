@@ -271,6 +271,44 @@ test("a system that is only unhealthy in rollup names the part: the bad DIMM, no
   assert.deepEqual(problems.map((item) => item.name), ["整机"]);
 });
 
+test("firmware from the library is pushed to the BMC as multipart, streamed from disk", async () => {
+  const { UploadBody } = await import("./redfish.ts");
+  const { PassThrough } = await import("node:stream");
+  const file = path.join(temp, "image.RBU");
+  fs.writeFileSync(file, Buffer.alloc(3 * 1024 * 1024 + 7, 0xab));
+  const body = new UploadBody([
+    { name: "UpdateParameters", json: { Targets: ["/redfish/v1/UpdateService/FirmwareInventory/BIOS"] } },
+    { name: "OemParameters", json: { ImageType: "BIOS" } },
+    { name: "UpdateFile", file, filename: "image.RBU" },
+  ]);
+  const sink = new PassThrough();
+  const chunks: Buffer[] = [];
+  sink.on("data", (chunk: Buffer) => chunks.push(chunk));
+  await body.writeTo(sink);
+  const raw = Buffer.concat(chunks);
+  assert.equal(raw.length, body.length, "Content-Length 和实际发的一样");
+  const text = raw.toString("latin1");
+  assert.ok(text.includes(`--${body.boundary}\r\nContent-Disposition: form-data; name="UpdateParameters"\r\nContent-Type: application/json\r\n\r\n{"Targets":["/redfish/v1/UpdateService/FirmwareInventory/BIOS"]}\r\n`));
+  assert.ok(text.includes('name="OemParameters"\r\nContent-Type: application/json\r\n\r\n{"ImageType":"BIOS"}'));
+  assert.ok(text.includes('name="UpdateFile"; filename="image.RBU"\r\nContent-Type: application/octet-stream\r\n\r\n'));
+  assert.ok(text.endsWith(`--${body.boundary}--\r\n`));
+
+  const bmcs = setup();
+  const session = await bmc.openSession(asset);
+  const fake = bmcs.get(asset.bmcIp)!;
+  fake.docs.set("/redfish/v1/UpdateService", { MultipartHttpPushUri: "/redfish/v1/UpdateService/upload", MaxImageSizeBytes: 425119744 });
+  await bmc.pushUpdate(session, { file, fileName: "image.RBU", targets: ["/redfish/v1/UpdateService/FirmwareInventory/BIOS"], oem: { ImageType: "BIOS" } });
+  const call = fake.calls.at(-1)!;
+  assert.equal(call.path, "/redfish/v1/UpdateService/upload");
+  assert.ok(call.body instanceof UploadBody);
+  assert.deepEqual((call.body as InstanceType<typeof UploadBody>).parts.map((part) => part.name), ["UpdateParameters", "OemParameters", "UpdateFile"]);
+
+  fake.docs.set("/redfish/v1/UpdateService", { MultipartHttpPushUri: "/redfish/v1/UpdateService/upload", MaxImageSizeBytes: 1024 });
+  await assert.rejects(bmc.pushUpdate(session, { file, fileName: "image.RBU", targets: [], oem: {} }), /超过 BMC 允许/);
+  fake.docs.set("/redfish/v1/UpdateService", {});
+  await assert.rejects(bmc.pushUpdate(session, { file, fileName: "image.RBU", targets: [], oem: {} }), /不支持直接上传/);
+});
+
 test("bmc clock: offset and NTP are patched with If-Match", async () => {
   const bmcs = setup();
   const session = await bmc.openSession(asset);
