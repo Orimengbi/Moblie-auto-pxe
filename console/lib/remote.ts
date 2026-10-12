@@ -12,6 +12,9 @@ import { bmcColdReset, defaultIpmiExec, firstWorkingAccount, ipmiFailure, type I
 import { crawlRedfish, RedfishAuthError, redfishGetter, type RedfishGet } from "./redfish.ts";
 import { renderRevokeScript } from "./render.ts";
 import { jumpFor, jumpLabel, listJumpHosts, type JumpHost } from "./ssh-jump.ts";
+import { buildLogBundle, cleanupBundles, taskBundleDir } from "./bmc-log-bundle.ts";
+import { applyUserChange, cleanUserChange } from "./ipmi-users.ts";
+import { describeUserChange, type BmcUserChange } from "./ipmi-user-types.ts";
 import { addEvent, assetBmcAccounts, getAsset } from "./assets.ts";
 import { BMC_SETTING_LABEL } from "./asset-labels.ts";
 import { changeClock, collectSettings, openSession, validOffset, type ClockChange } from "./bmc-redfish.ts";
@@ -91,6 +94,8 @@ export interface TaskInput {
   bmcReset?: BmcResetVia;
   /** 设 BMC 时区和 NTP 任务要改成什么。 */
   bmcClock?: ClockChange;
+  /** BMC 用户任务在每台上做什么。 */
+  bmcUser?: BmcUserChange;
   name?: string;
   script?: string;
   /** 资产 id。 */
@@ -112,8 +117,9 @@ function boundedInt(value: unknown, fallback: number, min: number, max: number, 
 export function createTask(input: TaskInput, context: HostContext = hostContext()): RemoteTask {
   const project = input.projectId ? getProject(input.projectId) : null;
   if (input.projectId && !project) throw new Error("装机批次不存在");
-  const kind: TaskKind = input.kind === "revoke" || input.kind === "inventory" || input.kind === "bmc-reset" || input.kind === "bmc-clock" ? input.kind : "script";
+  const kind: TaskKind = (["revoke", "inventory", "bmc-reset", "bmc-clock", "bmc-logs", "bmc-user"] as const).find((item) => item === input.kind) || "script";
   const clock = kind === "bmc-clock" ? cleanClock(input.bmcClock) : undefined;
+  const userChange = kind === "bmc-user" ? cleanUserChange(input.bmcUser) : undefined;
   const via: BmcResetVia = input.bmcReset === "inband" ? "inband" : "outband";
   const script =
     kind === "revoke"
@@ -126,7 +132,11 @@ export function createTask(input: TaskInput, context: HostContext = hostContext(
             : "# 带外：控制台用资产上的 BMC 账号执行\nipmitool -I lanplus -H <BMC 地址> mc reset cold\n"
           : kind === "bmc-clock"
             ? `# 经 Redfish 改 BMC\n${JSON.stringify(clock, null, 2)}\n`
-            : (input.script || "").replace(/\r\n/g, "\n");
+            : kind === "bmc-logs"
+              ? "# 控制台经 IPMI 和 Redfish 读每台 BMC 的日志（SEL、传感器、FRU、所有 Redfish 日志服务含 HGX），每台打成一个 tar.gz\n"
+              : kind === "bmc-user"
+                ? `# 经 IPMI 在每台 BMC 上按用户名改（槽位号各台可以不一样）\n${JSON.stringify({ ...userChange, ...(userChange!.password ? { password: "******" } : {}) }, null, 2)}\n`
+                : (input.script || "").replace(/\r\n/g, "\n");
   if (!script.trim()) throw new Error("脚本是空的");
   if (script.length > 200000) throw new Error("脚本超过 200KB");
   const sources = kind === "inventory" ? (["os", "bmc"] as const).filter((source) => !input.sources || input.sources.includes(source)) : [];
@@ -135,7 +145,7 @@ export function createTask(input: TaskInput, context: HostContext = hostContext(
   const settingsName = settings.map((item) => BMC_SETTING_LABEL[item]).join("、");
   const inventoryName = sources.length ? `采集硬件配置${settings.length ? `、${settingsName}` : ""}` : `读取 ${settingsName}`;
   const defaultName =
-    kind === "revoke" ? "交付清理：撤掉控制台公钥" : kind === "inventory" ? inventoryName : kind === "bmc-reset" ? `重启 BMC（${via === "inband" ? "带内" : "带外"}）` : kind === "bmc-clock" ? clockName(clock!) : script.trim().split("\n")[0].slice(0, 80);
+    kind === "revoke" ? "交付清理：撤掉控制台公钥" : kind === "inventory" ? inventoryName : kind === "bmc-reset" ? `重启 BMC（${via === "inband" ? "带内" : "带外"}）` : kind === "bmc-clock" ? clockName(clock!) : kind === "bmc-logs" ? "收集 BMC 日志" : kind === "bmc-user" ? describeUserChange(userChange!).slice(0, 80) : script.trim().split("\n")[0].slice(0, 80);
   const name = (input.name || "").trim().slice(0, 80) || defaultName;
   const fileIds = kind === "script" ? [...new Set(input.fileIds || [])] : [];
   for (const id of fileIds) {
@@ -147,7 +157,7 @@ export function createTask(input: TaskInput, context: HostContext = hostContext(
   const targets: TaskTarget[] = wanted.map((id) => {
     const row = getAsset(id);
     if (!row) throw new Error("选中的机器已经不在资产里，刷新页面再选");
-    if ((kind === "bmc-reset" && via === "outband") || kind === "bmc-clock") {
+    if ((kind === "bmc-reset" && via === "outband") || kind === "bmc-clock" || kind === "bmc-logs" || kind === "bmc-user") {
       // 带外连的是 BMC，任务里「地址」一栏显示 BMC 地址。
       const ready = Boolean(row.bmcIp && assetBmcAccounts(row).length);
       return {
@@ -193,6 +203,7 @@ export function createTask(input: TaskInput, context: HostContext = hostContext(
     ...(settings.length ? { inventorySettings: [...settings] } : {}),
     ...(kind === "bmc-reset" ? { bmcReset: via } : {}),
     ...(clock ? { bmcClock: clock } : {}),
+    ...(userChange ? { bmcUser: userChange } : {}),
     createdAt: new Date().toISOString(),
   };
   if (task.status === "done") task.finishedAt = task.createdAt;
@@ -644,6 +655,39 @@ async function clockTarget(task: RemoteTask, target: TaskTarget): Promise<Pick<T
   }
 }
 
+/** 收集 BMC 日志任务里的一台：打成 tar.gz 放在这个任务的目录里，任务页可以下载。 */
+async function logsTarget(task: RemoteTask, target: TaskTarget): Promise<Pick<TaskTarget, "status" | "exitCode" | "output">> {
+  const asset = getAsset(target.serverId);
+  if (!asset) return { status: "failed", exitCode: null, output: "资产已经删掉了\n" };
+  const bundle = await buildLogBundle(asset, taskBundleDir(task.id));
+  const size = fs.statSync(bundle.file).size;
+  const output = `${bundle.lines.join("\n")}\n打包：${bundle.name}（${Math.max(1, Math.round(size / 1024))} KB）\n`;
+  return { status: bundle.empty ? "unreachable" : "ok", exitCode: bundle.empty ? null : 0, output };
+}
+
+/** BMC 用户任务里的一台：经 IPMI 改，成功后在资产记录里记一笔。 */
+async function userTarget(task: RemoteTask, target: TaskTarget): Promise<Pick<TaskTarget, "status" | "exitCode" | "output">> {
+  const asset = getAsset(target.serverId);
+  if (!asset) return { status: "failed", exitCode: null, output: "资产已经删掉了\n" };
+  if (!task.bmcUser?.password && (task.bmcUser?.action === "ensure" || task.bmcUser?.action === "password")) {
+    return { status: "failed", exitCode: null, output: "任务里的密码已经清掉了（任务被中断后重跑？），重新发起\n" };
+  }
+  try {
+    const done = await applyUserChange(asset, task.bmcUser!, "批量任务");
+    addEvent(asset.id, "bmc", `${done.join("，")}（任务「${task.name}」）`, "批量任务");
+    return { status: "ok", exitCode: 0, output: `${done.join("\n")}\n` };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "修改失败";
+    return { status: /没有回应|不接受|还没有 BMC|没有 BMC 账号/.test(message) ? "unreachable" : "failed", exitCode: null, output: `${message}\n` };
+  }
+}
+
+/** 接口和页面拿到的任务：去掉 BMC 用户任务里的密码。 */
+export function publicTask(task: RemoteTask): RemoteTask {
+  if (!task.bmcUser?.password) return task;
+  return { ...task, bmcUser: { ...task.bmcUser, password: "" } };
+}
+
 /** 重启 BMC 任务里的一台：成功后在资产记录里记一笔。 */
 async function resetBmcTarget(task: RemoteTask, target: TaskTarget, exec: Exec): Promise<Pick<TaskTarget, "status" | "exitCode" | "output">> {
   const via = task.bmcReset || "outband";
@@ -683,7 +727,11 @@ export async function runTask(id: string, exec: Exec = defaultExec, redfish: Red
               ? await resetBmcTarget(task, target, exec)
               : task.kind === "bmc-clock"
                 ? await clockTarget(task, target)
-                : await runOnHost(task, target, files, exec),
+                : task.kind === "bmc-logs"
+                  ? await logsTarget(task, target)
+                  : task.kind === "bmc-user"
+                    ? await userTarget(task, target)
+                    : await runOnHost(task, target, files, exec),
         );
       } catch (error) {
         target.status = "failed";
@@ -693,9 +741,11 @@ export async function runTask(id: string, exec: Exec = defaultExec, redfish: Red
       writeTask(task);
     }
   };
+  if (task.kind === "bmc-logs") cleanupBundles();
   await Promise.all(Array.from({ length: Math.min(task.concurrency, queue.length) }, worker));
   task.status = "done";
   task.finishedAt = new Date().toISOString();
+  if (task.bmcUser?.password) task.bmcUser = { ...task.bmcUser, password: "" };
   writeTask(task);
   return task;
 }

@@ -19,14 +19,23 @@ export type TaskState = "running" | "paused" | "error" | "done";
 export interface LiveUpload extends PendingUpload {
   state: TaskState;
   error?: string;
+  /** image 镜像，firmware 固件库的固件包。 */
+  kind?: UploadKind;
+  /** 固件包传完、识别好以后的 id，固件库页面用它打开详情。 */
+  resultId?: string;
 }
+
+export type UploadKind = "image" | "firmware";
+
+/** 两种上传各自的接口地址。 */
+const ENDPOINT: Record<UploadKind, string> = { image: "/api/images/uploads", firmware: "/api/firmware-lib/uploads" };
 
 interface UploadApi {
   live: Record<string, LiveUpload>;
   running: boolean;
   hasFile: (id: string) => boolean;
-  /** 新传一个文件，或者传入原来的会话接着传。 */
-  run: (file: File, name: string) => void;
+  /** 新传一个文件。kind 不给是镜像。 */
+  run: (file: File, name: string, kind?: UploadKind) => void;
   resume: (id: string) => boolean;
   pause: () => void;
   cancel: (item: PendingUpload) => Promise<string | null>;
@@ -61,13 +70,13 @@ export function useUploads(): UploadApi {
 }
 
 /** 发一段。网络断开或控制台 5xx 时等一会再试；服务器说位置不对时按它的位置继续。 */
-async function sendChunk(id: string, selected: File, offset: number, signal: AbortSignal): Promise<{ offset: number; done: boolean }> {
+async function sendChunk(kind: UploadKind, id: string, selected: File, offset: number, signal: AbortSignal): Promise<{ offset: number; done: boolean; resultId?: string }> {
   for (let attempt = 0; attempt < RETRIES; attempt += 1) {
     if (attempt) await new Promise((resolve) => setTimeout(resolve, attempt * 2000));
     if (signal.aborted) throw new Paused();
     let response: Response;
     try {
-      response = await fetch(`/api/images/uploads/${id}`, {
+      response = await fetch(`${ENDPOINT[kind]}/${id}`, {
         method: "PATCH",
         headers: { "upload-offset": String(offset), "content-type": "application/octet-stream" },
         body: selected.slice(offset, Math.min(offset + CHUNK, selected.size)),
@@ -81,7 +90,7 @@ async function sendChunk(id: string, selected: File, offset: number, signal: Abo
     if (response.status === 409 && Number.isInteger(body.offset)) return { offset: body.offset, done: false };
     if (response.status >= 500) continue;
     if (!response.ok) throw new Error(body.error || "上传中断");
-    return { offset: body.offset, done: Boolean(body.image) };
+    return { offset: body.offset, done: Boolean(body.image || body.package), resultId: body.package?.id };
   }
   throw new Error(`网络断开，重试 ${RETRIES} 次都没成功`);
 }
@@ -105,13 +114,13 @@ export function UploadProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const run = useCallback(
-    async (selected: File, name: string) => {
+    async (selected: File, name: string, kind: UploadKind = "image") => {
       if (abort.current) return;
       const controller = new AbortController();
       abort.current = controller;
       let id = "";
       try {
-        const opened = await fetch("/api/images/uploads", {
+        const opened = await fetch(ENDPOINT[kind], {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ filename: selected.name, size: selected.size, name, fingerprint: fingerprintOf(selected) }),
@@ -121,12 +130,22 @@ export function UploadProvider({ children }: { children: React.ReactNode }) {
         id = session.id;
         files.current.set(id, selected);
         let offset = Number(session.offset) || 0;
-        const task: LiveUpload = { id, filename: session.filename, name: session.name, size: session.size, offset, fingerprint: session.fingerprint, updatedAt: session.updatedAt, state: "running" };
+        const task: LiveUpload = {
+          id,
+          filename: session.filename || selected.name,
+          name: session.name || name,
+          size: session.size || selected.size,
+          offset,
+          fingerprint: session.fingerprint || fingerprintOf(selected),
+          updatedAt: session.updatedAt || new Date().toISOString(),
+          state: "running",
+          kind,
+        };
         setLive((current) => ({ ...current, [id]: task }));
         while (offset < selected.size) {
-          const sent = await sendChunk(id, selected, offset, controller.signal);
+          const sent = await sendChunk(kind, id, selected, offset, controller.signal);
           offset = sent.offset;
-          patch(id, { offset, updatedAt: new Date().toISOString() });
+          patch(id, { offset, updatedAt: new Date().toISOString(), ...(sent.resultId ? { resultId: sent.resultId } : {}) });
           if (sent.done) break;
         }
         files.current.delete(id);
@@ -136,7 +155,7 @@ export function UploadProvider({ children }: { children: React.ReactNode }) {
         if (!id) {
           // 会话都没开起来，就挂一个临时任务把原因显示出来。
           id = `failed-${Date.now()}`;
-          const failed: LiveUpload = { id, filename: selected.name, name, size: selected.size, offset: 0, fingerprint: fingerprintOf(selected), updatedAt: new Date().toISOString(), state: "error", error: message };
+          const failed: LiveUpload = { id, filename: selected.name, name, size: selected.size, offset: 0, fingerprint: fingerprintOf(selected), updatedAt: new Date().toISOString(), state: "error", error: message, kind };
           setLive((current) => ({ ...current, [id]: failed }));
         } else if (uploadError instanceof Paused) {
           patch(id, { state: "paused", error: undefined });
@@ -155,10 +174,22 @@ export function UploadProvider({ children }: { children: React.ReactNode }) {
     live,
     running,
     hasFile: (id) => files.current.has(id),
-    run: (file, name) => void run(file, name),
+    run: (file, name, kind) => void run(file, name, kind),
     resume: (id) => {
       const file = files.current.get(id);
       if (!file) return false;
+      // 固件包的会话不能接着传（最后一段到了才识别），重新开一个。
+      if (live[id]?.kind === "firmware") {
+        void fetch(`${ENDPOINT.firmware}/${id}`, { method: "DELETE" }).catch(() => null);
+        files.current.delete(id);
+        setLive((current) => {
+          const next = { ...current };
+          delete next[id];
+          return next;
+        });
+        void run(file, live[id]?.name || "", "firmware");
+        return true;
+      }
       void run(file, live[id]?.name || "");
       return true;
     },
@@ -166,7 +197,7 @@ export function UploadProvider({ children }: { children: React.ReactNode }) {
     cancel: async (item) => {
       if (live[item.id]?.state === "running") abort.current?.abort();
       if (!item.id.startsWith("failed-")) {
-        const response = await fetch(`/api/images/uploads/${item.id}`, { method: "DELETE" });
+        const response = await fetch(`${ENDPOINT[(item as LiveUpload).kind || "image"]}/${item.id}`, { method: "DELETE" });
         const body = await response.json().catch(() => ({}));
         if (!response.ok && response.status !== 404) return body.error || "取消失败";
       }

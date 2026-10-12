@@ -5,6 +5,7 @@ import Link from "next/link";
 import Accordion from "@mui/material/Accordion";
 import AccordionDetails from "@mui/material/AccordionDetails";
 import AccordionSummary from "@mui/material/AccordionSummary";
+import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import ButtonBase from "@mui/material/ButtonBase";
@@ -19,12 +20,17 @@ import { taskTargetTone } from "@/lib/asset-labels";
 import type { RemoteTask, TaskTargetStatus } from "@/lib/types";
 import { formatTime } from "@/lib/time";
 
-const KIND: Record<RemoteTask["kind"], string> = { script: "执行脚本", inventory: "采集硬件配置", revoke: "交付清理", "bmc-reset": "重启 BMC", "bmc-clock": "设 BMC 时区" };
+const KIND: Record<RemoteTask["kind"], string> = { script: "执行脚本", inventory: "采集硬件配置", revoke: "交付清理", "bmc-reset": "重启 BMC", "bmc-clock": "设 BMC 时区", "bmc-logs": "收集 BMC 日志", "bmc-user": "BMC 用户" };
 
 const MONO = "var(--font-geist-mono), monospace";
 const OUTPUT_SX = { m: 0, overflow: "auto", borderRadius: 1, bgcolor: "action.hover", p: 1, fontFamily: MONO, fontSize: 12, whiteSpace: "pre-wrap" } as const;
 
 /** 一个批量任务的详情：每台机器的状态、地址、退出码和输出。执行中每 3 秒刷新。 */
+/** 收集日志任务每台输出里「打包：xxx.tar.gz（…）」那一行的文件名。 */
+function bundleName(output: string): string {
+  return output.match(/打包：(\S+\.tar\.gz)/)?.[1] || "";
+}
+
 export function TaskDetail({ initial, project, tags }: { initial: RemoteTask; project: { id: string; name: string } | null; tags: Record<string, string> }) {
   const [task, setTask] = useState(initial);
   const [open, setOpen] = useState<string[]>(() => (initial.targets.length === 1 ? [initial.targets[0].serverId] : []));
@@ -89,6 +95,19 @@ export function TaskDetail({ initial, project, tags }: { initial: RemoteTask; pr
         </Accordion>
       ) : null}
 
+      {task.kind === "bmc-logs" && by("ok") ? (
+        <Alert
+          severity="success"
+          action={
+            <Button component="a" href={`/api/tasks/${task.id}/logs`} download>
+              下载全部（{by("ok")} 台）
+            </Button>
+          }
+        >
+          日志包留 7 天。下载的是一个 tar，里面每台一个 tar.gz；单台的在下面展开后下载。
+        </Alert>
+      ) : null}
+
       <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center" }}>
         <Button variant={filter === "all" ? "contained" : "outlined"} onClick={() => setFilter("all")}>
           全部（{task.targets.length}）
@@ -128,6 +147,11 @@ export function TaskDetail({ initial, project, tags }: { initial: RemoteTask; pr
                   <Box component="pre" sx={{ ...OUTPUT_SX, maxHeight: 512 }}>
                     {target.output || (target.status === "pending" ? "（还在排队）" : target.status === "running" ? "（执行中，结束后显示输出）" : "（没有输出）")}
                   </Box>
+                  {task.kind === "bmc-logs" && target.status === "ok" && bundleName(target.output) ? (
+                    <MuiLink href={`/api/tasks/${task.id}/logs?file=${encodeURIComponent(bundleName(target.output))}`} download variant="caption" sx={{ width: "fit-content" }}>
+                      下载这台的日志包
+                    </MuiLink>
+                  ) : null}
                   {tags[target.serverId] ? (
                     <MuiLink component={Link} href={`/assets?open=${target.serverId}`} variant="caption" sx={{ width: "fit-content" }}>
                       打开这台资产

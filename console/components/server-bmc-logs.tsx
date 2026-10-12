@@ -5,6 +5,7 @@ import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Checkbox from "@mui/material/Checkbox";
 import FormControlLabel from "@mui/material/FormControlLabel";
+import LinearProgress from "@mui/material/LinearProgress";
 import MenuItem from "@mui/material/MenuItem";
 import Paper from "@mui/material/Paper";
 import Stack from "@mui/material/Stack";
@@ -45,6 +46,67 @@ function Entry({ at, severity, title, detail, hint }: { at: string; severity: st
         ) : null}
       </Box>
     </Stack>
+  );
+}
+
+/** 下载文件：响应体存成 blob 再点一下链接，文件名取响应头里的。 */
+export async function saveResponse(response: Response, fallback: string): Promise<void> {
+  const blob = await response.blob();
+  const disposition = response.headers.get("content-disposition") || "";
+  const name = decodeURIComponent(disposition.match(/filename\*=UTF-8''([^;]+)/)?.[1] || disposition.match(/filename="([^"]+)"/)?.[1] || fallback);
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = name;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+/** 把这台所有 BMC 日志现读一遍打成 tar.gz 下载。 */
+function LogDownload({ assetId }: { assetId: string }) {
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState("");
+  const [summary, setSummary] = useState("");
+
+  async function download() {
+    setPending(true);
+    setError("");
+    setSummary("");
+    const response = await fetch(`/api/assets/${assetId}/logs`).catch(() => null);
+    if (!response) setError("没有连上控制台");
+    else if (!response.ok) setError(((await response.json().catch(() => ({}))) as { error?: string }).error || `下载失败（HTTP ${response.status}）`);
+    else {
+      setSummary(decodeURIComponent(response.headers.get("x-log-summary") || ""));
+      await saveResponse(response, "bmc-logs.tar.gz");
+    }
+    setPending(false);
+  }
+
+  return (
+    <Paper variant="outlined" sx={{ p: 2 }}>
+      <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} sx={{ alignItems: { sm: "center" } }}>
+        <Box sx={{ flex: 1 }}>
+          <Typography variant="subtitle2">下载日志</Typography>
+          <Typography variant="body2" color="text.secondary">
+            现读 IPMI 的 SEL、传感器、FRU 和 Redfish 上所有日志（含 HGX 底板、HGX BMC），打成一个 tar.gz。要一两分钟。
+          </Typography>
+        </Box>
+        <Button variant="outlined" disabled={pending} onClick={() => void download()}>
+          {pending ? "正在读取…" : "打包下载"}
+        </Button>
+      </Stack>
+      {pending ? <LinearProgress sx={{ mt: 1.5 }} /> : null}
+      {error ? (
+        <Typography variant="body2" color="error" sx={{ mt: 1 }}>
+          {error}
+        </Typography>
+      ) : null}
+      {summary ? (
+        <Box component="pre" sx={{ mt: 1.5, mb: 0, p: 1, bgcolor: "action.hover", borderRadius: 1, fontSize: 12, whiteSpace: "pre-wrap", maxHeight: 200, overflow: "auto" }}>
+          {summary}
+        </Box>
+      ) : null}
+    </Paper>
   );
 }
 
@@ -124,6 +186,7 @@ export function ServerBmcLogs({ assetId }: { assetId: string }) {
 
   return (
     <Stack spacing={2}>
+      <LogDownload assetId={assetId} />
       <Paper variant="outlined" sx={{ p: 2 }}>
         <Typography variant="subtitle2">实时事件</Typography>
         {stream ? <EventStreamLine status={stream.stream} /> : null}

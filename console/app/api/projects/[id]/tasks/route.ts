@@ -1,6 +1,6 @@
 import { auditTask, jsonError, readJson } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
-import { createTask, startTask, type TaskInput } from "@/lib/remote";
+import { createTask, publicTask, startTask, type TaskInput } from "@/lib/remote";
 import { getProject, listTasks } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
@@ -8,17 +8,19 @@ export const dynamic = "force-dynamic";
 export async function GET(_: Request, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;
   if (!getProject(id)) return jsonError(new Error("项目不存在"), 404);
-  return Response.json(listTasks(id));
+  return Response.json(listTasks(id).map(publicTask));
 }
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await context.params;
     const identity = requireUser(request);
-    const task = createTask({ ...(await readJson<TaskInput>(request)), projectId: id });
+    const input = await readJson<TaskInput>(request);
+    if (input.kind === "bmc-user" && identity.user.role !== "admin") return Response.json({ error: "改 BMC 用户要管理员" }, { status: 403 });
+    const task = createTask({ ...input, projectId: id });
     startTask(task);
     auditTask(request, identity, task);
-    return Response.json(task);
+    return Response.json(publicTask(task));
   } catch (error) {
     return jsonError(error);
   }

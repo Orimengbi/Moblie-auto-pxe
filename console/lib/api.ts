@@ -24,7 +24,7 @@ export function auditRequest(request: Request, identity: Identity | null, entry:
 
 /** 批量任务的审计：一台时对象是那台资产，多台时是任务本身。 */
 export function auditTask(request: Request, identity: Identity, task: RemoteTask): void {
-  const kind = task.kind === "inventory" ? "采集硬件" : task.kind === "revoke" ? "交付清理" : task.kind === "bmc-reset" ? "重启 BMC" : task.kind === "bmc-clock" ? "设 BMC 时区" : "执行脚本";
+  const kind = task.kind === "inventory" ? "采集硬件" : task.kind === "revoke" ? "交付清理" : task.kind === "bmc-reset" ? "重启 BMC" : task.kind === "bmc-clock" ? "设 BMC 时区" : task.kind === "bmc-logs" ? "收集 BMC 日志" : task.kind === "bmc-user" ? "BMC 用户" : "执行脚本";
   const sns = task.targets.map((target) => target.sn);
   auditRequest(request, identity, {
     action: `发起任务：${kind}`,

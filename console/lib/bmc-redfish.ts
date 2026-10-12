@@ -984,6 +984,48 @@ export async function readLog(
   return { total, entries: list.map(entryView).reverse().filter((entry) => !alerts || isAlertEntry(entry)), sorted: false };
 }
 
+/**
+ * 下载用：整份读一个日志，旧的在前，给原始文档和整理过的条目。超过 cap 条的不读（HGX BMC 的 Journal 十来万条，
+ * 经 HMC 转一手翻到最后几页要几分钟），只给 total，由调用方说明。
+ */
+export async function readLogForExport(session: BmcSession, servicePath: string, cap = 5000): Promise<{ total: number; raw: RedfishDoc[]; entries: LogEntryView[]; skipped: boolean }> {
+  if (!/^\/redfish\/v1\/(Managers|Systems)\/[^/]+\/LogServices\/[^/?#]+$/.test(servicePath)) throw new RedfishFailure("日志路径不对");
+  const service = await rfGet(session, servicePath);
+  const entries = link(service, "Entries");
+  if (!entries) return { total: 0, raw: [], entries: [], skipped: false };
+  const head = await rfGet(session, `${entries}?$top=1`);
+  const total = num(head["Members@odata.count"]) ?? 0;
+  if (!total) return { total: 0, raw: [], entries: [], skipped: false };
+  if (total > cap) return { total, raw: [], entries: [], skipped: true };
+  let raw = await readWholeLog(session, entries, total);
+  if (!raw) {
+    // 只给链接没给内容：一条条读。
+    raw = [];
+    const listed = await rfGet(session, entries);
+    for (const item of members(listed)) {
+      const one = await rfFind(session, item);
+      if (one) raw.push(one);
+    }
+  }
+  return { total, raw, entries: raw.map(entryView).sort((a, b) => -newestFirst(a, b)), skipped: false };
+}
+
+/**
+ * 按用户名删一个 BMC 账号（Redfish AccountService）。AMI 不让经 IPMI 清空用户名，只能这样把槽位空出来。
+ * 找不到这个账号返回 false。
+ */
+export async function deleteAccount(session: BmcSession, userName: string): Promise<boolean> {
+  const list = await rfGet(session, "/redfish/v1/AccountService/Accounts");
+  for (const target of members(list)) {
+    const doc = await rfFind(session, target);
+    if (!doc || str(doc.UserName).toLowerCase() !== userName.toLowerCase()) continue;
+    const etag = str(doc["@odata.etag"]);
+    ok(await session.request("DELETE", target, undefined, etag ? { "If-Match": etag } : undefined), "删除账号失败");
+    return true;
+  }
+  return false;
+}
+
 export async function clearLog(session: BmcSession, servicePath: string): Promise<void> {
   if (!/^\/redfish\/v1\/(Managers|Systems)\/[^/]+\/LogServices\/[^/?#]+$/.test(servicePath)) throw new RedfishFailure("日志路径不对");
   const service = await rfGet(session, servicePath);

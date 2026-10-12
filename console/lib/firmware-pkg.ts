@@ -86,8 +86,14 @@ export function zipEntries(file: string): ZipEntry[] {
         const length = extra.readUInt16LE(e + 2);
         if (id === 0x0001) {
           let field = e + 4;
-          if (size === 0xffffffff) (size = Number(extra.readBigUInt64LE(field))), (field += 8);
-          if (compressedSize === 0xffffffff) (compressedSize = Number(extra.readBigUInt64LE(field))), (field += 8);
+          if (size === 0xffffffff) {
+            size = Number(extra.readBigUInt64LE(field));
+            field += 8;
+          }
+          if (compressedSize === 0xffffffff) {
+            compressedSize = Number(extra.readBigUInt64LE(field));
+            field += 8;
+          }
           if (offset === 0xffffffff) offset = Number(extra.readBigUInt64LE(field));
         }
         e += 4 + length;

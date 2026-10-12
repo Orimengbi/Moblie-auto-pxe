@@ -19,7 +19,7 @@ import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import { DataGrid, type GridColDef } from "@mui/x-data-grid";
 import { StatusChip } from "@/components/mui/status-chip";
-import { formatBytes } from "@/components/upload-provider";
+import { formatBytes, useUploads } from "@/components/upload-provider";
 import type { Tone } from "@/lib/asset-labels";
 import { api } from "@/lib/client-api";
 import {
@@ -34,18 +34,10 @@ import {
 import { formatTime } from "@/lib/time";
 
 const MONO = "var(--font-geist-mono), monospace";
-const CHUNK = 4 * 1024 * 1024;
-const RETRIES = 5;
 const NATIVE_LABELED = { select: { native: true }, inputLabel: { shrink: true } } as const;
 
 const RELATION_TONE: Record<VersionRelation | "unread", Tone> = { same: "success", older: "warning", newer: "info", unknown: "neutral", unread: "neutral" };
 
-interface Uploading {
-  name: string;
-  size: number;
-  sent: number;
-  stage: "upload" | "analyze";
-}
 
 function ChecksumChip({ pkg }: { pkg: FirmwarePackage }) {
   if (!pkg.checksum) return <StatusChip tone="neutral" outlined label="说明里没写" />;
@@ -103,17 +95,9 @@ export function FirmwareLibrary({ packages, admin }: { packages: FirmwarePackage
   const [kind, setKind] = useState<FirmwareKind | "">("");
   const [q, setQ] = useState("");
   const [open, setOpen] = useState<string | null>(null);
-  const [uploading, setUploading] = useState<Uploading | null>(null);
+  const uploads = useUploads();
   const [error, setError] = useState("");
   const input = useRef<HTMLInputElement>(null);
-  const cancelled = useRef(false);
-
-  useEffect(() => {
-    if (!uploading) return;
-    const warn = (event: BeforeUnloadEvent) => event.preventDefault();
-    window.addEventListener("beforeunload", warn);
-    return () => window.removeEventListener("beforeunload", warn);
-  }, [uploading]);
 
   const counts = useMemo(() => {
     const map = new Map<string, number>();
@@ -126,55 +110,27 @@ export function FirmwareLibrary({ packages, admin }: { packages: FirmwarePackage
     return packages.filter((pkg) => (!kind || pkg.kind === kind) && (!needle || [pkg.fileName, pkg.vendor, pkg.version, ...pkg.models, pkg.note].join(" ").toLowerCase().includes(needle)));
   }, [packages, kind, q]);
 
-  async function upload(file: File) {
+  // 上传在全局的 UploadProvider 里跑，换页面不断；这里只发起和显示进度。
+  const firmwareUploads = Object.values(uploads.live).filter((item) => item.kind === "firmware");
+  const active = firmwareUploads.filter((item) => item.state !== "done");
+
+  useEffect(() => {
+    for (const item of firmwareUploads) {
+      if (item.state !== "done") continue;
+      uploads.dismiss(item.id);
+      router.refresh();
+      if (item.resultId) setOpen(item.resultId);
+    }
+  }, [firmwareUploads, uploads, router]);
+
+  function upload(file: File) {
     setError("");
-    cancelled.current = false;
-    setUploading({ name: file.name, size: file.size, sent: 0, stage: "upload" });
-    const opened = await api<{ id: string }>("/api/firmware-lib/uploads", "POST", { filename: file.name, size: file.size });
-    if (!opened.ok) {
-      setUploading(null);
-      setError(opened.error);
+    if (uploads.running) {
+      setError("正在传别的文件，传完再传这个");
       return;
     }
-    const id = opened.data.id;
-    let offset = 0;
-    try {
-      while (offset < file.size) {
-        if (cancelled.current) {
-          await api(`/api/firmware-lib/uploads/${id}`, "DELETE");
-          return;
-        }
-        const end = Math.min(offset + CHUNK, file.size);
-        if (end === file.size) setUploading((current) => current && { ...current, stage: "analyze" });
-        let result: { offset?: number; package?: FirmwarePackage | null; error?: string } | null = null;
-        for (let attempt = 0; attempt < RETRIES && !result; attempt++) {
-          if (attempt) await new Promise((resolve) => setTimeout(resolve, attempt * 2000));
-          const response = await fetch(`/api/firmware-lib/uploads/${id}`, {
-            method: "PATCH",
-            headers: { "upload-offset": String(offset), "content-type": "application/octet-stream" },
-            body: file.slice(offset, end),
-          }).catch(() => null);
-          if (!response || response.status >= 500) continue;
-          const body = await response.json().catch(() => ({}));
-          if (response.status === 409 && Number.isInteger(body.offset)) result = { offset: body.offset };
-          else if (!response.ok) throw new Error(body.error || "上传失败");
-          else result = body;
-        }
-        if (!result) throw new Error(`网络断开，重试 ${RETRIES} 次都没成功`);
-        offset = result.offset ?? offset;
-        setUploading((current) => current && { ...current, sent: offset });
-        if (result.package) {
-          router.refresh();
-          setOpen(result.package.id);
-        }
-      }
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "上传失败");
-      await api(`/api/firmware-lib/uploads/${id}`, "DELETE");
-    } finally {
-      setUploading(null);
-      if (input.current) input.current.value = "";
-    }
+    uploads.run(file, file.name, "firmware");
+    if (input.current) input.current.value = "";
   }
 
   const columns: GridColDef<FirmwarePackageView>[] = [
@@ -258,10 +214,10 @@ export function FirmwareLibrary({ packages, admin }: { packages: FirmwarePackage
               hidden
               onChange={(event) => {
                 const file = event.target.files?.[0];
-                if (file) void upload(file);
+                if (file) upload(file);
               }}
             />
-            <Button variant="contained" disabled={Boolean(uploading)} onClick={() => input.current?.click()}>
+            <Button variant="contained" disabled={uploads.running} onClick={() => input.current?.click()}>
               上传固件包
             </Button>
           </Box>
@@ -271,24 +227,48 @@ export function FirmwareLibrary({ packages, admin }: { packages: FirmwarePackage
           </Typography>
         )}
       </Stack>
-      {uploading ? (
-        <Paper variant="outlined" sx={{ p: 2 }}>
-          <Stack direction="row" spacing={2} sx={{ alignItems: "center", mb: 1 }}>
-            <Typography variant="body2" sx={{ fontFamily: MONO, flex: 1, minWidth: 0, overflowWrap: "anywhere" }}>
-              {uploading.name}
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              {uploading.stage === "analyze" ? "传完了，正在解包识别…" : `${formatBytes(uploading.sent)} / ${formatBytes(uploading.size)}`}
-            </Typography>
-            {uploading.stage === "upload" ? (
-              <Button size="small" onClick={() => (cancelled.current = true)}>
-                取消
-              </Button>
+      {active.map((item) => {
+        const analyzing = item.state === "running" && item.offset >= item.size;
+        return (
+          <Paper key={item.id} variant="outlined" sx={{ p: 2 }}>
+            <Stack direction="row" spacing={2} sx={{ alignItems: "center", mb: 1 }}>
+              <Typography variant="body2" sx={{ fontFamily: MONO, flex: 1, minWidth: 0, overflowWrap: "anywhere" }}>
+                {item.filename}
+              </Typography>
+              <Typography variant="body2" color={item.state === "error" ? "error" : "text.secondary"}>
+                {analyzing
+                  ? "传完了，正在解包识别…"
+                  : item.state === "error"
+                    ? item.error || "上传中断"
+                    : item.state === "paused"
+                      ? `已暂停 ${formatBytes(item.offset)} / ${formatBytes(item.size)}`
+                      : `${formatBytes(item.offset)} / ${formatBytes(item.size)}`}
+              </Typography>
+              {item.state === "running" && !analyzing ? (
+                <Button size="small" onClick={uploads.pause}>
+                  暂停
+                </Button>
+              ) : null}
+              {item.state !== "running" && uploads.hasFile(item.id) ? (
+                <Button size="small" disabled={uploads.running} onClick={() => uploads.resume(item.id)}>
+                  重新传
+                </Button>
+              ) : null}
+              {!analyzing ? (
+                <Button size="small" onClick={() => void uploads.cancel(item)}>
+                  取消
+                </Button>
+              ) : null}
+            </Stack>
+            <LinearProgress variant={analyzing ? "indeterminate" : "determinate"} color={item.state === "error" ? "error" : "primary"} value={item.size ? (item.offset / item.size) * 100 : 0} />
+            {item.state === "running" ? (
+              <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
+                可以切到别的页面，上传在后台继续，右上角「任务」里能看到进度；关掉或刷新浏览器标签会中断。
+              </Typography>
             ) : null}
-          </Stack>
-          <LinearProgress variant={uploading.stage === "analyze" ? "indeterminate" : "determinate"} value={uploading.size ? (uploading.sent / uploading.size) * 100 : 0} />
-        </Paper>
-      ) : null}
+          </Paper>
+        );
+      })}
       {error ? (
         <Alert severity="error" onClose={() => setError("")}>
           {error}

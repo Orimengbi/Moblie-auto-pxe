@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { PageHeader } from "@/components/page-header";
 import { TaskDetail } from "@/components/task-detail";
 import { listAssets } from "@/lib/assets";
+import { publicTask } from "@/lib/remote";
 import { getProject, getTask } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
@@ -16,7 +17,7 @@ export default async function TaskPage({ params }: { params: Promise<{ id: strin
   return (
     <div>
       <PageHeader title={task.name} description="每台机器的执行结果。点一行看完整输出。" />
-      <TaskDetail initial={task} project={project ? { id: project.id, name: project.name } : null} tags={tags} />
+      <TaskDetail initial={publicTask(task)} project={project ? { id: project.id, name: project.name } : null} tags={tags} />
     </div>
   );
 }
