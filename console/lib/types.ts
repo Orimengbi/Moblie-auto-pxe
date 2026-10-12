@@ -1092,4 +1092,6 @@ export interface MonitorSettings {
   bmcFailuresToAlert: number;
   /** 经 Redfish SSE 长连着收 BMC 的实时事件。 */
   redfishEvents: boolean;
+  /** 内存可纠正 ECC 多少小时没再出现就自动解除。 */
+  memEccQuietHours: number;
 }

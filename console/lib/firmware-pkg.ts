@@ -230,19 +230,44 @@ export function parseReleaseNotes(text: string): ReleaseNotes {
     notes.kind = kindOf(generic[2]);
     notes.version = generic[3].replace(/[.,;]$/, "");
   }
+  // 技嘉通用 BMC 包（server_firmware_ast2600_*）的发布说明没有「BMC Release Notes」标题，只有一张表：
+  //   BMC  OLD: N/A  NEW: N/A  N/A  SUM:0x11D5F360
+  //   SMT  OLD:13.06.28  NEW: 13.06.29  2026/08/11  F360, ...
+  const smt = generic ? null : text.match(/(?:^|\n)\s*SMT\s+OLD:\s*\S+\s+NEW:\s*(\d+(?:\.\d+)+)\s+(\d{4}\/\d{1,2}\/\d{1,2})/i);
+  const bmcSum = smt && text.match(/(?:^|\n)\s*BMC\b[^\n]*?SUM:\s*(0x[0-9A-F]+)/i);
+  if (smt && bmcSum) {
+    notes.kind = "bmc";
+    notes.version = smt[1];
+    notes.buildDate = smt[2];
+    notes.checksum = `0x${bmcSum[1].slice(2).toUpperCase()}`;
+    // 改动表：「F –Feature, B – Bug fixed」之后，本版本那一段（到下一个「版本号(日期)」为止）。
+    const table = text.split(/F\s*[–-]\s*Feature,\s*B\s*[–-]\s*Bug fixed/i)[1] || "";
+    const header = new RegExp(`(?:^|\\n)[^\\n]*?${smt[1].replace(/\./g, "\\.")}\\s*\\(\\d{4}\\/[^\\n]*`);
+    const start = table.match(header);
+    if (start) {
+      const rest = table.slice((start.index || 0) + start[0].length);
+      const end = rest.search(/\n[^\n]*?\d+(?:\.\d+){2,}\s*\(\d{4}\/\d{1,2}\/\d{1,2}\)/);
+      notes.changes = (end < 0 ? rest : rest.slice(0, end))
+        .split("\n")
+        .filter((line) => line.trim() && !/技嘉科技|GIGA\s*-?BYTE TECHNOLOGY/i.test(line))
+        .map((line) => line.replace(/\s+$/, "").replace(/^\s{4,}/, "  "))
+        .join("\n")
+        .slice(0, 4000);
+    }
+  }
   const system = text.match(/(?:^|\n)\s*(?:System|Systems|Supported (?:System|Platform)s?|Platform)s?\s*:\s*([\s\S]*?)(?=\n\s*\n|\n\s*[A-Z][A-Za-z ]{2,30}:|\n\s*About This Release)/i);
   if (system) {
     notes.models = [...new Set(system[1].split(/[\s,，;；/]+/).map((token) => token.trim()).filter((token) => MODEL_TOKEN.test(token)))];
   }
   // 标题里的主板名（MZB3-PE2）一般是适用列表里某个型号（MZB3-PE2-000）的前缀，那就不另列。
   if (notes.board && MODEL_TOKEN.test(notes.board) && !notes.models.some((model) => model === notes.board || model.startsWith(`${notes.board}-`))) notes.models.unshift(notes.board);
-  notes.buildDate = text.match(/Build Date\s*:\s*(\S+)/i)?.[1] || "";
+  notes.buildDate = text.match(/Build Date\s*:\s*(\S+)/i)?.[1] || notes.buildDate;
   const checksum = text.match(/Checksum\s*:\s*(0x[0-9A-F]+)(?:\s*\((\d+)\s*M\))?/i);
   if (checksum) {
     notes.checksum = `0x${checksum[1].slice(2).toUpperCase()}`;
     notes.checksumSizeMb = Number(checksum[2] || 0);
   }
-  const fixed = text.match(/(?:Issues fixed in this version|Fixed Issues|Changes in this release|What's New)\s*\n([\s\S]*)/i);
+  const fixed = notes.changes ? null : text.match(/(?:Issues fixed in this version|Fixed Issues|Changes in this release|What's New)\s*\n([\s\S]*)/i);
   if (fixed) {
     const lines = fixed[1].split("\n");
     const kept: string[] = [];
@@ -467,6 +492,13 @@ export async function analyzeTree(root: string, fileName: string, knownModels: s
     if (parsed.changes && !changeBlocks.includes(parsed.changes)) changeBlocks.push(parsed.changes);
     if (parsed.version && (!notes || better(parsed, notes))) notes = parsed;
   }
+  // 技嘉 BMC 包带一份适用机型清单 projects.txt（逗号分开，上千个）。
+  let listedModels: string[] = [];
+  for (const relative of files) {
+    const full = path.join(root, relative);
+    if (!/(^|\/)[^/]*projects?[^/]*\.txt$/i.test(relative) || fs.statSync(full).size > 1024 * 1024) continue;
+    listedModels = [...new Set([...listedModels, ...fs.readFileSync(full, "utf8").split(/[\s,，;；]+/).filter((token) => MODEL_TOKEN.test(token))])];
+  }
   if (files.some((relative) => /\.pdf$/i.test(relative)) && !notes) warnings.push("包里有 PDF 但读不出发布说明（控制台没装 pdftotext 或 PDF 是扫描件）");
 
   const sums: { file: string; size: number; sum: number }[] = [];
@@ -495,9 +527,10 @@ export async function analyzeTree(root: string, fileName: string, knownModels: s
       components.push(...parsed.components);
       continue;
     }
-    const ext = base.match(/\.(rom|bin|ima|img|hpm|fwpkg)$/i)?.[1].toLowerCase();
+    const ext = base.match(/\.(rom|bin|ima|ima_enc|img|hpm|fwpkg)$/i)?.[1].toLowerCase();
     if (ext && size >= 256 * 1024) {
-      images.push({ path: relative, size, type: ext === "rom" ? "rom" : ext === "ima" || ext === "img" || ext === "hpm" ? "ima" : "bin", note: ext === "ima" ? "BMC 镜像" : "固件镜像" });
+      const note = ext === "ima" ? "BMC 镜像" : ext === "ima_enc" ? "BMC 加密镜像（网页 / Redfish 升级用）" : "固件镜像";
+      images.push({ path: relative, size, type: ext === "rom" ? "rom" : ext === "bin" ? "bin" : "ima", note });
       if (size <= 128 * 1024 * 1024) sums.push({ file: relative, size, sum: await byteSum(full) });
     }
   }
@@ -514,10 +547,10 @@ export async function analyzeTree(root: string, fileName: string, knownModels: s
   if (!notes?.kind) {
     if (images.some((image) => image.type === "rbu")) kind = "bios";
     else if (pldm) kind = pldm.ianaIds.includes(NVIDIA_IANA) || /HGX|HMC/i.test(pldm.version) ? "hgx" : "other";
-    else kind = kindOf(fileName.replace(/[_.]/g, " ")) || (images.some((image) => image.type === "ima") ? "bmc" : "other");
+    else kind = kindOf(fileName.replace(/[_.]/g, " ")) || (/ast2[56]00/i.test(fileName) || images.some((image) => image.type === "ima") ? "bmc" : "other");
   }
 
-  let models = notes?.models || [];
+  let models = notes?.models.length ? notes.models : listedModels;
   if (!models.length) {
     const found = new Set<string>();
     for (const image of images.filter((item) => item.type !== "tool")) for (const model of modelsInFile(path.join(root, image.path), knownModels)) found.add(model);

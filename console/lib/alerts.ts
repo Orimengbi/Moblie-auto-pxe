@@ -10,6 +10,7 @@ import { formatTime } from "./time.ts";
  * 同一台同一个 key 还没恢复的只更新，不新开；状态类（传感器、BMC 连不上、掉卡、硬盘）这次没再发现就自动恢复；
  * 事件类（SEL、Xid）不会自己恢复，要人点「处理完」；SEL 里 BMC 后来写了 Deasserted 的（cleared）算自动恢复。
  * 状态类自动恢复后 30 分钟内又发现，重新打开原来那条（次数加一），不另开，免得在阈值边上跳的传感器一天开一串。
+ * 内存可纠正 ECC 若干小时没再出现自动解除，见 quietMemoryEcc。
  */
 
 export interface Finding {
@@ -144,6 +145,49 @@ export function applyFindings(assetId: string, findings: Finding[], scopes: stri
       addEvent(assetId, "alert", `告警恢复：${alert.title}`, "监控");
     }
     return created;
+  });
+}
+
+/** 内存可纠正 ECC：SEL 里 Memory 传感器的 Correctable ECC，或 Redfish 里某根内存 Health Warning。不可纠正的（严重）不算，要人处理。 */
+export function memoryEccKind(key: string, severity: AlertSeverity): "sel" | "health" | null {
+  if (severity !== "warning") return null;
+  if (/^sel:memory/i.test(key) && /correctable ecc/i.test(key) && !/uncorrectable/i.test(key)) return "sel";
+  if (key.startsWith("health:内存 ")) return "health";
+  return null;
+}
+
+/**
+ * 内存可纠正 ECC 多少小时没再出现就自动解除。BMC 自己不会写 Deasserted，内存的 Health Warning 也要重启才清，不这样就永远挂着。
+ * 「再出现」看 SEL 里有没有新的内存 Correctable ECC（AMI 所有内存共用 Memory #0x08 一个传感器，所以按整台算）；
+ * Redfish 的 Health Warning 只要 BMC 不清会一直报，解除后在下一条 SEL ECC 出现之前不再重开。
+ * 在 applyFindings 之前调，返回去掉了「安静」那些的发现。
+ */
+export function quietMemoryEcc(assetId: string, findings: Finding[], hours: number, nowMs = Date.now()): Finding[] {
+  const since = nowMs - hours * 3_600_000;
+  const now = new Date(nowMs).toISOString();
+  const label = `${hours} 小时未再出现`;
+  const rows = db().prepare("SELECT * FROM alerts WHERE asset_id = ? AND (key LIKE 'sel:%' OR key LIKE 'health:内存 %') ORDER BY id").all(assetId).map(toAlert);
+  let lastEcc = findings.some((finding) => memoryEccKind(finding.key, finding.severity) === "sel") ? nowMs : 0;
+  for (const alert of rows) if (memoryEccKind(alert.key, alert.severity) === "sel") lastEcc = Math.max(lastEcc, Date.parse(alert.lastAt));
+  const resolve = (alert: Alert) => {
+    db().prepare("UPDATE alerts SET status = 'resolved', resolved_by = ?, resolved_at = ? WHERE id = ?").run(label, now, alert.id);
+    addEvent(assetId, "alert", `告警恢复（${label}）：${alert.title}`, "监控");
+  };
+  const fresh = new Set(findings.map((finding) => finding.key));
+  for (const alert of rows) {
+    if (alert.status !== "resolved" && memoryEccKind(alert.key, alert.severity) === "sel" && !fresh.has(alert.key) && Date.parse(alert.lastAt) < since) resolve(alert);
+  }
+  return findings.filter((finding) => {
+    if (memoryEccKind(finding.key, finding.severity) !== "health") return true;
+    const same = rows.filter((alert) => alert.key === finding.key);
+    const open = same.find((alert) => alert.status !== "resolved");
+    if (open) {
+      if (open.severity !== "warning" || Math.max(lastEcc, Date.parse(open.firstAt)) >= since) return true;
+      resolve(open);
+      return false;
+    }
+    const last = same.at(-1);
+    return !(last && last.resolvedBy.endsWith("小时未再出现") && lastEcc <= Date.parse(last.resolvedAt));
   });
 }
 

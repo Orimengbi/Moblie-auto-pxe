@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { applyFindings, type Finding } from "./alerts.ts";
+import { applyFindings, quietMemoryEcc, type Finding } from "./alerts.ts";
 import { assetBmcAccounts } from "./assets.ts";
 import { db, getSetting, putSetting } from "./db.ts";
 import { defaultIpmiExec, firstWorkingAccount, ipmiFailure, parsePowerStatus, type IpmiExec } from "./ipmi-remote.ts";
@@ -23,6 +23,7 @@ export const DEFAULT_MONITOR: MonitorSettings = {
   ignoreSensors: "",
   bmcFailuresToAlert: 2,
   redfishEvents: true,
+  memEccQuietHours: 12,
 };
 
 export function getMonitorSettings(): MonitorSettings {
@@ -49,6 +50,7 @@ export function saveMonitorSettings(input: Partial<MonitorSettings>): MonitorSet
     ignoreSensors: String(input.ignoreSensors ?? current.ignoreSensors).slice(0, 2000),
     bmcFailuresToAlert: int(input.bmcFailuresToAlert, current.bmcFailuresToAlert, 1, 20, "BMC 连不上几次报警"),
     redfishEvents: input.redfishEvents === undefined ? current.redfishEvents : Boolean(input.redfishEvents),
+    memEccQuietHours: int(input.memEccQuietHours, current.memEccQuietHours, 1, 720, "内存 ECC 自动解除时间"),
   };
   putSetting("monitor", next);
   return next;
@@ -450,7 +452,7 @@ export async function checkBmc(asset: Asset, settings: MonitorSettings, exec: Mo
   }
   state.health = { at: now, overall: overallHealth(problems), problems, redfishError };
   saveState(state);
-  applyFindings(asset.id, findings, scopes, cleared);
+  applyFindings(asset.id, quietMemoryEcc(asset.id, findings, settings.memEccQuietHours), scopes, cleared);
   return state;
 }
 
