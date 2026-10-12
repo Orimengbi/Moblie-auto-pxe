@@ -6,6 +6,7 @@ import { cachedRackFinder, getRack, listRacks, listSites, MAX_RACK_U, placeLabel
 import { assertIpv4, normalizeMac, normalizeSn } from "./net.ts";
 import { modelKey } from "./catalog-schema.ts";
 import type { Asset, AssetEvent, AssetStatus, AssetType, AuditEntry, Customer, PublicAsset, Rack, ServerRow, Site, TagSettings } from "./types.ts";
+import { isSafeId } from "./paths.ts";
 
 export { ASSET_STATUS, ASSET_TYPES, renderTag } from "./asset-labels.ts";
 
@@ -248,7 +249,7 @@ export function listAssets(): Asset[] {
 }
 
 export function getAsset(id: string): Asset | null {
-  if (!/^[a-zA-Z0-9_-]{8,80}$/.test(id)) return null;
+  if (!isSafeId(id)) return null;
   const row = db().prepare("SELECT * FROM assets WHERE id = ?").get(id);
   return row ? withTags([toAsset(row)])[0] : null;
 }

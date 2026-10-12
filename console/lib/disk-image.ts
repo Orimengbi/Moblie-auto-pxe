@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { DiskImageInfo, Family } from "./types.ts";
+import { shq } from "./shq.ts";
 
 /**
  * 整盘镜像：用 dd 从装好的机器上导出的硬盘（GPT + EFI 分区 + ext4 根分区）。
@@ -252,10 +253,6 @@ function run(command: string, args: string[], okCodes = [0]): string {
 
 function shell(script: string): void {
   run("sh", ["-c", `set -e; ${script}`]);
-}
-
-function shq(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 /** 顺着符号链接找到真正的文件路径（链接可以是相对的）。 */

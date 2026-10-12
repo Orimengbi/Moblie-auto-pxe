@@ -1,14 +1,21 @@
-FROM node:22-bookworm-slim AS build
+# 运行时要用的命令行工具，构建、测试和运行三个阶段共用，测试跑出来的结果和线上一样。
+FROM node:22-bookworm-slim AS base
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends xorriso xz-utils zstd bzip2 openssl ca-certificates ipmitool openssh-client snmp poppler-utils \
+  && rm -rf /var/lib/apt/lists/*
+
+FROM base AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
 RUN npm run build
 
-FROM node:22-bookworm-slim
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends xorriso xz-utils zstd bzip2 openssl ca-certificates ipmitool openssh-client snmp poppler-utils \
-  && rm -rf /var/lib/apt/lists/*
+# 跑全部单元测试：docker build --target test -t pxe-console-test console/ && docker run --rm pxe-console-test
+FROM build AS test
+CMD ["npm", "test"]
+
+FROM base
 WORKDIR /app
 COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
