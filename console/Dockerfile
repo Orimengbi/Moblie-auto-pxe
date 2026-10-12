@@ -7,7 +7,7 @@ RUN npm run build
 
 FROM node:22-bookworm-slim
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends xorriso xz-utils zstd bzip2 openssl ca-certificates ipmitool openssh-client snmp \
+  && apt-get install -y --no-install-recommends xorriso xz-utils zstd bzip2 openssl ca-certificates ipmitool openssh-client snmp poppler-utils \
   && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /app/.next/standalone ./
