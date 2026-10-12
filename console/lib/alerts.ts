@@ -9,6 +9,7 @@ import { formatTime } from "./time.ts";
  * 告警。监控每查一遍得出一组「发现」，和已有的告警对：
  * 同一台同一个 key 还没恢复的只更新，不新开；状态类（传感器、BMC 连不上、掉卡、硬盘）这次没再发现就自动恢复；
  * 事件类（SEL、Xid）不会自己恢复，要人点「处理完」；SEL 里 BMC 后来写了 Deasserted 的（cleared）算自动恢复。
+ * 状态类自动恢复后 30 分钟内又发现，重新打开原来那条（次数加一），不另开，免得在阈值边上跳的传感器一天开一串。
  */
 
 export interface Finding {
@@ -65,6 +66,9 @@ export function alertCounts(): { critical: number; warning: number } {
   return counts;
 }
 
+/** 状态类告警自动恢复后这么久内又出现，算同一条。 */
+const REOPEN_WINDOW_MS = 30 * 60_000;
+
 /**
  * 记下一次检查的结果。scopes 是这次实际查了的 key 前缀（例如 BMC 没连上就不该把传感器告警当成恢复）。
  * cleared 是 BMC 已经解除了的事件类 key：开着的自动恢复；这次新发现、但已经解除了的（风扇拔插这种几十秒就好的）
@@ -108,6 +112,19 @@ export function applyFindings(assetId: string, findings: Finding[], scopes: stri
           addEvent(assetId, "alert", `${ALERT_SEVERITY[finding.severity]}告警（已自动恢复）：${finding.title}`, "监控");
         }
         continue;
+      }
+      if (!finding.sticky) {
+        // 状态类在阈值边上来回跳的（GPU 网卡温度这种）：刚自动恢复不久又发现，重新打开原来那条，次数加一，不另开。
+        const recent = db()
+          .prepare("SELECT id, count FROM alerts WHERE asset_id = ? AND key = ? AND status = 'resolved' AND resolved_by = '自动恢复' AND resolved_at >= ? ORDER BY id DESC LIMIT 1")
+          .get(assetId, finding.key, new Date(Date.parse(now) - REOPEN_WINDOW_MS).toISOString());
+        if (recent) {
+          db()
+            .prepare("UPDATE alerts SET severity = ?, title = ?, detail = ?, count = count + 1, last_at = ?, status = 'active', resolved_by = '', resolved_at = '' WHERE id = ?")
+            .run(finding.severity, finding.title.slice(0, 200), finding.detail.slice(0, 4000), now, Number(recent.id));
+          addEvent(assetId, "alert", `${ALERT_SEVERITY[finding.severity]}告警又出现（第 ${Number(recent.count) + 1} 次）：${finding.title}`, "监控");
+          continue;
+        }
       }
       const result = db()
         .prepare("INSERT INTO alerts (asset_id, key, source, severity, title, detail, status, sticky, count, first_at, last_at) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, 1, ?, ?)")

@@ -197,6 +197,39 @@ test("sel alerts close when the bmc deasserts them, and a quick assert+deassert 
   assert.deepEqual(rows().map((alert) => alert.status).sort(), ["active", "resolved"]);
 });
 
+test("a sensor flapping around its threshold reopens the same alert instead of opening new ones", async () => {
+  const asset = assets.createAsset({ sn: "mon-flap", status: "active", bmcIp: "10.0.0.8", bmcUser: "admin", bmcPassword: "pw" }, "alice");
+  let sdr = SDR_OK;
+  const exec = async (_host: string, _user: string, _password: string, args: string[]) => {
+    if (args.includes("dump")) {
+      fs.writeFileSync(args[args.length - 1], "sdr");
+      return { code: 0, stdout: "", stderr: "" };
+    }
+    if (args.includes("sdr")) return { code: 0, stdout: sdr, stderr: "" };
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  const check = () => monitor.checkBmc(asset, monitor.DEFAULT_MONITOR, exec, async () => []);
+  const rows = () => alerts.listAlerts({ assetId: asset.id }).filter((alert) => alert.key === "sensor:CPU0_TEMP");
+  await check();
+  for (let i = 0; i < 3; i++) {
+    sdr = SDR_BAD;
+    await check();
+    assert.equal(rows()[0].status, "active");
+    sdr = SDR_OK;
+    await check();
+    assert.equal(rows()[0].status, "resolved");
+  }
+  assert.deepEqual(rows().map((alert) => alert.count), [3]);
+  assert.ok(assets.listEvents(asset.id).some((event) => /又出现（第 3 次）/.test(event.text)));
+
+  // 恢复超过 30 分钟再出现：算新的一条。
+  const { db } = await import("./db.ts");
+  db().prepare("UPDATE alerts SET resolved_at = ? WHERE id = ?").run(new Date(Date.now() - 31 * 60_000).toISOString(), rows()[0].id);
+  sdr = SDR_BAD;
+  await check();
+  assert.deepEqual(rows().map((alert) => alert.status).sort(), ["active", "resolved"]);
+});
+
 test("os checks catch a missing gpu, xid and a failing disk", async () => {
   const asset = assets.createAsset({ sn: "mon-2", status: "active", osAddress: "10.0.0.6" }, "alice");
   const output = `===PXEMON gpu
