@@ -101,7 +101,7 @@ function PowerCell({ power }: { power: AssetRow["power"] }) {
   );
 }
 
-/** 单元格里的第二行小字。
+/** 单元格里的第二行小字。 */
 function Sub({ children, color = "text.secondary" }: { children: React.ReactNode; color?: string }) {
   return (
     <Typography component="span" variant="caption" sx={{ display: "block", color, fontFamily: FONT_SANS }}>
