@@ -37,8 +37,8 @@ function without(map: Record<string, string>, key: string): Record<string, strin
 export function ImageManager({ images, uploads }: { images: ImageRecord[]; uploads: PendingUpload[] }) {
   const router = useRouter();
   const live = useUploads();
-  const canEdit = useCan("engineer");
-  const isAdmin = useCan("admin");
+  const canEdit = useCan("images");
+  const canDelete = useCan("delete");
   const [uploadName, setUploadName] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [pickerKey, setPickerKey] = useState(0);
@@ -298,7 +298,7 @@ export function ImageManager({ images, uploads }: { images: ImageRecord[]; uploa
                     ) : null}
                   </TableCell>
                   <TableCell align="right">
-                    {isAdmin ? (
+                    {canDelete ? (
                       <Button color="error" onClick={() => remove(image.id)}>
                         删除
                       </Button>

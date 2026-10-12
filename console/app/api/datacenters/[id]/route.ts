@@ -1,5 +1,5 @@
 import { audited, jsonError, readJson } from "@/lib/api";
-import { requireAdmin } from "@/lib/auth";
+import { requirePermission } from "@/lib/auth";
 import { deleteDatacenter, getDatacenter, updateDatacenter, type DatacenterInput } from "@/lib/racks";
 
 export const dynamic = "force-dynamic";
@@ -19,7 +19,7 @@ export async function PATCH(request: Request, context: Context) {
 export async function DELETE(request: Request, context: Context) {
   try {
     // 删除统一只有管理员能做。
-    requireAdmin(request);
+    requirePermission(request, "delete");
     const { id } = await context.params;
     const datacenter = getDatacenter(id);
     await audited(request, { action: "删除数据中心", targetType: "datacenter", targetId: id, targetLabel: datacenter ? `${datacenter.code} ${datacenter.name}` : id }, () => deleteDatacenter(id));

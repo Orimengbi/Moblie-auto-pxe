@@ -26,8 +26,8 @@ export function ProjectBaseline({ projectId, baseline, matched, mismatched }: { 
   const [rules, setRules] = useState<BaselineRule[]>(baseline?.rules || []);
   const [dirty, setDirty] = useState(false);
   const [pending, setPending] = useState(false);
-  const canEdit = useCan("engineer");
-  const isAdmin = useCan("admin");
+  const canEdit = useCan("install");
+  const canDelete = useCan("delete");
   const [error, setError] = useState("");
   const [kind, setKind] = useState<HwKind>("gpu");
   const [model, setModel] = useState("");
@@ -159,7 +159,7 @@ export function ProjectBaseline({ projectId, baseline, matched, mismatched }: { 
             {pending ? "正在保存" : "保存基准"}
           </Button>
         ) : null}
-        {isAdmin ? (
+        {canDelete ? (
           <Button type="button" variant="outlined" color="error" disabled={pending} onClick={() => void send("DELETE")}>
             删除基准
           </Button>

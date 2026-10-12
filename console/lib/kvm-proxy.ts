@@ -3,7 +3,6 @@ import https from "node:https";
 import type { Duplex } from "node:stream";
 import zlib from "node:zlib";
 import { authenticate, clientAddress, sameOrigin } from "./auth.ts";
-import { atLeast } from "./roles.ts";
 import { assetBmcAccounts, audit, getAsset } from "./assets.ts";
 
 /**
@@ -399,7 +398,7 @@ function resolve(req: http.IncomingMessage): Resolved | { status: number; messag
   for (const [name, value] of Object.entries(req.headers)) if (typeof value === "string") headers.set(name, value);
   const identity = authenticate(headers);
   if (!identity) return { status: 401, message: "需要先登录 PXE 控制台。" };
-  if (!atLeast(identity.user.role, "operator")) return { status: 403, message: "远程控制台需要「值班」及以上权限。" };
+  if (!identity.permissions.includes("console")) return { status: 403, message: "需要「远程控制台」权限。" };
   if (!["GET", "HEAD", "OPTIONS"].includes(req.method || "GET") && !sameOrigin(headers)) return { status: 403, message: "跨站请求被拒绝。" };
   const row = getAsset(parsed.assetId);
   if (!row?.bmcIp) return { status: 404, message: "这台资产还没有 BMC 地址。" };

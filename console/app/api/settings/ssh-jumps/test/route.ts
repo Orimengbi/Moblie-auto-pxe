@@ -1,5 +1,5 @@
 import { jsonError, readJson } from "@/lib/api";
-import { requireAdmin } from "@/lib/auth";
+import { requirePermission } from "@/lib/auth";
 import { checkJump, defaultExec, forgetJumpChecks, sshArgs } from "@/lib/remote";
 import { assertIpv4 } from "@/lib/net";
 import { normalizeJumpHost, type JumpHost } from "@/lib/ssh-jump";
@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 /** 试连一台跳板机（不用先保存）：先只登跳板机，给了目标地址再经它登目标。 */
 export async function POST(request: Request) {
   try {
-    requireAdmin(request);
+    requirePermission(request, "settings");
     const body = await readJson<{ jump?: Partial<JumpHost>; target?: string }>(request);
     const jump = { ...normalizeJumpHost(body.jump || {}), enabled: true };
     forgetJumpChecks();

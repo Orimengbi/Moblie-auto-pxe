@@ -28,8 +28,8 @@ export function ProjectManager({ projects }: { projects: Project[] }) {
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
   const [switching, setSwitching] = useState("");
-  const canEdit = useCan("engineer");
-  const isAdmin = useCan("admin");
+  const canEdit = useCan("install");
+  const canDelete = useCan("delete");
 
   async function create(event: React.FormEvent) {
     event.preventDefault();
@@ -132,7 +132,7 @@ export function ProjectManager({ projects }: { projects: Project[] }) {
                   <Button variant="outlined" component={Link} href={`/projects/${project.id}`}>
                     进入批次
                   </Button>
-                  {isAdmin ? (
+                  {canDelete ? (
                     <Button color="error" onClick={() => remove(project.id)}>
                       删除
                     </Button>

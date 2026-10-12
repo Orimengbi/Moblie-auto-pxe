@@ -1,12 +1,15 @@
 import { audited, jsonError, readJson } from "@/lib/api";
 import {
+  assertWithin,
   AuthError,
+  can,
   createSession,
   deleteUser,
   getUser,
   publicUser,
-  requireAdmin,
+  requirePermission,
   requireSelfOrAdmin,
+  rolePermissions,
   sessionCookie,
   updateUser,
   verifyLoginPassword,
@@ -21,16 +24,19 @@ interface UserPatch {
   currentPassword?: string;
 }
 
-/** 管理员能改所有字段；其他人只能改自己的密码。 */
+/** 有「用户」权限的能改所有字段（不能超出自己的权限）；其他人只能改自己的密码。 */
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await context.params;
     const identity = requireSelfOrAdmin(request, id);
     const body = await readJson<UserPatch>(request);
-    const admin = identity.user.role === "admin";
-    if (!admin && (body.role !== undefined || body.disabled !== undefined || body.password === null)) {
-      throw new AuthError("需要管理员权限", 403);
+    const manager = can(identity, "users");
+    if (!manager && (body.role !== undefined || body.disabled !== undefined || body.password === null)) {
+      throw new AuthError("需要「用户、角色和审计」权限", 403);
     }
+    const target = getUser(id);
+    if (target && target.id !== identity.user.id) assertWithin(identity, rolePermissions(target.role), "这个账号");
+    if (body.role !== undefined) assertWithin(identity, rolePermissions(String(body.role)), "这个角色");
     // 改自己的密码要输当前密码，会话被人捡到也改不了。
     const current = identity.user.passwordHash;
     if (identity.user.id === id && body.password && current && !verifyLoginPassword(String(body.currentPassword || ""), current)) {
@@ -56,8 +62,10 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
 export async function DELETE(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await context.params;
-    const identity = requireAdmin(request);
+    const identity = requirePermission(request, "users");
     if (identity.user.id === id) throw new Error("不能删除自己");
+    const target = getUser(id);
+    if (target) assertWithin(identity, rolePermissions(target.role), "这个账号");
     await audited(request, { action: "删除用户", targetType: "user", targetId: id, targetLabel: getUser(id)?.username }, () => deleteUser(id));
     return Response.json({ ok: true });
   } catch (error) {

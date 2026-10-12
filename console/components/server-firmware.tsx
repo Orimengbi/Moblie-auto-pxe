@@ -47,7 +47,7 @@ export function ServerFirmware({ assetId }: { assetId: string }) {
   const [scope, setScope] = useState<"all" | "hgx" | "other">("all");
   const [reading, setReading] = useState(false);
   const [busy, setBusy] = useState(false);
-  const isAdmin = useCan("admin");
+  const canFlash = useCan("firmware");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [open, setOpen] = useState(false);
@@ -217,7 +217,7 @@ export function ServerFirmware({ assetId }: { assetId: string }) {
                 ? "没有进行中的升级"
                 : "这台 BMC 不支持从网址升级"}
           </Typography>
-          {update && isAdmin ? (
+          {update && canFlash ? (
             <Button size="small" variant="outlined" disabled={busy} onClick={() => void openDialog()}>
               升级
             </Button>

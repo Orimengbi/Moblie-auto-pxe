@@ -1,5 +1,5 @@
 import { audited, jsonError, readJson } from "@/lib/api";
-import { requireAdmin, requireUser } from "@/lib/auth";
+import { requirePermission, requireUser } from "@/lib/auth";
 import { deletePackage, getPackage, updatePackage, type FirmwarePackageInput } from "@/lib/firmware-lib";
 
 export const dynamic = "force-dynamic";
@@ -19,7 +19,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
 /** 改厂商、类型、版本、适用型号、备注。 */
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
-    requireAdmin(request);
+    requirePermission(request, "firmware");
     const { id } = await context.params;
     const body = await readJson<FirmwarePackageInput>(request);
     return Response.json(
@@ -32,7 +32,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
 
 export async function DELETE(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
-    requireAdmin(request);
+    requirePermission(request, "firmware");
     const { id } = await context.params;
     await audited(request, (pkg) => ({ action: "删除固件包", targetType: "firmware", targetId: id, targetLabel: pkg?.fileName }), () => deletePackage(id));
     return Response.json({ ok: true });

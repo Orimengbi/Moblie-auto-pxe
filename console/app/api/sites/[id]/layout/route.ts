@@ -1,5 +1,5 @@
 import { audited, jsonError, readJson } from "@/lib/api";
-import { requireAdmin } from "@/lib/auth";
+import { requirePermission } from "@/lib/auth";
 import { getSite, saveLayout, type LayoutItem } from "@/lib/racks";
 import type { FloorItem } from "@/lib/types";
 
@@ -15,7 +15,7 @@ export async function PUT(request: Request, context: { params: Promise<{ id: str
     const body = await readJson<{ items?: LayoutItem[]; obstacles?: (Omit<FloorItem, "id" | "siteId" | "side"> & { side?: FloorItem["side"] })[]; remove?: string[]; room?: { w: number; h: number } }>(request);
     const remove = Array.isArray(body.remove) ? body.remove.map(String) : [];
     // 把机柜改成柱子等障碍物会删掉机柜，删除只有管理员能做。
-    if (remove.length) requireAdmin(request);
+    if (remove.length) requirePermission(request, "delete");
     const items = Array.isArray(body.items) ? body.items : [];
     const obstacles = Array.isArray(body.obstacles) ? body.obstacles : undefined;
     return Response.json(

@@ -1,14 +1,14 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { authenticate, sameOrigin } from "@/lib/auth";
-import { atLeast, requiredRole, roleDenied } from "@/lib/roles";
+import { authenticate, can, sameOrigin } from "@/lib/auth";
+import { permissionDenied, requiredPermission } from "@/lib/roles";
 
 const PUBLIC = new Set(["/login", "/api/auth/login", "/api/auth/challenge", "/api/auth/logout"]);
 
 /**
  * 除了目标机用的 /boot/ 和登录接口，控制台页面和 API 都要先登录。
  * /api/files 不经过这里：中间件会把请求体缓存一份且超过 10MB 就截断，
- * 那两个路由自己调 requireRole。
- * API 的写请求按 lib/roles.ts 的分级挡一道（只读、值班、工程师），管理员专属的路由里再查。
+ * 那两个路由自己调 requirePermission。
+ * API 的写请求按 lib/roles.ts 里路径对应的权限点挡一道，路由里再查一遍。
  */
 export function middleware(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
@@ -20,8 +20,8 @@ export function middleware(request: NextRequest) {
   }
   const identity = authenticate(request.headers);
   if (identity) {
-    const min = api ? requiredRole(request.method, pathname) : "viewer";
-    if (!atLeast(identity.user.role, min)) return NextResponse.json({ error: roleDenied(min) }, { status: 403 });
+    const permission = api ? requiredPermission(request.method, pathname) : null;
+    if (permission && !can(identity, permission)) return NextResponse.json({ error: permissionDenied(permission) }, { status: 403 });
     return NextResponse.next();
   }
 

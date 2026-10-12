@@ -128,8 +128,8 @@ export function ProjectTaskRunner({
   const [uploading, setUploading] = useState("");
   // 0 表示收起，只看最近 3 条；展开后按页看，一页 10 条。
   const [taskPage, setTaskPage] = useState(0);
-  const canEdit = useCan("engineer");
-  const isAdmin = useCan("admin");
+  const canEdit = useCan("scripts");
+  const canDelete = useCan("delete");
   const list = tasks ?? [];
   const running = list.some((task) => task.status === "running");
   const taskPages = Math.max(1, Math.ceil(list.length / 10));
@@ -241,7 +241,7 @@ export function ProjectTaskRunner({
                     <Typography variant="caption" sx={{ color: "text.secondary", flexShrink: 0 }}>
                       {formatSize(file.size)}
                     </Typography>
-                    {isAdmin ? (
+                    {canDelete ? (
                       <Button color="error" onClick={() => remove(file.id)} sx={{ flexShrink: 0 }}>
                         删除
                       </Button>
@@ -319,7 +319,7 @@ export function ProjectTaskRunner({
         </Stack>
       ) : (
         <Typography variant="body2" sx={{ color: "text.secondary" }}>
-          跑脚本需要「工程师」及以上权限。
+          跑脚本需要「执行脚本」权限。
         </Typography>
       )}
 

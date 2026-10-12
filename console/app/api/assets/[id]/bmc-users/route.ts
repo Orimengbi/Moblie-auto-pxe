@@ -1,6 +1,6 @@
 import { audited, jsonError, readJson } from "@/lib/api";
 import { addEvent, getAsset } from "@/lib/assets";
-import { requireAdmin, requireUser } from "@/lib/auth";
+import { requirePermission, requireUser } from "@/lib/auth";
 import { describeUserChange, type BmcUserChange } from "@/lib/ipmi-user-types";
 import { applyUserChange, cleanUserChange, listIpmiUsers } from "@/lib/ipmi-users";
 
@@ -24,7 +24,7 @@ export async function GET(request: Request, context: Context) {
 /** 新建或更新、改密码、改权限、启用、停用、删除。管理员才能做。 */
 export async function POST(request: Request, context: Context) {
   try {
-    const identity = requireAdmin(request);
+    const identity = requirePermission(request, "bmc.users");
     const { id } = await context.params;
     const asset = getAsset(id);
     if (!asset) throw new Error("资产不存在");

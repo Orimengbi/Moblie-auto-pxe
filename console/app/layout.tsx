@@ -6,7 +6,7 @@ import { AppShell } from "@/components/mui/app-shell";
 import { Providers } from "@/components/mui/providers";
 import { UploadProvider } from "@/components/upload-provider";
 import { alertCounts } from "@/lib/alerts";
-import { authenticate } from "@/lib/auth";
+import { authenticate, roleName } from "@/lib/auth";
 import { applyDisplaySettings } from "@/lib/display-settings";
 import { openTicketCount } from "@/lib/tickets";
 
@@ -40,7 +40,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
         <Providers>
           {identity ? (
             <UploadProvider>
-              <AppShell user={{ username: identity.user.username, role: identity.user.role }} counts={{ alerts: alertCounts(), tickets: openTicketCount() }}>
+              <AppShell user={{ username: identity.user.username, roleName: roleName(identity.user.role), permissions: identity.permissions, limited: Boolean(identity.limited) }} counts={{ alerts: alertCounts(), tickets: openTicketCount() }}>
                 {children}
               </AppShell>
             </UploadProvider>

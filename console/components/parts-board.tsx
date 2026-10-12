@@ -76,8 +76,8 @@ export function PartsBoard({
   const [kind, setKind] = useState("");
   const [setKey, setSetKey] = useState("");
   const [receiving, setReceiving] = useState(false);
-  const canOperate = useCan("operator");
-  const canEdit = useCan("engineer");
+  const canOperate = useCan("parts.status");
+  const canEdit = useCan("parts.edit");
   const [detail, setDetail] = useState<Part | null>(null);
   const [error, setError] = useState("");
   const siteById = useMemo(() => new Map(sites.map((site) => [site.id, site])), [sites]);
@@ -449,7 +449,7 @@ function ReceiveDialog({ open, catalog, sites, datacenters, onClose, onDone }: {
 
 /** 一件备件的资料和流转记录，可以改资料、挪库位。 */
 function PartDialog({ part, sites, datacenters, onClose, onChanged }: { part: Part | null; sites: Site[]; datacenters: Datacenter[]; onClose: () => void; onChanged: () => void }) {
-  const canEdit = useCan("engineer");
+  const canEdit = useCan("parts.edit");
   const [events, setEvents] = useState<PartEvent[]>([]);
   const [asset, setAsset] = useState<{ id: string; tag: string } | null>(null);
   const [hosts, setHosts] = useState<{ id: string; tag: string; installed: number }[] | null>(null);

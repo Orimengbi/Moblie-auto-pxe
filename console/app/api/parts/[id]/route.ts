@@ -1,6 +1,6 @@
 import { audited, jsonError, readJson } from "@/lib/api";
 import { getAsset } from "@/lib/assets";
-import { requireAdmin, requireUser } from "@/lib/auth";
+import { requirePermission, requireUser } from "@/lib/auth";
 import { hostsForPart } from "@/lib/part-groups";
 import { deletePart, getPart, listPartEvents, partLabel, updatePart, type PartEdit } from "@/lib/parts";
 
@@ -31,7 +31,7 @@ export async function PATCH(request: Request, context: Context) {
 export async function DELETE(request: Request, context: Context) {
   try {
     const { id } = await context.params;
-    requireAdmin(request);
+    requirePermission(request, "delete");
     const part = getPart(id);
     await audited(request, { action: "删除备件", targetType: "part", targetId: id, targetLabel: part ? partLabel(part) : id }, () => deletePart(id));
     return Response.json({ ok: true });

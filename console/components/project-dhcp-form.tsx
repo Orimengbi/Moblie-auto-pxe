@@ -13,7 +13,7 @@ import { useCan } from "@/components/role-context";
 
 export function ProjectDhcpForm({ project }: { project: Project }) {
   const router = useRouter();
-  const canEdit = useCan("engineer");
+  const canEdit = useCan("install");
   const [form, setForm] = useState({
     dhcpStart: project.dhcp?.start || "",
     dhcpEnd: project.dhcp?.end || "",

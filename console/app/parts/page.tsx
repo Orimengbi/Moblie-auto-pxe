@@ -2,7 +2,7 @@ import { headers } from "next/headers";
 import { PageHeader } from "@/components/page-header";
 import { PartsBoard } from "@/components/parts-board";
 import { listAssets } from "@/lib/assets";
-import { authenticate } from "@/lib/auth";
+import { authenticate, can } from "@/lib/auth";
 import { listCatalog } from "@/lib/catalog";
 import { listPartGroups, partSets } from "@/lib/part-groups";
 import { listParts } from "@/lib/parts";
@@ -20,7 +20,7 @@ export default async function PartsPage() {
         sets={partSets()}
         groups={listPartGroups()}
         catalog={listCatalog()}
-        admin={identity?.user.role === "admin"}
+        admin={can(identity, "catalog")}
         sites={listSites()}
         datacenters={listDatacenters()}
         assets={listAssets().map((asset) => ({ id: asset.id, tag: asset.tag }))}

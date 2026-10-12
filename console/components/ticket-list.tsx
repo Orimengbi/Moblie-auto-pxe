@@ -79,7 +79,7 @@ export function TicketList({ tickets, me }: { tickets: TicketRow[]; me: string }
   const [mine, setMine] = useState(false);
   const [q, setQ] = useState("");
   const [creating, setCreating] = useState(false);
-  const canOperate = useCan("operator");
+  const canOperate = useCan("tickets");
 
   useEffect(() => {
     const wanted = search.get("status");

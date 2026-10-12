@@ -28,8 +28,8 @@ export function CustomerManager({ customers, counts }: { customers: Customer[]; 
   const [form, setForm] = useState<Form>({ code: "", name: "", contact: "", note: "" });
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
-  const canEdit = useCan("engineer");
-  const isAdmin = useCan("admin");
+  const canEdit = useCan("dc.edit");
+  const canDelete = useCan("delete");
 
   function start(customer: Customer | null) {
     setEditing(customer);
@@ -105,7 +105,7 @@ export function CustomerManager({ customers, counts }: { customers: Customer[]; 
       renderCell: ({ row }) => (
         <Stack direction="row" spacing={0.5} sx={{ width: "100%", justifyContent: "flex-end" }}>
           {canEdit ? <Button onClick={() => start(row)}>编辑</Button> : null}
-          {isAdmin ? (
+          {canDelete ? (
             <Button color="error" onClick={() => void remove(row)}>
               删除
             </Button>

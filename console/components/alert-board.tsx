@@ -35,7 +35,7 @@ function when(at: string): string {
 /** 告警列表：默认只看没恢复的，严重的在前。每 30 秒刷新一次。 */
 export function AlertBoard({ alerts, summary }: { alerts: AlertRow[]; summary: string }) {
   const router = useRouter();
-  const canOperate = useCan("operator");
+  const canOperate = useCan("alerts");
   const [status, setStatus] = useState("open");
   const [severity, setSeverity] = useState("");
   const [source, setSource] = useState("");

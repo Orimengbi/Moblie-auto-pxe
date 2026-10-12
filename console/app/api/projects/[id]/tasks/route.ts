@@ -2,7 +2,7 @@ import { auditTask, jsonError, readJson } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
 import { createTask, publicTask, startTask, type TaskInput } from "@/lib/remote";
 import { getProject, listTasks } from "@/lib/store";
-import { atLeast, roleDenied, taskRole } from "@/lib/roles";
+import { permissionDenied, taskPermission } from "@/lib/roles";
 
 export const dynamic = "force-dynamic";
 
@@ -17,8 +17,8 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     const { id } = await context.params;
     const identity = requireUser(request);
     const input = await readJson<TaskInput>(request);
-    const min = taskRole(input.kind);
-    if (!atLeast(identity.user.role, min)) return Response.json({ error: roleDenied(min) }, { status: 403 });
+    const permission = taskPermission(input.kind);
+    if (!identity.permissions.includes(permission)) return Response.json({ error: permissionDenied(permission) }, { status: 403 });
     const task = createTask({ ...input, projectId: id });
     startTask(task);
     auditTask(request, identity, task);

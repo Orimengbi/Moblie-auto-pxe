@@ -1,5 +1,5 @@
 import { audited, jsonError, readJson } from "@/lib/api";
-import { requireAdmin } from "@/lib/auth";
+import { requirePermission } from "@/lib/auth";
 import { deleteSite, getSite, updateSite, type SiteInput } from "@/lib/racks";
 
 export const dynamic = "force-dynamic";
@@ -19,7 +19,7 @@ export async function PATCH(request: Request, context: Context) {
 export async function DELETE(request: Request, context: Context) {
   try {
     // 删除统一只有管理员能做。
-    requireAdmin(request);
+    requirePermission(request, "delete");
     const { id } = await context.params;
     const site = getSite(id);
     // ?racks=1：连里面的空机柜一起删。

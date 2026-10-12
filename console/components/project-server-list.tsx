@@ -255,9 +255,11 @@ export function ProjectServerList({
   const [collectTargets, setCollectTargets] = useState<CollectTarget[]>([]);
   const [consoleRow, setConsoleRow] = useState<ServerListRow | null>(null);
   const [sideId, setSideId] = useState<string | null>(null);
-  const canOperate = useCan("operator");
-  const canEdit = useCan("engineer");
-  const isAdmin = useCan("admin");
+  const canConsole = useCan("console");
+  const canPower = useCan("power");
+  const canEdit = useCan("install");
+  const canCollect = useCan("inventory");
+  const canDelete = useCan("delete");
   // 按 id 找，列表刷新后侧边栏里显示的状态也跟着更新。
   const sideRow = rows.find((row) => row.id === sideId) || null;
   const assetOf = (ids: string[]) => ids.map((id) => rows.find((row) => row.id === id)?.assetId).filter((id): id is string => Boolean(id));
@@ -471,19 +473,19 @@ export function ProjectServerList({
       align: "right",
       renderCell: ({ row }) => (
         <Stack direction="row" sx={{ flexWrap: "wrap", justifyContent: "flex-end" }}>
-          {canOperate ? (
+          {canConsole ? (
             <Button disabled={!row.bmcIp} onClick={() => setConsoleRow(row)}>
               远程控制台
             </Button>
           ) : null}
-          {canOperate ? (
+          {canPower ? (
             <Button disabled={!row.bmcIp} onClick={() => setPowerTargets([row])}>
               电源
             </Button>
           ) : null}
           {canEdit ? <Button onClick={() => setEditing(row)}>编辑</Button> : null}
           {row.installed === "yes" && canEdit ? <Button onClick={() => void actions.current.reinstall(row)}>重装</Button> : null}
-          {isAdmin ? (
+          {canDelete ? (
             <Button color="error" onClick={() => void actions.current.remove(row)}>
               删除
             </Button>
@@ -492,7 +494,7 @@ export function ProjectServerList({
       ),
     });
     return list;
-  }, [widths, canOperate, canEdit, isAdmin]);
+  }, [widths, canConsole, canPower, canEdit, canDelete]);
 
   const selection = useMemo<GridRowSelectionModel>(() => ({ type: "include", ids: new Set(picked) }), [picked]);
 
@@ -510,7 +512,7 @@ export function ProjectServerList({
               <Button color="inherit" size="small" component={Link} href={`/assets?open=${encodeURIComponent(handoff.assetId)}`}>
                 回到资产继续删除
               </Button>
-            ) : handoffRow && isAdmin ? (
+            ) : handoffRow && canDelete ? (
               <Button
                 color="inherit"
                 size="small"
@@ -555,12 +557,12 @@ export function ProjectServerList({
               <Button variant="outlined" onClick={() => setPicked(installed)}>
                 选中已安装的
               </Button>
-              {picked.length && canOperate ? (
+              {picked.length && canPower ? (
                 <Button variant="outlined" onClick={() => setPowerTargets(rows.filter((row) => picked.includes(row.id)))}>
                   电源和引导（{picked.length}）
                 </Button>
               ) : null}
-              {picked.length && canEdit ? (
+              {picked.length && canCollect ? (
                 <Button variant="outlined" onClick={() => setCollectTargets(rows.filter((row) => picked.includes(row.id)).map((row) => ({ id: row.assetId, sn: row.sn, bmcIp: row.bmcIp || "" })))}>
                   采集硬件配置（{picked.length}）
                 </Button>

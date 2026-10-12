@@ -81,7 +81,7 @@ export function ServerBmcUsers({ assetId }: { assetId: string }) {
   const [editing, setEditing] = useState<Editing>(null);
   const [form, setForm] = useState<BmcUserChange>({ action: "ensure", name: "", password: "", privilege: "ADMINISTRATOR" });
   const [pending, setPending] = useState(false);
-  const isAdmin = useCan("admin");
+  const canManage = useCan("bmc.users");
   const [showEmpty, setShowEmpty] = useState(false);
 
   const load = useCallback(async () => {
@@ -134,7 +134,7 @@ export function ServerBmcUsers({ assetId }: { assetId: string }) {
           <Button size="small" disabled={loading} onClick={() => void load()}>
             刷新
           </Button>
-          {isAdmin ? (
+          {canManage ? (
             <Button size="small" variant="contained" disabled={!users} onClick={() => open("ensure", null)}>
               新建用户
             </Button>
@@ -171,7 +171,7 @@ export function ServerBmcUsers({ assetId }: { assetId: string }) {
                   <StatusChip tone={user.enabled ? "success" : "neutral"} outlined={!user.enabled} label={user.enabled ? "启用" : "停用"} />
                   <StatusChip tone={user.privilege === "ADMINISTRATOR" ? "primary" : "neutral"} label={IPMI_PRIVILEGE_LABEL[user.privilege]} />
                   {!user.ipmi ? <StatusChip tone="warning" label="IPMI 未开" /> : null}
-                  <Stack direction="row" spacing={0.5} sx={{ ml: "auto", display: isAdmin ? undefined : "none" }}>
+                  <Stack direction="row" spacing={0.5} sx={{ ml: "auto", display: canManage ? undefined : "none" }}>
                     <Button size="small" onClick={() => open("password", user)}>
                       改密码
                     </Button>
