@@ -462,6 +462,7 @@ export function redfishPorts(raw: RedfishRaw): HwPort[] {
       type: [str(doc, "Protocol"), str(doc, "FormFactor")].filter(Boolean).join(" "),
       used: !absent,
       device: absent ? "" : driveText(doc),
+      ...(absent ? {} : { parts: [id(doc)] }),
       ...(drivePorts.length && !absent && !label(doc) ? { note: "没对上盘位" } : {}),
     });
   }
@@ -521,6 +522,8 @@ export interface InterfaceView {
   machine: HwComponent[];
   /** 该插在接口上、但没对上的部件，比如没对上插槽的网卡、BMC 采的 GPU。 */
   loose: HwComponent[];
+  /** 这次采集没记接口里插的是哪个部件（10-12 以前的采集），同型号的盘分不出在哪个盘位，重新采集能对上。 */
+  unmapped: boolean;
 }
 
 const MACHINE_KINDS = new Set<HwComponent["kind"]>(["system", "board", "firmware"]);
@@ -573,8 +576,20 @@ export function interfaceView(components: HwComponent[], ports: HwPort[] | undef
     else loose.push(item);
   }
 
+  // 以前的采集盘位上只记了「型号 容量」：只有一个盘位、一块盘是这个型号容量时才算对上。
+  // 同型号的几块盘分不出谁在哪个盘位（AMI 的 NVMe0 在 NVME3 盘位），按顺序硬配会把序列号配错，留在没对上里。
+  const unmappedBays = list.filter((port) => port.group === "drive" && port.used && !port.parts && port.device && !parts.has(port));
+  for (const port of unmappedBays) {
+    const sameBays = unmappedBays.filter((other) => other.device === port.device);
+    const disks = loose.filter((item) => item.kind === "disk" && diskText(item, "") === port.device);
+    if (sameBays.length !== 1 || disks.length !== 1) continue;
+    attach(port, disks[0]);
+    loose.splice(loose.indexOf(disks[0]), 1);
+  }
+  const unmapped = Boolean(ports?.length) && list.some((port) => (port.group === "drive" || port.group === "pcie") && port.used && port.device && !port.parts);
+
   const groups = VIEW_GROUPS.map((group) => ({ group, ports: list.filter((port) => port.group === group), ...(fromParts.has(group) ? { fromParts: true } : {}) })).filter(
     (item) => item.ports.length || ["cpu", "memory", "pcie", "drive", "net"].includes(item.group),
   );
-  return { groups, parts, machine, loose };
+  return { groups, parts, machine, loose, unmapped };
 }

@@ -355,7 +355,11 @@ export function ServerInventory({ projectId, row }: { projectId?: string; row: {
               <InterfaceSections key={snapshot.id} snapshot={snapshot} view={parts} />
               <PartGroups
                 title="没对上接口的部件"
-                caption="该插在接口上，但按 PCI 地址、槽位名没找到是哪个接口的。BMC 的 GPU、网卡编号和插槽对不上，会都在这里。"
+                caption={
+                  parts.unmapped
+                    ? "这次采集是 10 月 12 日以前做的，没记接口里插的是哪个部件，同型号的几块盘分不出在哪个盘位，硬配会把序列号配错，所以放在这里。重新采集一次就能对上。"
+                    : "该插在接口上，但按 PCI 地址、槽位名没找到是哪个接口的。BMC 的 GPU、网卡编号和插槽对不上，会都在这里。"
+                }
                 items={parts.loose}
               />
             </>

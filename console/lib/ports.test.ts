@@ -426,3 +426,22 @@ Memory Device
   );
   assert.equal(portSummary(parsed.ports, "memory"), "内存槽 2 个：占用 1，空闲 1");
 });
+
+test("old BMC snapshots without parts: only a unique model and capacity is matched to a bay", async () => {
+  const { interfaceView } = await import("./ports.ts");
+  const disk = (slot: string, model: string, capacityGB: number): HwComponent => ({ kind: "disk", slot, model, vendor: "", sn: slot, firmware: "", attrs: { capacityGB } });
+  const same0 = disk("NVMe0_NameSpace1", "SOLIDIGM SB5PH27X076T", 7682);
+  const same1 = disk("NVMe1_NameSpace1", "SOLIDIGM SB5PH27X076T", 7682);
+  const m2 = disk("NVMe4_NameSpace1", "SSSTC CA6-8D1024", 1024);
+  const ports: HwPort[] = [
+    { group: "drive", name: "NVME0", type: "", used: true, device: "SOLIDIGM SB5PH27X076T 7682 GB" },
+    { group: "drive", name: "NVME1", type: "", used: true, device: "SOLIDIGM SB5PH27X076T 7682 GB" },
+    { group: "drive", name: "P0_M.2", type: "", used: true, device: "SSSTC CA6-8D1024 1024 GB" },
+  ];
+  const view = interfaceView([same0, same1, m2], ports);
+  assert.deepEqual(view.parts.get(ports[2]), [m2]);
+  assert.equal(view.parts.has(ports[0]), false, "同型号的盘分不出盘位，不硬配");
+  assert.deepEqual(view.loose, [same0, same1]);
+  assert.equal(view.unmapped, true);
+  assert.equal(interfaceView([m2], [{ ...ports[2], parts: ["NVMe4_NameSpace1"] }]).unmapped, false);
+});
