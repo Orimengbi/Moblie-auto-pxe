@@ -111,6 +111,8 @@ const WRITES: [RegExp, Permission | null][] = [
   [/^\/api\/firmware-lib(\/.*)?$/, "firmware"],
   // 任务按类型再细分，见 taskPermission。
   [/^\/api\/(tasks|projects\/[^/]+\/tasks)$/, null],
+  // 归档只影响右上角列表显示，登录了就能做。
+  [/^\/api\/tasks\/archive$/, null],
   [/^\/api\/projects(\/.*)?$/, "install"],
   [/^\/api\/files(\/.*)?$/, "files"],
   [/^\/api\/(settings|snmp-profiles)(\/.*)?$/, "settings"],

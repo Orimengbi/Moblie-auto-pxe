@@ -22,6 +22,7 @@ import Typography from "@mui/material/Typography";
 import AccountCircleOutlined from "@mui/icons-material/AccountCircleOutlined";
 import AlbumOutlined from "@mui/icons-material/AlbumOutlined";
 import AssignmentOutlined from "@mui/icons-material/AssignmentOutlined";
+import ChecklistOutlined from "@mui/icons-material/ChecklistOutlined";
 import BusinessOutlined from "@mui/icons-material/BusinessOutlined";
 import DashboardOutlined from "@mui/icons-material/DashboardOutlined";
 import DnsOutlined from "@mui/icons-material/DnsOutlined";
@@ -66,6 +67,7 @@ function groups(permissions: Permission[], counts: NavCounts): { title: string; 
           badge: { value: counts.alerts.critical + counts.alerts.warning, color: counts.alerts.critical ? "error" : "warning" },
         },
         { href: "/tickets", label: "工单", icon: AssignmentOutlined, badge: { value: counts.tickets, color: "primary" } },
+        { href: "/tasks", label: "任务中心", icon: ChecklistOutlined },
         { href: "/parts", label: "备件", icon: Inventory2Outlined },
         { href: "/firmware", label: "固件版本", icon: MemoryOutlined },
         { href: "/firmware-lib", label: "固件库", icon: SystemUpdateAltOutlined },

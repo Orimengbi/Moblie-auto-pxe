@@ -138,6 +138,8 @@ export function ServerBmc({ assetId }: { assetId: string }) {
       if (result.ok) {
         setData(result.data);
         setError("");
+        // 标题上的 BIOS、BMC 版本跟着最新读到的走。
+        if (refresh) window.dispatchEvent(new CustomEvent("pxe:inventory-updated", { detail: assetId }));
       } else setError(result.error);
     },
     [assetId],

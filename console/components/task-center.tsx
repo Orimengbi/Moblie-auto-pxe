@@ -117,14 +117,22 @@ function UploadItem({ item }: { item: LiveUpload }) {
   );
 }
 
-function BatchItem({ task, onDismiss }: { task: TaskSummary; onDismiss?: () => void }) {
+function BatchItem({ task, onDismiss, onArchive }: { task: TaskSummary; onDismiss?: () => void; onArchive?: () => void }) {
   const finished = task.ok + task.failed;
-  const value = task.total ? Math.floor((finished / task.total) * 100) : 100;
-  const state = task.status === "running" ? `${finished} / ${task.total}` : task.failed ? `${task.failed} 台没成功` : "全部成功";
+  const progress = task.status === "running" ? task.progress : undefined;
+  const value = progress ? (progress.percent ?? 0) : task.total ? Math.floor((finished / task.total) * 100) : 100;
+  const state =
+    task.status === "running"
+      ? progress
+        ? `${progress.label}${progress.percent !== null ? ` ${progress.percent}%` : ""}`
+        : `${finished} / ${task.total}`
+      : task.failed
+        ? `${task.failed} 台没成功`
+        : "全部成功";
   return (
     <Stack spacing={0.5}>
       <Row title={task.name} state={state} error={task.status === "done" && task.failed > 0} />
-      <Bar value={value} active={task.status === "running" || !task.failed} />
+      {progress && progress.percent === null ? <LinearProgress sx={{ height: 6, borderRadius: 3 }} /> : <Bar value={value} active={task.status === "running" || !task.failed} />}
       <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
         <Typography variant="caption" noWrap sx={{ flex: 1, minWidth: 0, color: "text.secondary" }}>
           {task.projectName || "资产"} · 成功 {task.ok}
@@ -133,6 +141,13 @@ function BatchItem({ task, onDismiss }: { task: TaskSummary; onDismiss?: () => v
         <MuiLink component={Link} href={`/tasks/${task.id}`} variant="caption" underline="hover">
           查看
         </MuiLink>
+        {onArchive && task.status === "done" ? (
+          <Tooltip title="不再在这里显示，任务中心里照样能查。结束满 1 小时会自动归档">
+            <MuiLink component="button" type="button" variant="caption" underline="hover" color="text.secondary" onClick={onArchive}>
+              归档
+            </MuiLink>
+          </Tooltip>
+        ) : null}
         {onDismiss ? (
           <MuiLink component="button" type="button" variant="caption" underline="hover" color="text.secondary" onClick={onDismiss}>
             关闭
@@ -204,7 +219,10 @@ function Empty({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** 右上角的任务列表：镜像上传、表格导入和批量任务的进度都在这里，上传和批量任务可以单独开小浮窗。 */
+/**
+ * 右上角的任务列表：镜像上传、表格导入和批量任务的进度都在这里，上传和批量任务可以单独开小浮窗。
+ * 批量任务只列在跑的和还没归档的；结束的可以归档，满 1 小时自动归档，全部任务在任务中心（/tasks）。
+ */
 export function TaskCenter() {
   const pathname = usePathname();
   const uploads = useUploads();
@@ -244,6 +262,11 @@ export function TaskCenter() {
     window.addEventListener("pxe:import-jobs", refresh);
     return () => window.removeEventListener("pxe:import-jobs", refresh);
   }, [load]);
+
+  async function archive(ids: string[]) {
+    await fetch("/api/tasks/archive", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids, archived: true }) }).catch(() => null);
+    await load();
+  }
 
   async function removeImport(id: string) {
     await fetch(`/api/import-jobs/${id}`, { method: "DELETE" }).catch(() => null);
@@ -323,9 +346,21 @@ export function TaskCenter() {
           ) : null}
           <Section title="批量任务" float={prefs.batch} onFloat={(on) => setFloat("batch", on)}>
             {feed.tasks.map((task) => (
-              <BatchItem key={task.id} task={task} />
+              <BatchItem key={task.id} task={task} onArchive={() => void archive([task.id])} />
             ))}
-            {!feed.tasks.length ? <Empty>还没有执行过批量任务。</Empty> : null}
+            {!feed.tasks.length ? <Empty>没有进行中或未归档的任务。</Empty> : null}
+            <Stack direction="row" spacing={1} sx={{ justifyContent: "space-between", alignItems: "center" }}>
+              {feed.tasks.some((task) => task.status === "done") ? (
+                <MuiLink component="button" type="button" variant="caption" underline="hover" color="text.secondary" onClick={() => void archive(feed.tasks.filter((task) => task.status === "done").map((task) => task.id))}>
+                  归档全部已结束的
+                </MuiLink>
+              ) : (
+                <span />
+              )}
+              <MuiLink component={Link} href="/tasks" variant="caption" underline="hover">
+                打开任务中心 →
+              </MuiLink>
+            </Stack>
           </Section>
         </Stack>
       </Popover>

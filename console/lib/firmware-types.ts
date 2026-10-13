@@ -155,8 +155,13 @@ export interface FirmwarePushJob {
   startedAt: string;
   updatedAt: string;
   finishedAt: string;
-  /** prepare 腾内存，upload 上传，verify 传完等 BMC 校验，flash BMC 在刷，done 完成，failed 失败。 */
-  stage: "prepare" | "upload" | "verify" | "flash" | "done" | "failed";
+  /**
+   * prepare 腾内存，upload 上传，verify 传完等 BMC 校验，flash BMC 在刷，
+   * reboot 刷完等 BMC 重启回来、check 重新读版本核对（只有刷 BMC 有这两步），done 完成，failed 失败。
+   */
+  stage: "prepare" | "upload" | "verify" | "flash" | "reboot" | "check" | "done" | "failed";
+  /** 刷完以后的情况：等 BMC 重启到哪了、核对出的版本、什么时候生效。 */
+  note?: string;
   /** 上传了多少字节、一共多少。 */
   sent: number;
   total: number;
