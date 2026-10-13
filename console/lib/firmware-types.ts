@@ -130,10 +130,10 @@ export interface FirmwareChoice {
   kind: FirmwareKind;
   version: string;
   models: string[];
-  /** 这台机器的型号在适用型号里（含型号字典别名）。 */
-  fits: boolean;
-  /** 这台上次读到的这类固件版本，没读过或没法比是空。 */
+  /** 这台上次读到的这类固件版本（HGX 是跟包不一样的那几个部件），没读过或没法比是空。 */
   current: string;
+  /** 这台现在的版本比包：older 比包旧（能升级）、same、newer、unknown 比不出、unread 还没读过固件。 */
+  relation: VersionRelation | "unread";
   images: { path: string; size: number; type: FirmwareImage["type"] }[];
   image: string;
   targets: string[];

@@ -250,16 +250,16 @@ test("an uploaded Gigabyte BIOS zip is recognised and matched against the fleet"
   const detail = lib.getPackage(pkg.id)!;
   assert.deepEqual(detail.machines.map((machine) => [machine.sn, machine.relation]).sort(), [["FW-1", "older"], ["FW-2", "same"], ["FW-3", "unread"]]);
 
-  // 给一台机器挑包：型号对上的排前面，BIOS 默认推 RBU，带 AMI 的 Targets 和 ImageType。
+  // 给一台机器挑包：只列型号对得上的，BIOS 默认推 RBU，带 AMI 的 Targets 和 ImageType。
   const [choice] = lib.choicesForAsset(assets.getAsset(old.id)!);
   assert.deepEqual(
-    { fits: choice.fits, current: choice.current, image: choice.image, targets: choice.targets, oem: choice.oem },
-    { fits: true, current: "R05_F04", image: "RBU/image.RBU", targets: ["/redfish/v1/UpdateService/FirmwareInventory/BIOS"], oem: { ImageType: "BIOS" } },
+    { relation: choice.relation, current: choice.current, image: choice.image, targets: choice.targets, oem: choice.oem },
+    { relation: "older", current: "R05_F04", image: "RBU/image.RBU", targets: ["/redfish/v1/UpdateService/FirmwareInventory/BIOS"], oem: { ImageType: "BIOS" } },
   );
-  // 已经是这版的排在能升级的后面。
-  assert.equal(lib.choicesForAsset(assets.getAsset(same.id)!)[0].current, "R07_F05");
+  assert.equal(lib.choicesForAsset(assets.getAsset(same.id)!)[0].relation, "same");
+  // 型号不符的包不给这台列。
   const other = assets.listAssets().find((asset) => asset.sn === "FW-4")!;
-  assert.equal(lib.choicesForAsset(other)[0].fits, false);
+  assert.deepEqual(lib.choicesForAsset(other), []);
   assert.ok(lib.choiceImage(pkg.id, "RBU/image.RBU").file.endsWith("RBU/image.RBU"));
   assert.throws(() => lib.choiceImage(pkg.id, "../meta.json"), /没有这个镜像/);
 
