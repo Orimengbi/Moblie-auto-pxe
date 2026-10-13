@@ -1,5 +1,5 @@
 import { getAsset, listAssets } from "./assets.ts";
-import { checkBmc, checkOs, getMonitorSettings, getMonitorState, monitored, saveMonitorState } from "./monitor.ts";
+import { bmcIntervalFor, checkBmc, checkOs, getMonitorSettings, getMonitorState, monitored, saveMonitorState } from "./monitor.ts";
 import { checkNetwork, collectNetwork } from "./network.ts";
 import { syncEventStreams } from "./redfish-events.ts";
 import { hostContext, resolveAssetHost, runSsh } from "./remote.ts";
@@ -8,6 +8,7 @@ import type { Asset, MonitorSettings, MonitorState } from "./types.ts";
 
 /**
  * 定时监控：每 30 秒看一眼哪些资产到了检查时间，同时最多查 12 台（254 台 5 分钟要轮一遍）。随控制台进程起停（instrumentation.ts）。
+ * 已经显示 BMC 连不上的每分钟重试一次，修好了很快就显示回来。
  * 同一台同时只查一次，手动「立即检查」和定时的不会撞在一起。
  */
 
@@ -81,7 +82,7 @@ async function tick(): Promise<void> {
       if (!monitored(asset, settings) || running.has(asset.id)) continue;
       const state = getMonitorState(asset.id);
       const network = isNetworkDevice(asset);
-      const bmc = (network || Boolean(asset.bmcIp)) && due(state.bmcAt, settings.bmcIntervalMin, now);
+      const bmc = (network || Boolean(asset.bmcIp)) && due(state.bmcAt, bmcIntervalFor(state, settings), now);
       const os = settings.osIntervalMin > 0 && (network || Boolean(asset.osAddress) || Boolean(asset.bootMac)) && due(state.osAt, settings.osIntervalMin, now);
       if (bmc || os) queue.push({ asset, bmc, os });
     }

@@ -296,3 +296,13 @@ test("memory correctable ECC resolves after quiet hours and stays quiet until th
   assert.deepEqual(active(), [dimm.key, ue.key, sel.key].sort());
   assert.equal(alerts.memoryEccKind("health:内存 X", "critical"), null);
 });
+
+test("an unreachable BMC is retried every minute, others keep the configured interval", () => {
+  const settings = { ...monitor.DEFAULT_MONITOR, bmcIntervalMin: 5, bmcFailuresToAlert: 2 };
+  assert.equal(monitor.bmcIntervalFor({ bmcOk: true, bmcFailures: 0 }, settings), 5);
+  assert.equal(monitor.bmcIntervalFor({ bmcOk: false, bmcFailures: 0 }, settings), 5, "还没查过的按正常间隔");
+  assert.equal(monitor.bmcIntervalFor({ bmcOk: false, bmcFailures: 1 }, settings), 5, "第一次没连上还按正常间隔，报警时间不变");
+  assert.equal(monitor.bmcIntervalFor({ bmcOk: false, bmcFailures: 2 }, settings), 1);
+  assert.equal(monitor.bmcIntervalFor({ bmcOk: false, bmcFailures: 3 }, settings), 1);
+  assert.equal(monitor.bmcIntervalFor({ bmcOk: false, bmcFailures: 3 }, { ...settings, bmcIntervalMin: 1 }), 1);
+});
