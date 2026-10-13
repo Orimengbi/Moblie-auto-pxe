@@ -64,11 +64,12 @@ export async function POST(request: Request, context: Context) {
     const identity = requirePermission(request, "firmware");
     const body = await readJson<FirmwareUpdateInput & Partial<PushRequest>>(request);
     if (body.packageId) {
+      const asset = getAsset(id);
+      if (!asset) throw new Error("资产不存在");
+      if (!choicesForAsset(asset).some((choice) => choice.id === body.packageId)) throw new Error("这个固件包不适用于这台的型号，到固件库核对适用型号");
       const { pkg, file } = choiceImage(body.packageId, String(body.image || ""));
       const targets = Array.isArray(body.targets) ? body.targets.map(String).filter(Boolean) : [];
       const oem = body.oem && typeof body.oem === "object" && !Array.isArray(body.oem) ? body.oem : {};
-      const asset = getAsset(id);
-      if (!asset) throw new Error("资产不存在");
       const detail = `${FIRMWARE_KIND_LABEL[pkg.kind]} ${pkg.version}（${pkg.fileName} / ${body.image}），Targets ${JSON.stringify(targets)}，Oem ${JSON.stringify(oem)}`;
       // 后台跑：腾内存、上传、等 BMC 刷完都在控制台里做，页面按 ?push=1 看进度。
       const job = await audited(request, { action: "BMC 固件升级", targetType: "asset", targetId: id, targetLabel: `${asset.tag} ${asset.sn}`, detail: `开始推送 ${detail}` }, () =>

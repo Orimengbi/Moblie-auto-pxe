@@ -204,18 +204,26 @@ const PUSH_DEFAULTS: Partial<Record<FirmwareKind, { image: FirmwareImage["type"]
   hgx: { image: ["fwpkg"], target: "/redfish/v1/UpdateService/FirmwareInventory/HGX_FW_BMC_0", oem: { ImageType: "HMC" }, prepareHmc: true },
 };
 
-function isUpgrade(choice: FirmwareChoice): boolean {
-  return Boolean(choice.current) && compareVersions(choice.current, choice.version) === "older";
-}
+const KIND_ORDER: FirmwareKind[] = ["bios", "bmc", "cpld", "hgx", "nic", "other"];
 
+/** 这台能用的包（型号对得上、有能推的镜像）。页面先选部件再选版本；按部件排，同部件里新版本在前。 */
 export function choicesForAsset(asset: Asset): FirmwareChoice[] {
   const inventory = loadSnapshot<FirmwareItem[]>(asset.id, "firmware")?.data || null;
   return allPackages()
+    .filter((pkg) => modelMatcher(pkg.models)(asset.model))
     .map((pkg) => {
       const defaults = PUSH_DEFAULTS[pkg.kind];
       const images = pkg.images.filter((image) => image.type !== "tool").map(({ path: file, size, type }) => ({ path: file, size, type }));
       const preferred = defaults ? defaults.image.map((type) => images.find((image) => image.type === type)).find(Boolean) : undefined;
       const inventoryId = INVENTORY_ID[pkg.kind];
+      let current = "";
+      let relation: FirmwareChoice["relation"] = "unknown";
+      if (!inventory) relation = "unread";
+      else if (pkg.kind === "hgx") ({ version: current, relation } = hgxRelation(pkg, inventory));
+      else if (inventoryId) {
+        current = inventory.find((item) => item.id === inventoryId)?.version || "";
+        relation = compareVersions(current, pkg.version);
+      }
       return {
         id: pkg.id,
         fileName: pkg.fileName,
@@ -223,8 +231,8 @@ export function choicesForAsset(asset: Asset): FirmwareChoice[] {
         kind: pkg.kind,
         version: pkg.version,
         models: pkg.models,
-        fits: modelMatcher(pkg.models)(asset.model),
-        current: (inventoryId && inventory?.find((item) => item.id === inventoryId)?.version) || "",
+        current,
+        relation,
         images,
         image: (preferred || images[0])?.path || "",
         targets: defaults ? [defaults.target] : [],
@@ -233,8 +241,7 @@ export function choicesForAsset(asset: Asset): FirmwareChoice[] {
       };
     })
     .filter((choice) => choice.images.length)
-    // 型号对得上的在前；其中比这台现在新的在前；再按版本从新到旧。
-    .sort((a, b) => Number(b.fits) - Number(a.fits) || Number(isUpgrade(b)) - Number(isUpgrade(a)) || (compareVersions(a.version, b.version) === "older" ? 1 : compareVersions(a.version, b.version) === "newer" ? -1 : 0));
+    .sort((a, b) => KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind) || (compareVersions(a.version, b.version) === "older" ? 1 : compareVersions(a.version, b.version) === "newer" ? -1 : 0));
 }
 
 /** 推之前取镜像：包要在、镜像要是包里列出来的那几个之一。 */

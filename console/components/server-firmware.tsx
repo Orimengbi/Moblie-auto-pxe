@@ -20,13 +20,22 @@ import Typography from "@mui/material/Typography";
 import { ReadBar } from "@/components/server-bmc";
 import { isHgxFirmware } from "@/lib/asset-labels";
 import type { BmcOverview, FirmwareItem } from "@/lib/bmc-redfish";
-import { FIRMWARE_KIND_LABEL, type FirmwareChoice, type FirmwarePushJob } from "@/lib/firmware-types";
+import { FIRMWARE_KIND_LABEL, type FirmwareChoice, type FirmwareKind, type FirmwarePushJob } from "@/lib/firmware-types";
 import type { PowerState } from "@/lib/types";
 import { formatTime } from "@/lib/time";
 import { api } from "@/lib/client-api";
 import { useCan } from "@/components/role-context";
 
 const MONO = "var(--font-geist-mono), monospace";
+
+/** 版本下拉里每个包跟这台现在版本比的标注（relation 是「这台比包」）。 */
+const CHOICE_RELATION: Record<FirmwareChoice["relation"], { label: string; color: string }> = {
+  older: { label: "比现在新", color: "success.main" },
+  same: { label: "已是这版", color: "text.secondary" },
+  newer: { label: "比现在旧", color: "warning.main" },
+  unknown: { label: "比不出", color: "text.secondary" },
+  unread: { label: "没读过固件", color: "text.secondary" },
+};
 
 type Update = BmcOverview["firmwareUpdate"];
 
@@ -133,6 +142,7 @@ export function ServerFirmware({ assetId }: { assetId: string }) {
   const [component, setComponent] = useState("");
   const [source, setSource] = useState<"library" | "url">("library");
   const [library, setLibrary] = useState<{ choices: FirmwareChoice[]; power: PowerState; powerAt: string } | null>(null);
+  const [kind, setKind] = useState<FirmwareKind | "">("");
   const [choiceId, setChoiceId] = useState("");
   const [image, setImage] = useState("");
   const [targets, setTargets] = useState("");
@@ -141,6 +151,8 @@ export function ServerFirmware({ assetId }: { assetId: string }) {
   const [task, setTask] = useState<{ path: string; state: string; percent: number | null; messages: string[] } | null>(null);
   const [push, setPush] = useState<FirmwarePushJob | null>(null);
   const choice = library?.choices.find((item) => item.id === choiceId) || null;
+  const kinds = [...new Set(library?.choices.map((item) => item.kind) || [])];
+  const versions = library?.choices.filter((item) => item.kind === kind) || [];
 
   function pick(next: FirmwareChoice | null) {
     setChoiceId(next?.id || "");
@@ -148,6 +160,13 @@ export function ServerFirmware({ assetId }: { assetId: string }) {
     setTargets(next?.targets.join("\n") || "");
     setOem(next ? JSON.stringify(next.oem) : "");
     setPrepareHmc(Boolean(next?.prepareHmc));
+  }
+
+  /** 换部件时默认选比这台新的里最新的那个包，没有就选最新的。 */
+  function pickKind(next: FirmwareKind, choices: FirmwareChoice[]) {
+    setKind(next);
+    const ofKind = choices.filter((item) => item.kind === next);
+    pick(ofKind.find((item) => item.relation === "older") || ofKind[0] || null);
   }
 
   async function openDialog() {
@@ -159,7 +178,13 @@ export function ServerFirmware({ assetId }: { assetId: string }) {
     }
     setLibrary(result.data);
     setSource(result.data.choices.length ? "library" : "url");
-    pick(result.data.choices.find((item) => item.fits) || null);
+    const choices = result.data.choices;
+    const first = choices.find((item) => item.relation === "older") || choices[0];
+    if (first) pickKind(first.kind, choices);
+    else {
+      setKind("");
+      pick(null);
+    }
   }
 
   // 提交后每 10 秒看一次 BMC 上这个任务走到哪了，结束就停。
@@ -237,9 +262,9 @@ export function ServerFirmware({ assetId }: { assetId: string }) {
       return;
     }
     const warnings = [
-      !choice.fits && `这台的型号不在包的适用型号里（${choice.models.join("、") || "包里没写"}）`,
+      choice.relation === "newer" && `包比这台现在的旧（${choice.current} → ${choice.version}），这是降级`,
       choice.kind === "bios" && library?.power === "on" && "机器开着：BIOS 建议关机再刷，刷完开机才生效",
-      choice.current && choice.current === choice.version && `这台已经是 ${choice.version}`,
+      choice.relation === "same" && `这台已经是 ${choice.version}`,
     ].filter(Boolean);
     const text = `把 ${choice.fileName} 里的\n${image}\n推给这台 BMC 刷写 ${FIRMWARE_KIND_LABEL[choice.kind]} ${choice.version}？${warnings.length ? `\n\n注意：\n${warnings.join("\n")}` : ""}\n\n刷写期间不要断电。`;
     if (!window.confirm(text)) return;
@@ -364,25 +389,46 @@ export function ServerFirmware({ assetId }: { assetId: string }) {
                 </Typography>
               ) : !library.choices.length ? (
                 <Typography variant="body2" sx={{ color: "text.secondary" }}>
-                  固件库里还没有能推的镜像，先到「固件库」上传固件包。
+                  固件库里没有适用于这台型号的包。先到「固件库」上传，或者在包上补上这台的型号。
                 </Typography>
               ) : (
                 <>
-                  <TextField select label="固件包" value={choiceId} onChange={(event) => pick(library.choices.find((item) => item.id === event.target.value) || null)} fullWidth>
-                    {library.choices.map((item) => (
+                  <TextField select label="升级哪个部件" value={kind} onChange={(event) => pickKind(event.target.value as FirmwareKind, library.choices)} fullWidth>
+                    {kinds.map((value) => {
+                      const count = library.choices.filter((item) => item.kind === value).length;
+                      const newer = library.choices.some((item) => item.kind === value && item.relation === "older");
+                      return (
+                        <MenuItem key={value} value={value}>
+                          {FIRMWARE_KIND_LABEL[value]}
+                          <Box component="span" sx={{ ml: 1, color: "text.secondary", fontSize: 13 }}>
+                            {count} 个包{newer ? " · 有新版" : ""}
+                          </Box>
+                        </MenuItem>
+                      );
+                    })}
+                  </TextField>
+                  <TextField select label="版本" value={choiceId} onChange={(event) => pick(versions.find((item) => item.id === event.target.value) || null)} fullWidth disabled={!kind}>
+                    {versions.map((item) => (
                       <MenuItem key={item.id} value={item.id}>
-                        {FIRMWARE_KIND_LABEL[item.kind]} {item.version || "?"} · {item.fileName}
-                        {item.fits ? "" : "（型号不符）"}
+                        <Box component="span" sx={{ fontFamily: MONO }}>
+                          {item.version || "?"}
+                        </Box>
+                        <Box component="span" sx={{ mx: 1, color: CHOICE_RELATION[item.relation].color, fontSize: 13 }}>
+                          {CHOICE_RELATION[item.relation].label}
+                        </Box>
+                        <Box component="span" sx={{ color: "text.secondary", fontSize: 13, overflow: "hidden", textOverflow: "ellipsis" }}>
+                          {item.fileName}
+                        </Box>
                       </MenuItem>
                     ))}
                   </TextField>
                   {choice ? (
                     <>
                       <Typography variant="body2" sx={{ color: "text.secondary" }}>
-                        这台现在：{choice.current || "没读过或没法比"} → 包里：{choice.version || "?"}；电源：{POWER_LABEL[library.power]}
+                        这台现在：{choice.current || (choice.relation === "unread" ? "还没读过固件，先点「读取」" : "没法比")} → 包里：{choice.version || "?"}；电源：{POWER_LABEL[library.power]}
                         {library.powerAt ? `（${formatTime(library.powerAt)} 读的）` : ""}
                       </Typography>
-                      {!choice.fits ? <Alert severity="warning">这台的型号不在包的适用型号里：{choice.models.join("、") || "包里没写适用型号"}</Alert> : null}
+                      {choice.relation === "newer" ? <Alert severity="warning">包比这台现在的旧，刷了是降级。</Alert> : null}
                       {choice.kind === "bios" && library.power === "on" ? <Alert severity="warning">机器开着。BIOS 建议关机再刷，刷完开机才生效。</Alert> : null}
                       <TextField select label="推哪个镜像" value={image} onChange={(event) => setImage(event.target.value)} fullWidth>
                         {choice.images.map((item) => (
