@@ -35,9 +35,9 @@ export async function GET(request: Request, context: Context) {
       const cached = loadSnapshot<FirmwareItem[]>(id, "firmware");
       return Response.json({ readAt: cached?.readAt || "", items: cached?.data || null });
     }
-    const { session } = await assetSession(id);
+    const { asset, session } = await assetSession(id);
     if (task) return Response.json(await readTask(session, task));
-    const saved = saveFirmwareSnapshot(id, await firmwareInventory(session));
+    const saved = saveFirmwareSnapshot(id, await firmwareInventory(session, asset));
     return Response.json({ readAt: saved.readAt, items: saved.data });
   } catch (error) {
     return jsonError(error);

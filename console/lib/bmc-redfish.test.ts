@@ -12,6 +12,10 @@ const events = await import("./redfish-events.ts");
 const assets = await import("./assets.ts");
 const alerts = await import("./alerts.ts");
 const { RedfishAuthError } = await import("./redfish.ts");
+const web = await import("./bmc-web.ts");
+// 测试里不连真的 BMC 网页；要 SMBIOS 版本的用例自己换。
+let smbiosVersion = "";
+web.setSmbiosReader(async () => smbiosVersion);
 
 type Doc = Record<string, unknown>;
 
@@ -427,6 +431,48 @@ test("firmware inventory reads HGX items one by one when $expand leaves out thei
   docs.delete("/redfish/v1/UpdateService/FirmwareInventory/HGX_FW_GPU_59");
   const second = await bmc.collectSettings(target, ["firmware"]);
   assert.deepEqual(second.lines, ["固件版本：60 项，其中 HGX 59 项", "  和上次读的比变了 2 项：", "    HGX_FW_GPU_03：97.10.7E.00.03 → 97.10.80.00.01", "    HGX_FW_GPU_59：97.10.7E.00.03 → （没有）"]);
+});
+
+test("a BIOS version the BMC cut short in Redfish is completed from its raw SMBIOS table", async () => {
+  const bmcs = setup();
+  const target = { ...asset, id: "asset-short-bios" } as import("./types.ts").Asset;
+  await bmc.openSession(asset);
+  bmcs.get("10.0.0.9")!.docs.get("/redfish/v1/UpdateService/FirmwareInventory/BIOS")!.Version = "R05";
+  smbiosVersion = "R05_F04";
+  try {
+    await bmc.collectSettings(target, ["firmware"]);
+  } finally {
+    smbiosVersion = "";
+  }
+  const saved = bmc.loadSnapshot<import("./bmc-redfish.ts").FirmwareItem[]>("asset-short-bios", "firmware")!.data;
+  assert.deepEqual(saved[0], { id: "BIOS", name: "BIOS", version: "R05_F04", updateable: true, redfishVersion: "R05" });
+});
+
+test("SMBIOS type 0 gives the BIOS version, and only a longer version starting with the Redfish one is taken", () => {
+  // _SM3_ 入口（24 字节）+ Type 0（长 0x1a，Version 是第 2 个字符串）+ Type 127 结束。
+  const entry = Buffer.alloc(24);
+  entry.write("_SM3_", 0, "latin1");
+  entry[6] = 24;
+  const type0 = Buffer.alloc(0x1a);
+  type0[0] = 0;
+  type0[1] = 0x1a;
+  type0[4] = 1;
+  type0[5] = 2;
+  type0[8] = 3;
+  const strings = Buffer.from("GIGABYTE\x00R05_F04\x0004/22/2026\x00\x00", "latin1");
+  const end = Buffer.from([127, 4, 0, 0, 0, 0]);
+  assert.equal(web.smbiosBiosVersion(Buffer.concat([entry, type0, strings, end])), "R05_F04");
+  // 前面先有别的结构也能找到。
+  const type1 = Buffer.concat([Buffer.from([1, 4, 1, 0]), Buffer.from("x\x00\x00", "latin1")]);
+  assert.equal(web.smbiosBiosVersion(Buffer.concat([type1, type0, strings, end])), "R05_F04");
+  assert.equal(web.smbiosBiosVersion(Buffer.from("garbage")), "");
+
+  assert.equal(web.fullerBiosVersion("R05", "R05_F04"), "R05_F04");
+  assert.equal(web.fullerBiosVersion("R05_F04", "R05_F04"), "R05_F04");
+  assert.equal(web.fullerBiosVersion("R05", "R07_F05"), "R05", "对不上的不换");
+  assert.equal(web.fullerBiosVersion("R05", "R051"), "R05", "不是在分隔符处截断的不换");
+  assert.equal(web.fullerBiosVersion("R05", ""), "R05");
+  assert.equal(web.fullerBiosVersion("", "R05_F04"), "R05_F04");
 });
 
 test("a firmware read with the host off keeps the last HGX versions", () => {
