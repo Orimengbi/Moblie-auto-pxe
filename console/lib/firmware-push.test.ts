@@ -23,7 +23,8 @@ function fakeSession(log: string[], options: { prepareStatus?: string } = {}): B
     paths: {} as BmcSession["paths"],
     request: async (method, target, body, _headers, opts) => {
       log.push(`${method} ${target}${opts?.timeoutMs ? ` timeout=${opts.timeoutMs}` : ""}`);
-      if (target === "/redfish/v1/UpdateService") return { status: 200, body: { MultipartHttpPushUri: "/redfish/v1/UpdateService/upload", MaxImageSizeBytes: 1e9 }, headers: {} };
+      if (target === "/redfish/v1/UpdateService")
+        return { status: 200, body: { MultipartHttpPushUri: "/redfish/v1/UpdateService/upload", MaxImageSizeBytes: 1e9, Oem: { AMIUpdateService: { UpdateInformation: { FlashPercentage: "40% done.", UpdateStatus: "Flashing" } } } }, headers: {} };
       if (target.endsWith("PrepareFreeMemory")) return { status: 200, body: { Status: options.prepareStatus || "Success", Resolution: "Power cycle the system" }, headers: {} };
       if (target === "/redfish/v1/UpdateService/upload") {
         assert.ok(body instanceof UploadBody);
@@ -70,6 +71,10 @@ test("a push runs in the background: prepare, upload with progress, then follows
   assert.equal(job.taskPath, "/redfish/v1/TaskService/Tasks/7");
   assert.equal(job.percent, 100);
   assert.deepEqual(job.messages, ["step 4"]);
+  // AMI 任务里没有百分比，升级状态里有 "40% done."。
+  assert.equal(job.bmcPercent, 40);
+  assert.equal(job.bmcStatus, "Flashing");
+  assert.ok(job.flashAt);
   assert.ok(stages.every((stage) => stage === "flash"), "上传完才开始等任务");
   // 腾内存放宽超时；读不到一次进度不算失败。
   assert.ok(log.includes("POST /redfish/v1/UpdateService/Action/Oem/Gbt/HMCUpdate.PrepareFreeMemory timeout=300000"));

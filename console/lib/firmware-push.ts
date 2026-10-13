@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { addEvent } from "./assets.ts";
-import { assetSession, pushUpdate, readTask, type BmcSession } from "./bmc-redfish.ts";
+import { assetSession, pushUpdate, readTask, updateProgress, type BmcSession } from "./bmc-redfish.ts";
 import type { FirmwarePushJob } from "./firmware-types.ts";
 import { dataDir } from "./paths.ts";
 
@@ -128,6 +128,7 @@ async function follow(job: FirmwarePushJob, input: PushStart, session: BmcSessio
     });
     if (!job.taskPath) throw new Error("BMC 收下了镜像，但没给任务地址，看不到刷写进度。到 BMC 网页看，或过一阵点「读取」看版本。");
     job.stage = "flash";
+    job.flashAt = new Date().toISOString();
     save(job);
     addEvent(job.assetId, "bmc", `推送固件 ${what}：镜像已传给 BMC，开始刷写`, job.user);
 
@@ -142,6 +143,12 @@ async function follow(job: FirmwarePushJob, input: PushStart, session: BmcSessio
         job.percent = task.percent;
         job.messages = task.messages.slice(-5);
         job.error = "";
+        // 任务里没百分比时 BMC 的升级状态里常有；读不到不影响跟任务。
+        const progress = await updateProgress(session).catch(() => null);
+        if (progress) {
+          job.bmcStatus = progress.status;
+          job.bmcPercent = progress.percent;
+        }
         if (/^(Completed|Exception|Killed|Cancelled)$/i.test(task.state)) break;
       } catch (error) {
         // 刷 HGX 时主机断电重启，BMC 也会忙得回不了话，连着读不到也接着等。

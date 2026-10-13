@@ -36,6 +36,10 @@ function sizeLabel(bytes: number): string {
   return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.ceil(bytes / 1024)} KB`;
 }
 
+function minutesSince(at: string): number {
+  return Math.max(0, Math.floor((Date.now() - Date.parse(at)) / 60_000));
+}
+
 const PUSH_STEPS: { stage: FirmwarePushJob["stage"][]; label: string }[] = [
   { stage: ["prepare"], label: "腾内存" },
   { stage: ["upload"], label: "上传" },
@@ -48,6 +52,8 @@ const PUSH_STEPS: { stage: FirmwarePushJob["stage"][]; label: string }[] = [
 function PushProgress({ job }: { job: FirmwarePushJob }) {
   const active = job.stage !== "done" && job.stage !== "failed";
   const current = PUSH_STEPS.findIndex((step) => step.stage.includes(job.stage));
+  // 刷写任务的百分比是空的（AMI），就用 BMC 升级状态里的。
+  const flashValue = job.percent ?? job.bmcPercent ?? null;
   const uploadPercent = job.total ? Math.floor((job.sent / job.total) * 100) : 0;
   const text =
     job.stage === "prepare"
@@ -57,11 +63,11 @@ function PushProgress({ job }: { job: FirmwarePushJob }) {
         : job.stage === "verify"
           ? "镜像传完了，BMC 正在校验，校验完会建刷写任务"
           : job.stage === "flash"
-            ? `BMC 正在刷写：${job.taskState || "已提交"}${job.percent !== null ? `，${job.percent}%` : ""}`
+            ? `BMC 正在刷写：${job.bmcStatus || job.taskState || "已提交"}${flashValue !== null ? `，${flashValue}%` : ""}${job.flashAt ? `（已经 ${minutesSince(job.flashAt)} 分钟）` : ""}`
             : job.stage === "done"
               ? "刷写完成。点「读取」看新版本。"
               : `没成功：${job.error}`;
-  const value = job.stage === "upload" ? uploadPercent : job.stage === "flash" ? job.percent : job.stage === "done" ? 100 : null;
+  const value = job.stage === "upload" ? uploadPercent : job.stage === "flash" ? flashValue : job.stage === "done" ? 100 : null;
   return (
     <Alert severity={job.stage === "failed" ? "error" : job.stage === "done" ? "success" : "info"} icon={false} sx={{ "& .MuiAlert-message": { width: "100%" } }}>
       <Stack spacing={1}>
@@ -87,7 +93,7 @@ function PushProgress({ job }: { job: FirmwarePushJob }) {
         <Typography variant="body2">{text}</Typography>
         {job.stage === "flash" ? (
           <Typography variant="caption" color="text.secondary">
-            HGX 全量升级大约 30~40 分钟，期间主机会断电重启两次、BMC 偶尔连不上，进度读不到会接着等。可以关掉页面，回来再看。
+            HGX 全量升级大约 30~40 分钟，分几段刷，每段的百分比会从 0 重新走，段与段之间 BMC 不报百分比（进度条来回滚）；期间主机会重启、BMC 偶尔连不上，读不到会接着等。可以关掉页面，回来再看。
           </Typography>
         ) : null}
         {active && job.error ? (

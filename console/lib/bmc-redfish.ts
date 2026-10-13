@@ -357,7 +357,7 @@ export async function bmcOverview(session: BmcSession): Promise<BmcOverview> {
       ? {
           status: str(updateState.UpdateStatus),
           target: str(updateState.UpdateTarget),
-          percent: num(updateState.FlashPercentage),
+          percent: flashPercent(updateState.FlashPercentage),
           components: strings(updateParams.find((item) => item.Name === "UpdateComponent")?.AllowableValues),
           protocols: strings(updateParams.find((item) => item.Name === "TransferProtocol")?.AllowableValues),
         }
@@ -1140,6 +1140,23 @@ export async function pushUpdate(session: BmcSession, input: FirmwarePushInput):
   const response = ok(sent, "上传固件失败");
   // 有的 BMC 在 Location 里给完整网址，只留路径。
   return (response.headers.location || str(response.body?.["@odata.id"])).replace(/^https?:\/\/[^/]+/i, "");
+}
+
+/** AMI 把刷写百分比写成 "40% done." 这样的文字。 */
+function flashPercent(value: unknown): number | null {
+  if (typeof value === "number") return value;
+  const found = /(\d+(?:\.\d+)?)\s*%/.exec(typeof value === "string" ? value : "");
+  return found ? Math.round(Number(found[1])) : null;
+}
+
+/**
+ * BMC 自己报的升级状态（AMI 在 UpdateService 的 Oem.AMIUpdateService.UpdateInformation 里）：
+ * 刷写任务的 PercentComplete 是空的，百分比和阶段说明（Flashing、Power soft reset…）只在这里有。
+ */
+export async function updateProgress(session: Pick<BmcSession, "request">): Promise<{ status: string; percent: number | null }> {
+  const update = await rfGet(session, "/redfish/v1/UpdateService");
+  const info = ((update.Oem as { AMIUpdateService?: { UpdateInformation?: Record<string, unknown> } } | undefined)?.AMIUpdateService?.UpdateInformation || {}) as Record<string, unknown>;
+  return { status: str(info.UpdateStatus), percent: flashPercent(info.FlashPercentage) };
 }
 
 /** 读 BMC 的任务（固件升级、虚拟介质等异步操作）。 */
