@@ -69,6 +69,10 @@ export interface FirmwarePackage {
   method: string;
   warnings: string[];
   detected: FirmwareDetected;
+  /** 同系列标记（见 firmware-pkg.ts PackageAnalysis.family）；旧包没有。 */
+  family?: string[];
+  /** 型号、厂商是从同系列哪个包带过来的。 */
+  inheritedFrom?: string;
   /** 人改过厂商、类型、版本或型号。 */
   edited: boolean;
   note: string;

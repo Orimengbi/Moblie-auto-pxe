@@ -275,13 +275,45 @@ async function unpackAndAnalyze(dir: string, fileName: string) {
     fs.linkSync(original, path.join(unpacked, fileName));
   }
   await extractNested(unpacked);
-  const found = await analyzeTree(unpacked, fileName, knownModels());
+  const found: Awaited<ReturnType<typeof analyzeTree>> & { inheritedFrom?: string } = await analyzeTree(unpacked, fileName, knownModels());
   const sku = found.kind === "hgx" && !found.models.length ? gpuSku(found) : "";
   if (sku) {
     found.models = modelsByGpuSku(sku);
     if (!found.models.length) found.warnings.push(`按 GPU 板卡 ${sku} 在机群里没找到机器（要先读过固件版本），请手动填适用型号`);
   }
+  inheritFamily(found, path.basename(dir));
   return found;
+}
+
+/** 同一系列：类型一样，项目代号有重合，或者去掉数字后的镜像文件名一样。 */
+export function sameFamily(a: { kind: FirmwareKind; family?: string[] }, b: { kind: FirmwareKind; family?: string[] }): boolean {
+  if (a.kind !== b.kind || !a.family?.length || !b.family?.length) return false;
+  return a.family.some((mark) => b.family!.includes(mark));
+}
+
+/**
+ * 认不出型号或厂商时，沿用同系列包上的（人手动填的优先，其次新的）。这样每个系列只要填一次。
+ * 沿用了就去掉「认不出适用的机型」的提示，换成说明从哪个包带过来的。
+ */
+function inheritFamily(found: Awaited<ReturnType<typeof analyzeTree>> & { inheritedFrom?: string }, selfId: string): void {
+  if (found.models.length && found.vendor) return;
+  const source = allPackages()
+    .filter((pkg) => pkg.id !== selfId && pkg.models.length && sameFamily(found, pkg))
+    .sort((a, b) => Number(b.edited) - Number(a.edited) || b.uploadedAt.localeCompare(a.uploadedAt))[0];
+  if (!source) return;
+  const took: string[] = [];
+  if (!found.models.length) {
+    found.models = [...source.models];
+    found.warnings = found.warnings.filter((warning) => !/认不出适用的机型/.test(warning));
+    took.push("适用型号");
+  }
+  if (!found.vendor && source.vendor) {
+    found.vendor = source.vendor;
+    took.push("厂商");
+  }
+  if (!took.length) return;
+  found.inheritedFrom = source.id;
+  found.warnings.push(`${took.join("和")}沿用了同系列的 ${source.fileName}${source.edited ? "（手动填的）" : ""}，不对就点「编辑」改`);
 }
 
 async function createPackage(file: string, fileName: string, user: string): Promise<FirmwarePackage> {
@@ -320,7 +352,7 @@ export async function reanalyzePackage(id: string): Promise<FirmwarePackage> {
   if (!pkg) throw new Error("固件包不存在");
   const found = await unpackAndAnalyze(packageDir(id), pkg.fileName);
   const detected = { vendor: found.vendor, kind: found.kind, version: found.version, models: found.models };
-  const next: FirmwarePackage = { ...pkg, ...found, detected };
+  const next: FirmwarePackage = { ...pkg, inheritedFrom: undefined, ...found, detected };
   if (pkg.edited) Object.assign(next, { vendor: pkg.vendor, kind: pkg.kind, version: pkg.version, models: pkg.models });
   writeMeta(next);
   return next;
@@ -421,6 +453,21 @@ export function updatePackage(id: string, input: FirmwarePackageInput): Firmware
   const d = next.detected;
   next.edited = next.vendor !== d.vendor || next.kind !== d.kind || next.version !== d.version || next.models.join("\n") !== d.models.join("\n");
   writeMeta(next);
+  // 同系列里还空着型号、没人改过的包，一起填上。
+  if (next.models.length && input.models !== undefined) {
+    for (const other of allPackages()) {
+      if (other.id === next.id || other.edited || other.models.length || !sameFamily(other, next)) continue;
+      const vendor = other.vendor || next.vendor;
+      writeMeta({
+        ...other,
+        models: [...next.models],
+        vendor,
+        detected: { ...other.detected, models: [...next.models], vendor },
+        inheritedFrom: next.id,
+        warnings: [...other.warnings.filter((warning) => !/认不出适用的机型/.test(warning)), `适用型号沿用了同系列的 ${next.fileName}（手动填的），不对就点「编辑」改`],
+      });
+    }
+  }
   return next;
 }
 
