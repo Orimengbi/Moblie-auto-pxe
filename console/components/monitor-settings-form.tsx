@@ -63,7 +63,7 @@ export function MonitorSettingsForm({ settings }: { settings: MonitorSettings })
           </Grid>
         </Grid>
         <Typography variant="caption" sx={{ display: "block", mt: 1, color: "text.secondary" }}>
-          系统内间隔填 0 就不 SSH 进系统查 GPU 和硬盘。系统内检查要能用控制台的密钥登录（装机时写入的公钥）。内存可纠正 ECC（SEL 事件和内存 Health Warning）在这么多小时里没有新的 ECC 事件就自动解除。
+          已经显示 BMC 连不上的机器每分钟重试一次，修好后一两分钟就恢复显示。系统内间隔填 0 就不 SSH 进系统查 GPU 和硬盘。系统内检查要能用控制台的密钥登录（装机时写入的公钥）。内存可纠正 ECC（SEL 事件和内存 Health Warning）在这么多小时里没有新的 ECC 事件就自动解除。
         </Typography>
       </Box>
       <Box>

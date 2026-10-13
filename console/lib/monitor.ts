@@ -516,6 +516,14 @@ export async function checkOs(
   return state;
 }
 
+/** 上次没连上的 BMC 多久重试一次（分钟）：修好了一两分钟内页面就变回来，不用等一整轮。 */
+export const BMC_RETRY_MIN = 1;
+
+/** 这台 BMC 隔多久查一次：已经显示连不上（连续失败够报警次数）的按重试间隔，其他按设置，什么时候报警不变。 */
+export function bmcIntervalFor(state: Pick<MonitorState, "bmcOk" | "bmcFailures">, settings: MonitorSettings): number {
+  return !state.bmcOk && state.bmcFailures >= settings.bmcFailuresToAlert ? Math.min(BMC_RETRY_MIN, settings.bmcIntervalMin) : settings.bmcIntervalMin;
+}
+
 /** 资产还在、而且状态在监控范围里。 */
 export function monitored(asset: Asset | null, settings: MonitorSettings): asset is Asset {
   return Boolean(asset && settings.statuses.includes(asset.status));
