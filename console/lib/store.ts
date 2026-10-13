@@ -16,6 +16,7 @@ import {
   defaultIpmiExec,
   ipmiFailure,
   powerControl,
+  parsePowerStatus,
   powerStatus,
   probeIpmi,
   setBootDevice,
@@ -1765,6 +1766,14 @@ export async function controlAsset(assetId: string, input: ServerControl, exec: 
   let action = input.power;
   // 关着的机器「重启」没有意义，ipmitool 也会报错，直接开机。
   if ((action === "reset" || action === "cycle") && /power is off/i.test(power.stdout)) action = "on";
+  // 页面上的开关机状态可能是旧的：已经开着就不再开机，已经关着就不再关机。
+  if (action === "on" && /power is on/i.test(power.stdout)) {
+    done.push("已经是开机，没再开机");
+    action = undefined;
+  } else if ((action === "soft" || action === "off") && /power is off/i.test(power.stdout)) {
+    done.push("已经是关机，没再关机");
+    action = undefined;
+  }
   if (action) {
     await powerControl(asset.bmcIp, account.user, account.password, action, exec);
     done.push(POWER_ACTIONS[action].label);
@@ -1778,6 +1787,19 @@ export async function controlAsset(assetId: string, input: ServerControl, exec: 
     }
   });
   return { power: state, message: `${asset.sn}：${done.join("，")}` };
+}
+
+/** 现读一台机器的开关机状态（IPMI chassis power status），顺带记进监控和装机批次。电源对话框打开时用。 */
+export async function assetPowerState(assetId: string, exec: IpmiExec = defaultIpmiExec): Promise<PowerState> {
+  const asset = getAsset(assetId);
+  if (!asset) throw new Error("资产不存在");
+  if (!asset.bmcIp) throw new Error(`${asset.sn} 还没有 BMC 地址`);
+  const accounts = assetBmcAccounts(asset);
+  if (!accounts.length) throw new Error(`${asset.sn} 没有 BMC 账号密码`);
+  const { account, result } = await firstWorkingAccount(asset.bmcIp, accounts, exec);
+  const state: PowerState = account ? parsePowerStatus(result.stdout) : "unknown";
+  recordPower(assetId, state);
+  return state;
 }
 
 export async function bindServerBoot(snRaw: string, macRaw: string): Promise<ServerRow | null> {

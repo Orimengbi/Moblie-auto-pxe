@@ -1,8 +1,22 @@
 import { auditRequest, jsonError, readJson, userOrResponse } from "@/lib/api";
 import { getAsset } from "@/lib/assets";
-import { controlAsset, type ServerControl } from "@/lib/store";
+import { permissionDenied } from "@/lib/roles";
+import { assetPowerState, controlAsset, type ServerControl } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
+
+/** 现读开关机状态，电源对话框打开时按它把用不上的按钮置灰。只有能操作电源的人用得到。 */
+export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
+  const { id } = await context.params;
+  const identity = userOrResponse(request);
+  if (identity instanceof Response) return identity;
+  if (!identity.permissions.includes("power")) return Response.json({ error: permissionDenied("power") }, { status: 403 });
+  try {
+    return Response.json({ power: await assetPowerState(id) });
+  } catch (error) {
+    return jsonError(error);
+  }
+}
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
   const { id } = await context.params;

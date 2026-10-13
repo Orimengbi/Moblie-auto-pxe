@@ -650,7 +650,7 @@ export function ProjectServerList({
           setAdding(false);
         }}
       />
-      <ServerPowerDialog targets={powerTargets.map((row) => ({ id: row.assetId, sn: row.sn, bmcIp: row.bmcIp }))} onClose={() => setPowerTargets([])} />
+      <ServerPowerDialog targets={powerTargets.map((row) => ({ id: row.assetId, sn: row.sn, bmcIp: row.bmcIp, power: row.power }))} onClose={() => setPowerTargets([])} />
       <InventoryCollectDialog targets={collectTargets} projectId={projectId} onClose={() => setCollectTargets([])} />
       {consoleRow ? <RemoteConsole row={{ id: consoleRow.assetId, sn: consoleRow.sn, bmcIp: consoleRow.bmcIp }} port={bmcPort} onClose={() => setConsoleRow(null)} /> : null}
       <ServerSidebar
