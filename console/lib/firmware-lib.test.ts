@@ -283,6 +283,54 @@ test("a bare image with nothing to read falls back to the file name and asks for
   assert.equal(lib.getPackage(pkg.id), null);
 });
 
+const QCT_BIOS_README = `===========================================================================================
+QUANTA Computer Inc. BIOS RELEASE NOTES for S7PH
+===========================================================================================
+Project Name      : S7PH/S7PF/S8F
+BIOS Version      : 3B05.QCT402
+Build Date        : 2025/12/08
+BIOS Core Version                 : 5.32
+AFU version (EFI)                 : 5.16.04.0135
+`;
+
+const QCT_BMC_NOTES = `==========================================================================
+        S7PH series AST2600(A3) BMC FW Release v5.11.00
+==========================================================================
+Version: 5.11.00 (Dual-image)
+Release Date: 2026.01.19
+Code Base: 3.61.00
+`;
+
+test("other vendors' release notes: vendor, version, kind and project codes", () => {
+  const bios = pkgs.parseReleaseNotes(QCT_BIOS_README);
+  assert.deepEqual({ vendor: bios.vendor, kind: bios.kind, version: bios.version, models: bios.models }, { vendor: "QCT", kind: "bios", version: "3B05.QCT402", models: ["S7PH", "S7PF", "S8F"] });
+  const bmc = pkgs.parseReleaseNotes(QCT_BMC_NOTES);
+  assert.deepEqual({ kind: bmc.kind, version: bmc.version, models: bmc.models }, { kind: "bmc", version: "5.11.00", models: ["S7PH"] });
+  const plain = pkgs.parseReleaseNotes("Supermicro X13DEI BMC\nFirmware Version: 01.03.05\nPlatform: X13DEI-T, X13DEM\n");
+  assert.deepEqual({ vendor: plain.vendor, version: plain.version, models: plain.models }, { vendor: "Supermicro", version: "01.03.05", models: ["X13DEI-T", "X13DEM"] });
+});
+
+test("models filled in by hand carry over to later packages of the same series", async () => {
+  const bin = (seed: number) => Buffer.alloc(300 * 1024, seed);
+  const first = await uploadBuffer("ACME_BIOS_1.zip", makeZip({ "acme_v101/ACME101.BIN": bin(1), "acme_v101/readme.txt": Buffer.from("ACME BIOS\nBIOS Version: 1.01\n") }));
+  const second = await uploadBuffer("ACME_BIOS_2.zip", makeZip({ "acme_v102/ACME102.BIN": bin(2), "acme_v102/readme.txt": Buffer.from("ACME BIOS\nBIOS Version: 1.02\n") }));
+  assert.deepEqual([first.models, second.models], [[], []]);
+  assert.deepEqual(first.family, second.family);
+
+  // 填一个，同系列还空着的一起填上；之后再传的同系列包自动带上。
+  lib.updatePackage(first.id, { models: "ACME-R1", vendor: "ACME" });
+  const filled = lib.getPackage(second.id)!;
+  assert.deepEqual([filled.models, filled.vendor, filled.edited], [["ACME-R1"], "ACME", false]);
+  const third = await uploadBuffer("ACME_BIOS_3.zip", makeZip({ "acme_v103/ACME103.BIN": bin(3), "acme_v103/readme.txt": Buffer.from("ACME BIOS\nBIOS Version: 1.03\n") }));
+  assert.deepEqual([third.models, third.vendor, third.version], [["ACME-R1"], "ACME", "1.03"]);
+  assert.ok(third.warnings.some((warning) => /沿用了同系列的 ACME_BIOS_1\.zip（手动填的）/.test(warning)));
+  assert.ok(!third.warnings.some((warning) => /认不出适用的机型/.test(warning)));
+  // 别的类型、别的系列不沿用。
+  const other = await uploadBuffer("OTHER_BMC.zip", makeZip({ "x/rom.ima": bin(4), "x/readme.txt": Buffer.from("BMC Version: 2.0\n") }));
+  assert.deepEqual(other.models, []);
+  for (const pkg of [first, second, third, other]) lib.deletePackage(pkg.id);
+});
+
 test("uploads must arrive in order", async () => {
   const { id } = lib.openFirmwareUpload({ filename: "x.bin", size: 10 }, "admin");
   await assert.rejects(lib.appendFirmwareUpload(id, 5, Buffer.alloc(5)), (error: unknown) => error instanceof lib.FirmwareUploadConflict && error.offset === 0);

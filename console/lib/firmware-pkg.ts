@@ -205,6 +205,41 @@ export interface ReleaseNotes {
   checksumSizeMb: number;
   changes: string;
   gigabyte: boolean;
+  /** 说明里出现的厂商（见 VENDORS），认不出是空串。 */
+  vendor: string;
+  /** 「Project Name : S7PH/S7PF」「S7PH series」这类项目代号，不一定是带横杠的整机型号。 */
+  projects: string[];
+}
+
+/** 发布说明里的厂商字样 → 厂商名。按顺序，先中的算。 */
+const VENDORS: [RegExp, string][] = [
+  [/GIGA-?BYTE|Giga Computing|技嘉/i, "GIGABYTE"],
+  [/\bQUANTA\b|\bQCT\b|广达/i, "QCT"],
+  [/Super\s*Micro|\bSMCI\b|超微/i, "Supermicro"],
+  [/\bInspur\b|浪潮/i, "Inspur"],
+  [/\bxFusion\b|超聚变/i, "xFusion"],
+  [/\bHuawei\b|华为/i, "Huawei"],
+  [/\bH3C\b|新华三/i, "H3C"],
+  [/\bLenovo\b|联想/i, "Lenovo"],
+  [/\bDell\b|戴尔/i, "Dell"],
+  [/Hewlett Packard|\bHPE\b/i, "HPE"],
+  [/\bASRock\s*Rack\b/i, "ASRock Rack"],
+  [/\bASUS(?:TeK)?\b|华硕/i, "ASUS"],
+  [/\bWiwynn\b|纬颖/i, "Wiwynn"],
+  [/\bInventec\b|英业达/i, "Inventec"],
+  [/\bFoxconn\b|\bIngrasys\b|富士康|鸿佰/i, "Foxconn"],
+  [/\bSugon\b|曙光/i, "Sugon"],
+  [/\bNVIDIA\b/i, "NVIDIA"],
+];
+
+/** 项目代号：字母数字，至少 3 位，有字母也有数字（S7PH、MZB3-PE2、D55Q-2U），排除纯版本号。 */
+const PROJECT_TOKEN = /^(?=[A-Z0-9_-]*[A-Z])(?=[A-Z0-9_-]*\d)[A-Z0-9][A-Z0-9_-]{2,39}$/i;
+
+function projectTokens(text: string): string[] {
+  return text
+    .split(/[\s,，;；/、|]+|\band\b/i)
+    .map((token) => token.trim().replace(/^[(（<]|[)）>.:]$/g, ""))
+    .filter((token) => PROJECT_TOKEN.test(token) && !/^v?\d/i.test(token));
 }
 
 const KIND_WORDS: [RegExp, FirmwareKind][] = [
@@ -222,7 +257,8 @@ const MODEL_TOKEN = /^[A-Z0-9][A-Z0-9]*(?:-[A-Z0-9]+)+$/i;
 
 /** 发布说明（PDF 转出的文字或 txt）里的标题、版本、适用型号、日期、校验和、这版改了什么。纯函数。 */
 export function parseReleaseNotes(text: string): ReleaseNotes {
-  const notes: ReleaseNotes = { board: "", kind: "", version: "", models: [], buildDate: "", checksum: "", checksumSizeMb: 0, changes: "", gigabyte: /GIGABYTE|Giga Computing|技嘉/i.test(text) };
+  const vendor = VENDORS.find(([pattern]) => pattern.test(text.slice(0, 20_000)))?.[1] || "";
+  const notes: ReleaseNotes = { board: "", kind: "", version: "", models: [], buildDate: "", checksum: "", checksumSizeMb: 0, changes: "", gigabyte: vendor === "GIGABYTE", vendor, projects: [] };
   const subject = text.match(/SUBJECT:\s*(\S+)\s+(BIOS|BMC|CPLD|FPGA|HMC|Firmware)\s+Release Notes\s+(?:version\s+)?(\S+)/i);
   const generic = subject || text.match(/(?:^|\n)\s*(\S*?)\s*(BIOS|BMC|CPLD|HMC)\s+Release Notes\s+(?:version\s+)?(\S+)/i);
   if (generic) {
@@ -259,6 +295,7 @@ export function parseReleaseNotes(text: string): ReleaseNotes {
   if (system) {
     notes.models = [...new Set(system[1].split(/[\s,，;；/]+/).map((token) => token.trim()).filter((token) => MODEL_TOKEN.test(token)))];
   }
+  genericFields(text, notes);
   // 标题里的主板名（MZB3-PE2）一般是适用列表里某个型号（MZB3-PE2-000）的前缀，那就不另列。
   if (notes.board && MODEL_TOKEN.test(notes.board) && !notes.models.some((model) => model === notes.board || model.startsWith(`${notes.board}-`))) notes.models.unshift(notes.board);
   notes.buildDate = text.match(/Build Date\s*:\s*(\S+)/i)?.[1] || notes.buildDate;
@@ -282,6 +319,39 @@ export function parseReleaseNotes(text: string): ReleaseNotes {
     notes.changes = kept.filter((line) => line.trim()).join("\n").replace(/^\s{4,}/gm, "  ").slice(0, 4000);
   }
   return notes;
+}
+
+/**
+ * 各家通用的写法，只补前面没认出来的项：
+ *   BIOS RELEASE NOTES for S7PH / S7PH series AST2600 BMC FW Release v5.11.00
+ *   BIOS Version : 3B05.QCT402 / Version: 5.11.00 (Dual-image)
+ *   Project Name : S7PH/S7PF/S8F / Platform: ... / Model Name: ...
+ */
+function genericFields(text: string, notes: ReleaseNotes): void {
+  const head = text.slice(0, 20_000);
+  const series = head.match(/(?:^|\n)[^\S\n]*(\S+)\s+series\b[^\n]*?\b(BIOS|BMC|CPLD|FPGA)\b[^\n]*?\bRelease\s+v?(\d[\w.-]*)/i);
+  if (series) {
+    notes.kind ||= kindOf(series[2]);
+    notes.version ||= series[3].replace(/[.,;]$/, "");
+    notes.projects.push(...projectTokens(series[1]));
+  }
+  const titled = head.match(/\b(BIOS|BMC|CPLD|FPGA)\s+RELEASE\s+NOTES?\s+for\s+([^\n]+)/i);
+  if (titled) {
+    notes.kind ||= kindOf(titled[1]);
+    notes.projects.push(...projectTokens(titled[2]));
+  }
+  // 「XX Version : 值」：带类型字样的优先（BIOS Version），其次光写 Version 的；Core / AFU / Redfish 这类不算。
+  const versions = [...head.matchAll(/(?:^|\n)[^\S\n]*(?:(BIOS|BMC|CPLD|FPGA|Firmware|FW)[^\S\n]+)?(?:Version|Ver\.?)[^\S\n]*[:：][^\S\n]*v?(\d[\w.-]*|[A-Z0-9]+\.[\w.-]+)/gi)];
+  const typed = versions.find((match) => match[1] && !/^(Firmware|FW)$/i.test(match[1])) || versions.find((match) => match[1]) || versions[0];
+  if (typed) {
+    notes.version ||= typed[2].replace(/[.,;]$/, "");
+    if (typed[1]) notes.kind ||= kindOf(typed[1]);
+  }
+  for (const match of head.matchAll(/(?:^|\n)[^\S\n]*(?:Project|Platform|Product|Model|Board|Motherboard|Server)(?:[^\S\n]+(?:Name|Code|Model)s?)?[^\S\n]*[:：][^\S\n]*([^\n]+)/gi)) {
+    notes.projects.push(...projectTokens(match[1]));
+  }
+  notes.projects = [...new Set(notes.projects.map((token) => token.toUpperCase()))].slice(0, 30);
+  if (!notes.models.length) notes.models = [...notes.projects];
 }
 
 /** PDF 转文字（poppler 的 pdftotext）；没装或转不了返回空串。 */
@@ -496,9 +566,25 @@ export interface PackageAnalysis {
   changes: string;
   method: string;
   warnings: string[];
+  /** 同一系列的标记：项目代号（code:S7PH）和去掉数字后的目录、镜像文件名（shape:…）。手动填过的型号按它带给同系列的新包。 */
+  family: string[];
 }
 
 const NVIDIA_IANA = 5703;
+
+/** 文件名去掉数字，同系列不同版本的包一样：3B05.QCT402.BIN → #b#.qct#.bin。 */
+function nameShape(name: string): string {
+  return name.toLowerCase().replace(/\d+/g, "#");
+}
+
+/** 包的系列标记，见 PackageAnalysis.family。 */
+export function packageFamily(projects: string[], images: FirmwareImage[]): string[] {
+  const shapes = images
+    .filter((image) => image.type !== "tool")
+    .map((image) => image.path.split("/").map(nameShape).join("/"))
+    .sort();
+  return [...projects.map((code) => `code:${code.toUpperCase()}`), ...(shapes.length ? [`shape:${shapes.join("|")}`] : [])];
+}
 
 /**
  * 分析解开后的目录（单个文件上传时目录里就那一个文件）。knownModels 是机群和型号字典里的型号，
@@ -512,6 +598,8 @@ export async function analyzeTree(root: string, fileName: string, knownModels: s
   let notes: ReleaseNotes | null = null;
   let pldm: PldmPackage | null = null;
   let gigabyte = false;
+  let noteVendor = "";
+  const projects = new Set<string>();
 
   // 发布说明：版本号跟文件名对得上的那份当主的，其次版本号最长的；改动每份都收，去重。
   const changeBlocks: string[] = [];
@@ -529,6 +617,8 @@ export async function analyzeTree(root: string, fileName: string, knownModels: s
     if (!text) continue;
     const parsed = parseReleaseNotes(text);
     if (parsed.gigabyte) gigabyte = true;
+    noteVendor ||= parsed.vendor;
+    for (const code of parsed.projects) projects.add(code);
     if (parsed.changes && !changeBlocks.includes(parsed.changes)) changeBlocks.push(parsed.changes);
     if (parsed.version && (!notes || better(parsed, notes))) notes = parsed;
   }
@@ -552,7 +642,8 @@ export async function analyzeTree(root: string, fileName: string, knownModels: s
       images.push({ path: relative, size, type: "tool", note: "AMI AFU 刷写程序" });
       continue;
     }
-    if (/\.(nsh|sh|bat)$/i.test(base) && /afu/i.test(fs.readFileSync(full, "latin1").slice(0, 4000))) hasTool.afuScript = true;
+    // \b：Yafuflash（AMI 刷 BMC 的工具）不算 AFU。
+    if (/\.(nsh|sh|bat)$/i.test(base) && /\bafu/i.test(fs.readFileSync(full, "latin1").slice(0, 4000))) hasTool.afuScript = true;
     if (/\.rbu$/i.test(base)) {
       const trailer = rbuTrailer(full);
       if (trailer.ok) gigabyte = true;
@@ -601,7 +692,7 @@ export async function analyzeTree(root: string, fileName: string, knownModels: s
 
   const version = notes?.version || pldm?.version || versionFromName(fileName);
   if (!version) warnings.push("认不出版本号，请手动填写");
-  const vendor = gigabyte ? "GIGABYTE" : pldm?.ianaIds.includes(NVIDIA_IANA) ? "NVIDIA" : "";
+  const vendor = gigabyte ? "GIGABYTE" : pldm?.ianaIds.includes(NVIDIA_IANA) ? "NVIDIA" : noteVendor;
 
   const methods: string[] = [];
   const rbu = images.find((image) => image.type === "rbu");
@@ -624,5 +715,6 @@ export async function analyzeTree(root: string, fileName: string, knownModels: s
     changes: changeBlocks.join("\n\n").slice(0, 8000),
     method: methods.join("；") || "",
     warnings,
+    family: packageFamily([...projects], images),
   };
 }
