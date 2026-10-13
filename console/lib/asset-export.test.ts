@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildExportSheets, mergedParts } from "./asset-export.ts";
+import { buildExportSheets, firmwareFamilies, firmwareFamily, mergedParts } from "./asset-export.ts";
 import { assetsToRows } from "./asset-sheet.ts";
 import type { Asset, HwComponent, InventorySnapshot, MonitorState } from "./types.ts";
 
@@ -19,10 +19,9 @@ test("each kind of part comes from whichever side saw more of it", () => {
   );
 });
 
-test("export builds the chosen sheets for the chosen machines", () => {
-  const one = asset("a1", "SN1");
-  const two = asset("a2", "SN2");
-  const sheets = buildExportSheets([one, two], ["health", "hardware", "parts", "firmware", "firmwareList", "assets"], {
+const one = asset("a1", "SN1");
+const two = asset("a2", "SN2");
+const deps: Parameters<typeof buildExportSheets>[2] = {
     inventory: (id) => (id === "a1" ? { os, bmc } : { os: null, bmc: null }),
     firmware: (id) =>
       id === "a1"
@@ -31,7 +30,10 @@ test("export builds the chosen sheets for the chosen machines", () => {
     monitor: (id) => (id === "a1" ? ({ power: "on", bmcAt: "2026-10-13T03:00:00.000Z", bmcOk: true, bmcError: "", osAt: "", osOk: false, osError: "", health: { at: "", overall: "warning", problems: [{ name: "PSU2", severity: "warning", detail: "掉电", source: "redfish" }], redfishError: "" } } as unknown as MonitorState) : null),
     assetRows: (list) => assetsToRows(list, [], [], [], [], [], ["sn", "model"]),
     time: (iso) => iso.slice(0, 16),
-  });
+};
+
+test("every sheet is there with all columns when nothing is narrowed", () => {
+  const sheets = buildExportSheets([one, two], ["health", "hardware", "parts", "firmware", "firmwareList", "assets"], deps);
   // 页的顺序固定，跟勾的顺序无关。
   assert.deepEqual(sheets.map((sheet) => sheet.name), ["资产信息", "硬件汇总", "硬件明细", "固件版本", "固件明细", "健康和监控"]);
   const [assets, hardware, parts, firmware, firmwareList, health] = sheets.map((sheet) => sheet.rows);
@@ -56,4 +58,31 @@ test("export builds the chosen sheets for the chosen machines", () => {
 
   assert.deepEqual(health[1].slice(0, 5), ["RS-SN1", "SN1", "开机", "警告", "PSU2：掉电"]);
   assert.equal(health[2][3], "没查过");
+});
+
+test("each sheet keeps only the columns, part kinds and firmware families picked", () => {
+  const sheets = buildExportSheets([one, two], ["hardware", "parts", "firmware", "firmwareList", "health"], deps, {
+    columns: { hardware: ["memory", "gpu"], parts: ["slot", "sn"], firmware: [], firmwareList: ["version"], health: ["power"] },
+    partKinds: ["disk"],
+    firmwareFamilies: ["HGX_FW_GPU"],
+  });
+  const [hardware, parts, firmware, firmwareList, health] = sheets.map((sheet) => sheet.rows);
+  assert.deepEqual(hardware[0], ["编号", "序列号", "内存", "GPU"]);
+  assert.deepEqual(parts, [["编号", "序列号", "槽位", "部件 SN"], ["RS-SN1", "SN1", "nvme0", "S1"]]);
+  // 固件版本页：只留挑的固件类，型号和读取时间没挑就不带。
+  assert.deepEqual(firmware, [["编号", "序列号", "HGX_FW_GPU_0"], ["RS-SN1", "SN1", "97.10"], ["RS-SN2", "SN2", ""]]);
+  assert.deepEqual(firmwareList, [["编号", "序列号", "版本"], ["RS-SN1", "SN1", "97.10"]]);
+  assert.deepEqual(health, [["编号", "序列号", "电源"], ["RS-SN1", "SN1", "开机"], ["RS-SN2", "SN2", ""]]);
+});
+
+test("firmware items are grouped by family for picking", () => {
+  assert.equal(firmwareFamily("HGX_FW_GPU_7"), "HGX_FW_GPU");
+  assert.equal(firmwareFamily("BMCImage2"), "BMCImage");
+  assert.equal(firmwareFamily("BIOS"), "BIOS");
+  const item = (id: string) => ({ id, name: id, version: "1", updateable: true });
+  assert.deepEqual(firmwareFamilies([{ data: [item("HGX_FW_GPU_0"), item("HGX_FW_GPU_1"), item("BIOS")] }, null, { data: [item("HGX_FW_GPU_1"), item("MB_CPLD1")] }]), [
+    { key: "BIOS", count: 1, hgx: false },
+    { key: "MB_CPLD", count: 1, hgx: false },
+    { key: "HGX_FW_GPU", count: 2, hgx: true },
+  ]);
 });
