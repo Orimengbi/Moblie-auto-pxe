@@ -102,7 +102,7 @@ export function MonitorSettingsForm({ settings }: { settings: MonitorSettings })
         minRows={2}
         fullWidth
         placeholder="逗号或换行分开，可以用 *，例如 PSU*_Fan_Fail, CHASSIS_INTRU"
-        slotProps={{ htmlInput: { style: { fontFamily: "var(--font-geist-mono), monospace", fontSize: 12 } } }}
+        slotProps={{ htmlInput: { style: { fontFamily: '"SF Mono", ui-monospace, var(--font-geist-mono), monospace', fontSize: 12 } } }}
       />
       {error ? (
         <Typography variant="body2" color="error">

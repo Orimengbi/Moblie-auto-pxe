@@ -165,7 +165,7 @@ export function TaskList() {
     <Stack spacing={2}>
       <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center" }}>
         <TextField placeholder="搜任务名、批次…" value={q} onChange={(event) => setQ(event.target.value)} sx={{ width: 240, maxWidth: "100%" }} />
-        <TextField select label="类型" value={kind} onChange={(event) => setKind(event.target.value as TaskKind | "")} sx={{ width: 150 }} slotProps={{ select: { native: true } }}>
+        <TextField select label="类型" value={kind} onChange={(event) => setKind(event.target.value as TaskKind | "")} sx={{ width: 150 }} slotProps={{ select: { native: true }, inputLabel: { shrink: true } }}>
           <option value="">全部</option>
           {Object.entries(TASK_KIND_LABEL).map(([value, label]) => (
             <option key={value} value={value}>
@@ -173,13 +173,13 @@ export function TaskList() {
             </option>
           ))}
         </TextField>
-        <TextField select label="状态" value={status} onChange={(event) => setStatus(event.target.value as StatusFilter)} sx={{ width: 130 }} slotProps={{ select: { native: true } }}>
+        <TextField select label="状态" value={status} onChange={(event) => setStatus(event.target.value as StatusFilter)} sx={{ width: 130 }} slotProps={{ select: { native: true }, inputLabel: { shrink: true } }}>
           <option value="">全部</option>
           <option value="running">执行中</option>
           <option value="failed">有没成功的</option>
           <option value="ok">全部成功</option>
         </TextField>
-        <TextField select label="归档" value={archive} onChange={(event) => setArchive(event.target.value as ArchiveFilter)} sx={{ width: 130 }} slotProps={{ select: { native: true } }}>
+        <TextField select label="归档" value={archive} onChange={(event) => setArchive(event.target.value as ArchiveFilter)} sx={{ width: 130 }} slotProps={{ select: { native: true }, inputLabel: { shrink: true } }}>
           <option value="">全部</option>
           <option value="active">未归档</option>
           <option value="archived">已归档</option>

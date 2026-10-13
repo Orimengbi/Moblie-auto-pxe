@@ -24,7 +24,7 @@ import type { InventorySnapshot, MonitorState, NetPort } from "@/lib/types";
 import { formatTime } from "@/lib/time";
 import { useCan } from "@/components/role-context";
 
-const MONO = "var(--font-geist-mono), monospace";
+const MONO = '"SF Mono", ui-monospace, var(--font-geist-mono), monospace';
 /** 单元格里的第二行小字。 */
 const SUB = { display: "block", color: "text.secondary" } as const;
 

@@ -140,7 +140,7 @@ export function Overview({ data }: { data: OverviewData }) {
                       direction="row"
                       sx={{ justifyContent: "space-between", flexWrap: "wrap", gap: 1, px: 1, py: 0.75, borderRadius: 1, color: "inherit", textDecoration: "none", "&:hover": { bgcolor: "action.hover" } }}
                     >
-                      <Typography variant="body2" sx={{ fontFamily: "var(--font-geist-mono), monospace", fontSize: 12 }}>
+                      <Typography variant="body2" sx={{ fontFamily: '"SF Mono", ui-monospace, var(--font-geist-mono), monospace', fontSize: 12 }}>
                         {asset.tag} · {asset.sn}
                       </Typography>
                       <Typography variant="caption" sx={{ color: asset.warranty === "expired" ? "error.main" : "text.secondary" }}>
@@ -170,7 +170,7 @@ export function Overview({ data }: { data: OverviewData }) {
         </Typography>
         <Chip color={firmware.efi ? "success" : "error"} variant="outlined" label={`UEFI 固件 ${firmware.efi ? "已就位" : "未下载"}`} />
         <Chip color={firmware.bios ? "success" : "error"} variant="outlined" label={`BIOS 固件 ${firmware.bios ? "已就位" : "未下载"}`} />
-        <Chip variant="outlined" label={`${state.network.pxeInterface} · ${state.network.serverIp}:${state.network.httpPort}`} sx={{ fontFamily: "var(--font-geist-mono), monospace" }} />
+        <Chip variant="outlined" label={`${state.network.pxeInterface} · ${state.network.serverIp}:${state.network.httpPort}`} sx={{ fontFamily: '"SF Mono", ui-monospace, var(--font-geist-mono), monospace' }} />
       </Stack>
       <Grid container spacing={2} sx={{ mb: 2 }}>
         <Stat icon={RocketLaunchOutlined} label="正在装机的批次" value={active?.name || "无"} href={active ? `/projects/${active.id}` : "/projects"} />
@@ -189,13 +189,13 @@ export function Overview({ data }: { data: OverviewData }) {
                     <dt>批次</dt>
                     <dd>{active.name}</dd>
                     <dt>临时地址</dt>
-                    <Box component="dd" sx={{ fontFamily: "var(--font-geist-mono), monospace" }}>
+                    <Box component="dd" sx={{ fontFamily: '"SF Mono", ui-monospace, var(--font-geist-mono), monospace' }}>
                       {active.dhcp.start} – {active.dhcp.end}
                     </Box>
                     {active.dhcp.serverIp ? (
                       <>
                         <dt>本网口</dt>
-                        <Box component="dd" sx={{ fontFamily: "var(--font-geist-mono), monospace" }}>
+                        <Box component="dd" sx={{ fontFamily: '"SF Mono", ui-monospace, var(--font-geist-mono), monospace' }}>
                           {active.dhcp.serverIp}
                         </Box>
                       </>
@@ -235,7 +235,7 @@ export function Overview({ data }: { data: OverviewData }) {
               ) : (
                 <Stack divider={<Box sx={{ borderTop: 1, borderColor: "divider" }} />}>
                   {leases.map((lease) => (
-                    <Stack key={`${lease.mac}-${lease.ip}`} direction="row" sx={{ justifyContent: "space-between", py: 0.75, fontFamily: "var(--font-geist-mono), monospace", fontSize: 12 }}>
+                    <Stack key={`${lease.mac}-${lease.ip}`} direction="row" sx={{ justifyContent: "space-between", py: 0.75, fontFamily: '"SF Mono", ui-monospace, var(--font-geist-mono), monospace', fontSize: 12 }}>
                       <Box sx={{ color: "text.secondary" }}>{lease.mac}</Box>
                       <Box>{lease.ip}</Box>
                     </Stack>

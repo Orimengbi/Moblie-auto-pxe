@@ -37,7 +37,7 @@ import { api } from "@/lib/client-api";
 import { useCan } from "@/components/role-context";
 
 const U_PX = 20;
-const MONO = "var(--font-geist-mono), monospace";
+const MONO = '"SF Mono", ui-monospace, var(--font-geist-mono), monospace';
 /** 代码类输入框：等宽、自动大写。 */
 const CODE_INPUT = { "& input": { fontFamily: MONO, textTransform: "uppercase" } } as const;
 const NATIVE = { select: { native: true } } as const;

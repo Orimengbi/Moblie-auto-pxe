@@ -10,7 +10,7 @@ import type { BmcCert } from "@/lib/bmc-tls";
 import { api } from "@/lib/client-api";
 import { formatTime } from "@/lib/time";
 
-const MONO = "var(--font-geist-mono), monospace";
+const MONO = '"SF Mono", ui-monospace, var(--font-geist-mono), monospace';
 
 /** BMC 的 HTTPS 证书：第一次连上时记下指纹，以后变了控制台就不连，在这里确认。 */
 export function BmcCertSection({ assetId, canEdit, onChanged }: { assetId: string; canEdit: boolean; onChanged: () => void }) {

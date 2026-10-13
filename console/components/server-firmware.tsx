@@ -26,7 +26,7 @@ import { formatTime } from "@/lib/time";
 import { api } from "@/lib/client-api";
 import { useCan } from "@/components/role-context";
 
-const MONO = "var(--font-geist-mono), monospace";
+const MONO = '"SF Mono", ui-monospace, var(--font-geist-mono), monospace';
 
 /** 版本下拉里每个包跟这台现在版本比的标注（relation 是「这台比包」）。 */
 const CHOICE_RELATION: Record<FirmwareChoice["relation"], { label: string; color: string }> = {

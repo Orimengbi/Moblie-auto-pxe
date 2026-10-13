@@ -15,7 +15,7 @@ import type { BiosAttribute, BiosView } from "@/lib/bmc-redfish";
 import { api } from "@/lib/client-api";
 import { useCan } from "@/components/role-context";
 
-const MONO = "var(--font-geist-mono), monospace";
+const MONO = '"SF Mono", ui-monospace, var(--font-geist-mono), monospace';
 
 function show(value: unknown): string {
   return value === undefined || value === null ? "" : String(value);

@@ -17,7 +17,7 @@ import type { Customer } from "@/lib/types";
 import { api } from "@/lib/client-api";
 import { useCan } from "@/components/role-context";
 
-const MONO = "var(--font-geist-mono), monospace";
+const MONO = '"SF Mono", ui-monospace, var(--font-geist-mono), monospace';
 
 /** 侧边栏「概况」：资产的资料，按块显示，可以编辑。 */
 type Uplink = { switchId: string; switchTag: string; port: string; remotePort: string; oper: string };

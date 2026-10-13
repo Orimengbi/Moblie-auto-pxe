@@ -19,7 +19,7 @@ import { api } from "@/lib/client-api";
 import { IPMI_PRIVILEGE_LABEL, type BmcUserAction, type BmcUserChange, type IpmiPrivilege, type IpmiUser } from "@/lib/ipmi-user-types";
 import { useCan } from "@/components/role-context";
 
-const MONO = "var(--font-geist-mono), monospace";
+const MONO = '"SF Mono", ui-monospace, var(--font-geist-mono), monospace';
 const NATIVE_LABELED = { select: { native: true }, inputLabel: { shrink: true } } as const;
 const PRIVILEGES: IpmiPrivilege[] = ["ADMINISTRATOR", "OPERATOR", "USER"];
 

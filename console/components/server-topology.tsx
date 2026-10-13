@@ -16,7 +16,7 @@ import { cardKey, LINK_LABEL, linkBetween, linkText, type LinkType } from "@/lib
 import type { InventorySnapshot, Topology, TopoDevice } from "@/lib/types";
 import { formatTime } from "@/lib/time";
 
-const MONO = "var(--font-geist-mono), monospace";
+const MONO = '"SF Mono", ui-monospace, var(--font-geist-mono), monospace';
 
 /** 链路从近到远：绿 → 青 → 蓝 → 灰 → 橙 → 红，越暖越远。X 是自己。 */
 const LINK_COLOR: Record<Exclude<LinkType, "X">, "success" | "info" | "primary" | "secondary" | "warning" | "error"> = {

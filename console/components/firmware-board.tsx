@@ -25,7 +25,7 @@ import type { FleetComponent, FleetMachine, FleetModel } from "@/lib/firmware-fl
 import { formatTime } from "@/lib/time";
 import { gridText } from "@/components/mui/theme";
 
-const MONO = "var(--font-geist-mono), monospace";
+const MONO = '"SF Mono", ui-monospace, var(--font-geist-mono), monospace';
 
 /** 固件版本总览：选机型，看每个部件的版本分布，点版本看是哪几台；没读过的可以直接发起批量读取。 */
 export function FirmwareBoard({ models }: { models: FleetModel[] }) {

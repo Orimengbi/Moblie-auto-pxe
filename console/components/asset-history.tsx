@@ -47,7 +47,7 @@ const CHANGE_TONE: Record<HwChange["type"], Tone> = {
   changed: "neutral",
 };
 
-const MONO = "var(--font-geist-mono), monospace";
+const MONO = '"SF Mono", ui-monospace, var(--font-geist-mono), monospace';
 
 /** 采集时资产事件里也会记一笔「采集发现部件变化」，和采集记录是同一件事，前后几分钟内有采集记录的就不重复列。 */
 const SAME_COLLECT_MS = 5 * 60_000;

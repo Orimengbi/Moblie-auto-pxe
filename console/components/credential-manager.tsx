@@ -15,7 +15,7 @@ import Typography from "@mui/material/Typography";
 import type { PublicUser } from "@/lib/auth";
 import { api } from "@/lib/client-api";
 
-const MONO = "var(--font-geist-mono), monospace";
+const MONO = '"SF Mono", ui-monospace, var(--font-geist-mono), monospace';
 
 /** 已有的一把公钥或访问密钥：名称、摘要，右边删除。 */
 function KeyRow({ name, detail, truncate, disabled, onRemove }: { name: string; detail: React.ReactNode; truncate?: boolean; disabled: boolean; onRemove: () => void }) {

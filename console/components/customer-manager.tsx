@@ -18,7 +18,7 @@ import { useCan } from "@/components/role-context";
 
 type Form = { code: string; name: string; contact: string; note: string };
 
-const MONO = "var(--font-geist-mono), monospace";
+const MONO = '"SF Mono", ui-monospace, var(--font-geist-mono), monospace';
 
 /** 客户列表。代码用在资产编号的 {customer} 里，改了代码，用到它的编号马上跟着变。 */
 export function CustomerManager({ customers, counts }: { customers: Customer[]; counts: Record<string, number> }) {

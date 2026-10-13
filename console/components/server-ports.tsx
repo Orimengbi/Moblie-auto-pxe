@@ -18,7 +18,7 @@ import { ATTR_LABEL, KIND_LABEL } from "@/lib/inventory";
 import { PORT_GROUP_LABEL, portSummary, type InterfaceView } from "@/lib/ports";
 import type { HwComponent, HwPort, InventorySnapshot } from "@/lib/types";
 
-const MONO = "var(--font-geist-mono), monospace";
+const MONO = '"SF Mono", ui-monospace, var(--font-geist-mono), monospace';
 /** 单元格里的第二行小字。 */
 const SUB = { display: "block", color: "text.secondary" } as const;
 

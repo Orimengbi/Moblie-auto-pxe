@@ -66,7 +66,7 @@ const INSTALLED: Record<InstallState, string> = {
 };
 
 const AUTO_CHECK_MS = 30000;
-const MONO = "var(--font-geist-mono), monospace";
+const MONO = '"SF Mono", ui-monospace, var(--font-geist-mono), monospace';
 /** 列宽所有批次共用一套，键名沿用以前自己画的表。 */
 const WIDTHS_KEY = "pxe-server-columns";
 

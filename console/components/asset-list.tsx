@@ -44,7 +44,7 @@ import { matchesSearch, pasteAsList, searchTerms } from "@/lib/search";
 import { formatTime } from "@/lib/time";
 import { useCan } from "@/components/role-context";
 
-const MONO = "var(--font-geist-mono), monospace";
+const MONO = '"SF Mono", ui-monospace, var(--font-geist-mono), monospace';
 const WIDTH_KEY = "pxe-asset-columns";
 /** 显示哪些列、什么顺序，记在这个浏览器里：{ order: 列 key[], hidden: 列 key[] }。 */
 const LAYOUT_KEY = "pxe-asset-layout";
