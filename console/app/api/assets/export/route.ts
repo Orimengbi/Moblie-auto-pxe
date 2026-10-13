@@ -1,5 +1,5 @@
 import { jsonError, readJson, xlsxResponse } from "@/lib/api";
-import { buildExportSheets, EXPORT_SHEETS, type ExportSheet } from "@/lib/asset-export";
+import { buildExportSheets, EXPORT_SHEETS, firmwareFamilies, type ExportChoice, type ExportSheet } from "@/lib/asset-export";
 import { assetDropdowns, assetsToRows, EXPORT_COLUMNS, type SheetField } from "@/lib/asset-sheet";
 import { applyDisplaySettings } from "@/lib/display-settings";
 import { listAssets, listCustomers } from "@/lib/assets";
@@ -13,20 +13,28 @@ import { xlsxBook } from "@/lib/xlsx-dropdown";
 
 export const dynamic = "force-dynamic";
 
-/** 导出全部资产，不带密码。改完可以原样导回来。 */
-export function GET() {
+/**
+ * 不带参数：导出全部资产，不带密码，改完可以原样导回来。
+ * ?options=1：导出对话框要的选项（机器上读到过的固件项，按类合并）。
+ */
+export function GET(request: Request) {
+  if (new URL(request.url).searchParams.get("options") === "1") {
+    return Response.json({ firmware: firmwareFamilies(listAssets().map((asset) => loadSnapshot<FirmwareItem[]>(asset.id, "firmware"))) });
+  }
   const sites = listSites();
   const datacenters = listDatacenters();
   return xlsxResponse(assetsToRows(listAssets(), listCustomers(), listRacks(), sites, listSnmpProfiles(), datacenters), "资产", `assets-${new Date().toISOString().slice(0, 10)}.xlsx`, assetDropdowns(datacenters, sites));
 }
 
-interface ExportRequest {
+interface ExportRequest extends Omit<ExportChoice, "columns"> {
   /** 要导的资产 id；不给就是全部。 */
   ids?: string[];
   sheets?: string[];
-  /** 资产信息页要哪几列。 */
-  columns?: string[];
+  /** 各页要哪几列：{ assets: [...], hardware: [...], ... }。旧的写法是数组，只管资产信息页。 */
+  columns?: string[] | (ExportChoice["columns"] & { assets?: string[] });
 }
+
+const list = (value: unknown) => (Array.isArray(value) ? value.map(String) : undefined);
 
 /** 按选的机器和选的表导出，一张表一页。只读，登录了就能导。 */
 export async function POST(request: Request) {
@@ -38,7 +46,14 @@ export async function POST(request: Request) {
     const wanted = Array.isArray(input.ids) ? new Set(input.ids.map(String)) : null;
     const assets = wanted ? all.filter((asset) => wanted.has(asset.id)) : all;
     if (!assets.length) throw new Error("没有要导出的机器");
-    const fields = Array.isArray(input.columns) ? EXPORT_COLUMNS.map((column) => column.field).filter((field): field is SheetField => input.columns!.includes(field)) : undefined;
+    const byPage = Array.isArray(input.columns) ? { assets: input.columns } : input.columns || {};
+    const assetColumns = list(byPage.assets);
+    const fields = assetColumns ? EXPORT_COLUMNS.map((column) => column.field).filter((field): field is SheetField => assetColumns.includes(field)) : undefined;
+    const choice: ExportChoice = {
+      columns: { hardware: list(byPage.hardware), parts: list(byPage.parts), firmware: list(byPage.firmware), firmwareList: list(byPage.firmwareList), health: list(byPage.health) },
+      partKinds: list(input.partKinds),
+      firmwareFamilies: list(input.firmwareFamilies),
+    };
     if (fields && !fields.length && sheets.includes("assets")) throw new Error("资产信息至少选一列");
     applyDisplaySettings();
     const customers = listCustomers();
@@ -52,7 +67,7 @@ export async function POST(request: Request) {
       monitor: (id) => getMonitorState(id),
       assetRows: (list) => assetsToRows(list, customers, racks, sites, profiles, datacenters, fields),
       time: (iso) => formatTime(iso),
-    });
+    }, choice);
     const filename = `assets-${new Date().toISOString().slice(0, 10)}-${assets.length}台.xlsx`;
     const ascii = filename.replace(/[^\x20-\x7e]/g, "_").replace(/"/g, "");
     return new Response(new Uint8Array(xlsxBook(pages)), {
