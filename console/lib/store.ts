@@ -1743,7 +1743,12 @@ export interface ServerControl {
  * 电源和引导按钮。用资产上的 BMC 账号登录，主账号被拒再试备用账号。
  * 和对账一样不在连 BMC 时占数据锁，只在把开关机状态写回装机批次时加锁。
  */
-export async function controlAsset(assetId: string, input: ServerControl, exec: IpmiExec = defaultIpmiExec): Promise<{ power: PowerState; message: string }> {
+export async function controlAsset(
+  assetId: string,
+  input: ServerControl,
+  exec: IpmiExec = defaultIpmiExec,
+  sleep: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+): Promise<{ power: PowerState; message: string }> {
   const asset = getAsset(assetId);
   if (!asset) throw new Error("资产不存在");
   if (input.boot !== undefined && !Object.hasOwn(BOOT_DEVICES, input.boot)) throw new Error("不支持的引导设备");
@@ -1778,7 +1783,14 @@ export async function controlAsset(assetId: string, input: ServerControl, exec: 
     await powerControl(asset.bmcIp, account.user, account.password, action, exec);
     done.push(POWER_ACTIONS[action].label);
   }
-  const state = await powerStatus(asset.bmcIp, account.user, account.password, exec).catch(() => "unknown" as const);
+  // 命令发完 BMC 要过几秒才报新状态（HGX 机器开机要十几秒），马上读会读到旧的。每 3 秒读一次，最多等 30 秒。
+  // 软关机要等系统自己关，30 秒常常不够，页面会接着读。
+  const expected: PowerState | null = !action ? null : action === "off" || action === "soft" ? "off" : "on";
+  let state = await powerStatus(asset.bmcIp, account.user, account.password, exec).catch(() => "unknown" as const);
+  for (let tries = 0; expected && state !== expected && tries < 10; tries++) {
+    await sleep(3_000);
+    state = await powerStatus(asset.bmcIp, account.user, account.password, exec).catch(() => "unknown" as const);
+  }
   recordPower(assetId, state);
   await withLock(() => {
     for (const current of serversOfAsset(assetId)) {

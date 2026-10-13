@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
@@ -79,6 +79,14 @@ export function ServerPowerDialog({ targets, onClose }: { targets: Target[]; onC
   const [powers, setPowers] = useState<Record<string, PowerState>>({});
   const [reading, setReading] = useState(false);
   const targetKey = targets.map((target) => target.id).join(",");
+  // 关了对话框就不再接着读电源状态。
+  const open = useRef(true);
+  useEffect(() => {
+    open.current = true;
+    return () => {
+      open.current = false;
+    };
+  }, []);
 
   // 打开时现读每台的开关机状态（同时最多 4 台），先用列表里的状态顶着。
   useEffect(() => {
@@ -113,6 +121,9 @@ export function ServerPowerDialog({ targets, onClose }: { targets: Target[]; onC
     setResults([]);
     const queue = [...targets];
     const collected: { sn: string; ok: boolean; text: string }[] = [];
+    // 发完以后电源状态还没变过来的（多是软关机，要等系统自己关），后面接着读。
+    const expected: PowerState | null = !body.power ? null : body.power === "soft" || body.power === "off" ? "off" : "on";
+    const lagging: string[] = [];
     await Promise.all(
       Array.from({ length: Math.min(4, queue.length) }, async () => {
         for (let target = queue.shift(); target; target = queue.shift()) {
@@ -125,6 +136,7 @@ export function ServerPowerDialog({ targets, onClose }: { targets: Target[]; onC
             const data = await response.json().catch(() => ({}));
             const id = target.id;
             if (response.ok && data.power) setPowers((current) => ({ ...current, [id]: data.power }));
+            if (response.ok && expected && data.power !== expected) lagging.push(id);
             collected.push({ sn: target.sn, ok: response.ok, text: response.ok ? data.message : data.error || "失败" });
           } catch {
             collected.push({ sn: target.sn, ok: false, text: `${target.sn}：没有连上控制台` });
@@ -135,6 +147,25 @@ export function ServerPowerDialog({ targets, onClose }: { targets: Target[]; onC
     );
     setPending(false);
     router.refresh();
+    if (expected && lagging.length) void follow(lagging, expected);
+  }
+
+  /** 每 10 秒读一次还没变过来的机器，最多 3 分钟；变过来了刷新页面上的电源状态。 */
+  async function follow(ids: string[], expected: PowerState) {
+    let left = ids;
+    for (let round = 0; round < 18 && left.length && open.current; round++) {
+      await new Promise((resolve) => setTimeout(resolve, 10_000));
+      if (!open.current) return;
+      const still: string[] = [];
+      for (const id of left) {
+        const response = await fetch(`/api/assets/${id}/control`).catch(() => null);
+        const data = response?.ok ? ((await response.json().catch(() => null)) as { power?: PowerState } | null) : null;
+        if (data?.power) setPowers((current) => ({ ...current, [id]: data.power! }));
+        if (data?.power !== expected) still.push(id);
+      }
+      if (still.length < left.length) router.refresh();
+      left = still;
+    }
   }
 
   /** 重启 BMC 建成一个批量任务，所有选中的机器在一个任务里，结果在右上角「任务」里看。 */
