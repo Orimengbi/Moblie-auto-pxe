@@ -17,8 +17,6 @@ import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
-import ArrowDownwardOutlined from "@mui/icons-material/ArrowDownwardOutlined";
-import ArrowUpwardOutlined from "@mui/icons-material/ArrowUpwardOutlined";
 import ClearOutlined from "@mui/icons-material/ClearOutlined";
 import { DataGrid, GridColumnMenu, type GridColDef, type GridColumnMenuItemProps, type GridColumnMenuProps, type GridRowProps, type GridRowSelectionModel } from "@mui/x-data-grid";
 import ListItemIcon from "@mui/material/ListItemIcon";
@@ -29,6 +27,7 @@ import VisibilityOffOutlined from "@mui/icons-material/VisibilityOffOutlined";
 import { AssetEditDialog } from "@/components/asset-edit-dialog";
 import { AssetImportDialog } from "@/components/asset-import-dialog";
 import { AssetExportDialog } from "@/components/asset-export-dialog";
+import { SortableList } from "@/components/sortable-list";
 import { StatusChip } from "@/components/mui/status-chip";
 import { FONT_SANS, gridText } from "@/components/mui/theme";
 import { InventoryCollectDialog, type CollectTarget } from "@/components/inventory-collect-dialog";
@@ -509,16 +508,6 @@ export function AssetList({
     columnActions.arrange = () => setArranging({ order: arrangeable.map((column) => column.field), hidden: layout.hidden });
   });
 
-  function moveColumn(field: string, step: number) {
-    if (!arranging) return;
-    const order = arrangeable.map((column) => column.field);
-    const from = order.indexOf(field);
-    const to = from + step;
-    if (from < 0 || to < 0 || to >= order.length) return;
-    [order[from], order[to]] = [order[to], order[from]];
-    setArranging({ ...arranging, order });
-  }
-
   return (
     <Stack spacing={2}>
       <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center" }}>
@@ -722,13 +711,15 @@ export function AssetList({
         <DialogTitle>列设置</DialogTitle>
         <DialogContent>
           <Typography variant="body2" sx={{ color: "text.secondary", mb: 1 }}>
-            勾上的列显示，用箭头调顺序。记在这个浏览器里。
+            勾上的列显示。按住一行拖动调顺序（或按住左边的把手）。记在这个浏览器里。
           </Typography>
-          {arranging
-            ? arrangeable.map((column, index) => (
-                <Stack key={column.field} direction="row" sx={{ alignItems: "center" }}>
+          {arranging ? (
+            <SortableList
+              items={arrangeable.map((column) => ({
+                key: column.field,
+                content: (
                   <FormControlLabel
-                    sx={{ flex: 1 }}
+                    sx={{ width: "100%", mr: 0 }}
                     control={
                       <Checkbox
                         size="small"
@@ -740,15 +731,11 @@ export function AssetList({
                     }
                     label={<Typography variant="body2">{column.headerName || column.field}</Typography>}
                   />
-                  <IconButton size="small" aria-label={`${column.headerName} 上移`} disabled={index === 0} onClick={() => moveColumn(column.field, -1)}>
-                    <ArrowUpwardOutlined fontSize="small" />
-                  </IconButton>
-                  <IconButton size="small" aria-label={`${column.headerName} 下移`} disabled={index === arrangeable.length - 1} onClick={() => moveColumn(column.field, 1)}>
-                    <ArrowDownwardOutlined fontSize="small" />
-                  </IconButton>
-                </Stack>
-              ))
-            : null}
+                ),
+              }))}
+              onChange={(order) => setArranging({ ...arranging, order })}
+            />
+          ) : null}
         </DialogContent>
         <DialogActions>
           <Button
