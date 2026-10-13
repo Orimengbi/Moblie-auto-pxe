@@ -743,7 +743,7 @@ export function AssetList({
         }}
         onDone={() => router.refresh()}
       />
-      <ServerPowerDialog targets={powerTargets} onClose={() => setPowerTargets([])} />
+      <ServerPowerDialog targets={powerTargets.map((row) => ({ id: row.id, sn: row.sn, bmcIp: row.bmcIp, power: row.power?.state }))} onClose={() => setPowerTargets([])} />
       <InventoryCollectDialog targets={collectTargets} onClose={() => setCollectTargets([])} />
       <BmcLogsBatchDialog targets={logTargets} onClose={() => setLogTargets([])} />
       <BmcUserBatchDialog targets={userTargets} onClose={() => setUserTargets([])} />

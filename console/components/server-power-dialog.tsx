@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
@@ -18,6 +18,8 @@ import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
 import Typography from "@mui/material/Typography";
 import { api } from "@/lib/client-api";
 import { UTC_OFFSETS } from "@/lib/time";
+import type { PowerState } from "@/lib/types";
+import { StatusChip } from "@/components/mui/status-chip";
 import { useCan } from "@/components/role-context";
 
 type PowerAction = "on" | "soft" | "off" | "reset" | "cycle";
@@ -45,6 +47,18 @@ interface Target {
   id: string;
   sn: string;
   bmcIp?: string;
+  /** 列表里已知的开关机状态，打开对话框时先按它显示，现读到了再换。 */
+  power?: PowerState;
+}
+
+const POWER_LABEL: Record<PowerState, string> = { on: "开机", off: "关机", unknown: "不知道" };
+
+/** 全部开着时「开机」不能点，全部关着时「关机」「强制关机」不能点。有一台状态不同或读不到就都能点，服务端会跳过已经是那个状态的机器。 */
+function powerDisabled(action: PowerAction, states: PowerState[]): boolean {
+  if (!states.length) return false;
+  if (action === "on") return states.every((state) => state === "on");
+  if (action === "soft" || action === "off") return states.every((state) => state === "off");
+  return false;
 }
 
 /** 一台或多台机器的电源和引导设备。多台时每台单独发请求，同时最多 4 台。 */
@@ -62,6 +76,36 @@ export function ServerPowerDialog({ targets, onClose }: { targets: Target[]; onC
   const [ntpServers, setNtpServers] = useState("");
   const [results, setResults] = useState<{ sn: string; ok: boolean; text: string }[]>([]);
   const names = targets.length === 1 ? targets[0].sn : `${targets.length} 台机器`;
+  const [powers, setPowers] = useState<Record<string, PowerState>>({});
+  const [reading, setReading] = useState(false);
+  const targetKey = targets.map((target) => target.id).join(",");
+
+  // 打开时现读每台的开关机状态（同时最多 4 台），先用列表里的状态顶着。
+  useEffect(() => {
+    if (!targets.length) return;
+    let cancelled = false;
+    setPowers(Object.fromEntries(targets.map((target) => [target.id, target.power || "unknown"])));
+    setReading(true);
+    const queue = targets.filter((target) => target.bmcIp);
+    void Promise.all(
+      Array.from({ length: Math.min(4, queue.length) }, async () => {
+        for (let target = queue.shift(); target && !cancelled; target = queue.shift()) {
+          const response = await fetch(`/api/assets/${target.id}/control`).catch(() => null);
+          const data = response?.ok ? ((await response.json().catch(() => null)) as { power?: PowerState } | null) : null;
+          const id = target.id;
+          if (!cancelled && data?.power) setPowers((current) => ({ ...current, [id]: data.power! }));
+        }
+      }),
+    ).finally(() => !cancelled && setReading(false));
+    return () => {
+      cancelled = true;
+    };
+    // 只按选中的机器重读：父组件每次刷新都会新建 targets 数组。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetKey]);
+
+  const states = targets.map((target) => powers[target.id] || "unknown");
+  const powerCounts = (["on", "off", "unknown"] as const).map((state) => [state, states.filter((item) => item === state).length] as const).filter(([, count]) => count);
 
   async function run(body: Record<string, unknown>, confirmText?: string) {
     if (confirmText && !window.confirm(`${names}：${confirmText}。确定？`)) return;
@@ -79,6 +123,8 @@ export function ServerPowerDialog({ targets, onClose }: { targets: Target[]; onC
               body: JSON.stringify(body),
             });
             const data = await response.json().catch(() => ({}));
+            const id = target.id;
+            if (response.ok && data.power) setPowers((current) => ({ ...current, [id]: data.power }));
             collected.push({ sn: target.sn, ok: response.ok, text: response.ok ? data.message : data.error || "失败" });
           } catch {
             collected.push({ sn: target.sn, ok: false, text: `${target.sn}：没有连上控制台` });
@@ -143,14 +189,28 @@ export function ServerPowerDialog({ targets, onClose }: { targets: Target[]; onC
         </DialogContentText>
 
         <Stack component="section" spacing={1}>
-          <Typography variant="subtitle2">电源</Typography>
+          <Stack direction="row" useFlexGap spacing={1} sx={{ alignItems: "center", flexWrap: "wrap" }}>
+            <Typography variant="subtitle2">电源</Typography>
+            {targets.length === 1 ? (
+              <StatusChip tone={states[0] === "on" ? "success" : states[0] === "off" ? "neutral" : "warning"} label={`现在${POWER_LABEL[states[0]]}`} />
+            ) : (
+              <Typography variant="body2" color="text.secondary">
+                {powerCounts.map(([state, count]) => `${POWER_LABEL[state]} ${count} 台`).join("，")}
+              </Typography>
+            )}
+            {reading ? (
+              <Typography variant="caption" color="text.secondary">
+                正在从 BMC 读开关机状态
+              </Typography>
+            ) : null}
+          </Stack>
           <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap" }}>
             {POWER.map((item) => (
               <Button
                 key={item.id}
                 variant={item.id === "off" ? "contained" : "outlined"}
                 color={item.id === "off" ? "error" : "primary"}
-                disabled={pending}
+                disabled={pending || powerDisabled(item.id, states)}
                 onClick={() => run({ power: item.id }, item.confirm)}
               >
                 {item.label}
@@ -158,7 +218,7 @@ export function ServerPowerDialog({ targets, onClose }: { targets: Target[]; onC
             ))}
           </Stack>
           <Typography variant="caption" color="text.secondary">
-            关机是通知系统关机，系统没响应时用强制关机。关着的机器点重启会直接开机。
+            关机是通知系统关机，系统没响应时用强制关机。关着的机器点重启会直接开机。已经开着的不能再开机，已经关着的不能再关机；多台里状态不一样时都能点，已经是那个状态的机器会跳过。
           </Typography>
         </Stack>
 

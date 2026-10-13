@@ -26,7 +26,7 @@ import {
   renderNicScript,
   renderUbuntuAutoinstall,
 } from "./render.ts";
-import { bindServerBoot, controlAsset, removeAsset, createIpmi, deleteProject, deleteServer, saveServer, getTask, listMachines, listServers, markServerInstalled, requestReinstall, saveFile, createNic, createProfile, createProject, createReport, customizationForMac, getIpmiBySn, getMachine, getProject, getState, importProjectPlan, importServerSheet, listImages, listNicsBySn, listProjects, publicServer, reconcileServers, renameProject, saveMachine, saveMachineFact, saveNetwork, setProjectEnabled, updateProjectNetwork } from "./store.ts";
+import { assetPowerState, bindServerBoot, controlAsset, removeAsset, createIpmi, deleteProject, deleteServer, saveServer, getTask, listMachines, listServers, markServerInstalled, requestReinstall, saveFile, createNic, createProfile, createProject, createReport, customizationForMac, getIpmiBySn, getMachine, getProject, getState, importProjectPlan, importServerSheet, listImages, listNicsBySn, listProjects, publicServer, reconcileServers, renameProject, saveMachine, saveMachineFact, saveNetwork, setProjectEnabled, updateProjectNetwork } from "./store.ts";
 import { getAsset, updateAsset } from "./assets.ts";
 import { DEFAULT_STATE, type ImageRecord, type Profile } from "./types.ts";
 
@@ -906,6 +906,15 @@ test("power and boot device go to the BMC with the account it accepts now", asyn
   assert.ok(!calls.some((call) => call.startsWith("admin chassis power cycle")));
   await controlAsset(row.assetId, { power: "off" }, exec);
   assert.equal(listServers().find((item) => item.id === row.id)?.power, "off");
+  // 已经关着再关机、已经开着再开机：不发命令。
+  calls.length = 0;
+  assert.match((await controlAsset(row.assetId, { power: "soft" }, exec)).message, /已经是关机/);
+  assert.ok(!calls.some((call) => call.includes("power soft") || call.includes("power off")));
+  assert.equal(await assetPowerState(row.assetId, exec), "off");
+  await controlAsset(row.assetId, { power: "on" }, exec);
+  calls.length = 0;
+  assert.match((await controlAsset(row.assetId, { power: "on" }, exec)).message, /已经是开机/);
+  assert.ok(!calls.includes("admin chassis power on"));
 
   await assert.rejects(controlAsset(row.assetId, { power: "explode" as never }, exec), /不支持的电源操作/);
   await assert.rejects(controlAsset(row.assetId, {}, exec), /没有要执行的操作/);
