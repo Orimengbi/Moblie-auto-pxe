@@ -253,7 +253,7 @@ export function ServerPowerDialog({ targets, onClose }: { targets: Target[]; onC
               </Button>
             </Stack>
             <Typography variant="caption" color="text.secondary">
-              重启 BMC 是冷重启，服务器系统照常运行：带外经 BMC 网口发 IPMI；带内 SSH 进系统用系统里的 ipmitool 发，BMC 网络不通或账号不对时用，重启后 1~3 分钟连不上 BMC。时区和 NTP 经 Redfish 改。都建成任务，在右上角「任务」里看结果。
+              重启 BMC 是冷重启，服务器系统照常运行：带外经 BMC 网口发 IPMI；带内 SSH 进系统用系统里的 ipmitool 发，BMC 网络不通或账号不对时用，重启后 1~3 分钟连不上 BMC，任务会一直等到 BMC 的 IPMI 和 Redfish 都能连上才算这台完成（最多等 10 分钟）。时区和 NTP 经 Redfish 改。都建成任务，在右上角「任务」里看结果。
             </Typography>
           </Stack>
         ) : null}

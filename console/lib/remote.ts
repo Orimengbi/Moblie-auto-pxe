@@ -690,21 +690,109 @@ export function publicTask(task: RemoteTask): RemoteTask {
   return { ...task, bmcUser: { ...task.bmcUser, password: "" } };
 }
 
-/** 重启 BMC 任务里的一台：成功后在资产记录里记一笔。 */
-async function resetBmcTarget(task: RemoteTask, target: TaskTarget, exec: Exec): Promise<Pick<TaskTarget, "status" | "exitCode" | "output">> {
+/** 等 BMC 重启回来：每 10 秒探一次，最多等 10 分钟。 */
+const BMC_BACK_POLL_MS = 10_000;
+const BMC_BACK_WAIT_MS = 10 * 60_000;
+/** 这么久都没断开过，就当它重启得很快、两次探测之间已经回来了。 */
+const BMC_DOWN_GRACE_MS = 3 * 60_000;
+/** IPMI 回来以后再等 Redfish 这么久，还不行就不等了（有的 BMC 关了 Redfish）。 */
+const REDFISH_GRACE_MS = 5 * 60_000;
+
+export interface BmcBackDeps {
+  ipmi?: IpmiExec;
+  redfish?: RedfishFactory;
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+}
+
+/**
+ * 冷重启发出去以后等 BMC 回来：先看到它断开（真的在重启），再等 IPMI 能登录、Redfish 能读，网页和远程控制台也就能用了。
+ * 容器里没有 ping，用 IPMI 和 Redfish 探，比 ping 通更能说明 BMC 起来了。onProgress 每次探完报一句现在的情况。
+ */
+export async function waitBmcBack(
+  assetId: string,
+  onProgress: (text: string) => void = () => {},
+  deps: BmcBackDeps = {},
+): Promise<{ ok: boolean; message: string }> {
+  const asset = getAsset(assetId);
+  if (!asset) return { ok: false, message: "资产已经删掉了" };
+  const accounts = assetBmcAccounts(asset);
+  if (!asset.bmcIp || !accounts.length) return { ok: true, message: `${asset.bmcIp ? "没有 BMC 账号密码" : "没有 BMC 地址"}，没法确认 BMC 重启回来，过几分钟自己看一下` };
+  const ipmi = deps.ipmi || defaultIpmiExec;
+  const redfish = deps.redfish || ((host, user, password) => redfishGetter(host, user, password, 10_000));
+  const sleep = deps.sleep || ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const now = deps.now || Date.now;
+  const start = now();
+  const elapsed = () => `${Math.round((now() - start) / 1000)} 秒`;
+  let downAt = 0;
+  let ipmiBackAt = 0;
+  while (now() - start < BMC_BACK_WAIT_MS) {
+    await sleep(BMC_BACK_POLL_MS);
+    const { account } = await firstWorkingAccount(asset.bmcIp, accounts, ipmi).catch(() => ({ account: null }));
+    if (!account) {
+      downAt ||= now();
+      ipmiBackAt = 0;
+      onProgress(`BMC 已断开，在重启，等它回来（已等 ${elapsed()}）`);
+      continue;
+    }
+    if (!downAt && now() - start < BMC_DOWN_GRACE_MS) {
+      onProgress(`BMC 还没断开，等它开始重启（已等 ${elapsed()}）`);
+      continue;
+    }
+    ipmiBackAt ||= now();
+    const ready = await redfish(asset.bmcIp, account.user, account.password)("/redfish/v1")
+      .then((doc) => Boolean(doc))
+      .catch((error) => error instanceof RedfishAuthError);
+    const took = `用了 ${elapsed()}`;
+    const note = downAt ? "" : "（一直没探到断开，可能两次探测之间已经重启完了）";
+    if (ready) return { ok: true, message: `BMC ${asset.bmcIp} 已经重启回来，IPMI 和 Redfish 都能连上，${took}${note}` };
+    if (now() - ipmiBackAt >= REDFISH_GRACE_MS) return { ok: true, message: `BMC ${asset.bmcIp} 的 IPMI 回来了，Redfish 等了 5 分钟还连不上，${took}${note}。网页打不开的话再等等或看 BMC 设置` };
+    onProgress(`IPMI 回来了，等 Redfish（网页、远程控制台）起来（已等 ${elapsed()}）`);
+  }
+  return { ok: false, message: `等了 ${BMC_BACK_WAIT_MS / 60_000} 分钟 BMC ${asset.bmcIp} 还没回来，${downAt ? "断开以后一直没连上" : "一直连不上"}，看一下 BMC 网络或去机房看看` };
+}
+
+/**
+ * 重启 BMC 任务里的一台：发出重启后在资产记录里记一笔，然后等 BMC 回来才算这台完成。
+ * 等的这段不占并发：发完重启就把等待交给 waits，worker 接着去发下一台。
+ */
+async function resetBmcTarget(
+  task: RemoteTask,
+  target: TaskTarget,
+  exec: Exec,
+  waits: Promise<void>[],
+  bmcBack: BmcBackDeps,
+): Promise<Pick<TaskTarget, "status" | "exitCode" | "output"> | null> {
   const via = task.bmcReset || "outband";
+  let sent: string;
   try {
-    const result = await resetBmc(target.serverId, via, { exec, host: via === "inband" ? target.host : undefined });
+    sent = (await resetBmc(target.serverId, via, { exec, ipmi: bmcBack.ipmi, host: via === "inband" ? target.host : undefined })).message;
     addEvent(target.serverId, "bmc", `重启 BMC（${via === "inband" ? "带内" : "带外"}，任务「${task.name}」）`, "批量任务");
-    return { status: "ok", exitCode: 0, output: `${result.message}\n` };
   } catch (error) {
     const message = error instanceof Error ? error.message : "重启 BMC 失败";
     return { status: /SSH 登录|没有回应|找不到系统地址/.test(message) ? "unreachable" : "failed", exitCode: null, output: `${message}\n` };
   }
+  target.output = `${sent}\n等 BMC 重启回来…\n`;
+  writeTask(task);
+  waits.push(
+    waitBmcBack(
+      target.serverId,
+      (text) => {
+        target.output = `${sent}\n${text}\n`;
+        writeTask(task);
+      },
+      bmcBack,
+    ).then((back) => {
+      Object.assign(target, { status: back.ok ? "ok" : "unreachable", exitCode: back.ok ? 0 : null, output: `${sent}\n${back.message}\n`, finishedAt: new Date().toISOString() });
+      if (back.ok) addEvent(target.serverId, "bmc", `BMC 重启完成：${back.message}`, "批量任务");
+      writeTask(task);
+    }),
+  );
+  return null;
 }
 
 /** 在独立进程里跑完一个任务，每台机器状态变化时写回任务文件。 */
-export async function runTask(id: string, exec: Exec = defaultExec, redfish: RedfishFactory = redfishGetter): Promise<RemoteTask> {
+export async function runTask(id: string, exec: Exec = defaultExec, redfish: RedfishFactory = redfishGetter, bmcBack: BmcBackDeps = {}): Promise<RemoteTask> {
   const loaded = getTask(id);
   if (!loaded) throw new Error("任务不存在");
   const task: RemoteTask = { ...loaded, status: "running", runnerPid: process.pid };
@@ -715,18 +803,27 @@ export async function runTask(id: string, exec: Exec = defaultExec, redfish: Red
   });
   writeTask(task);
   const queue = task.targets.filter((target) => target.status === "pending");
+  // 重启 BMC：发完重启后等它回来，等的这些在最后一起收。
+  const waits: Promise<void>[] = [];
   const worker = async () => {
     for (let target = queue.shift(); target; target = queue.shift()) {
       target.status = "running";
       target.startedAt = new Date().toISOString();
       writeTask(task);
       try {
+        if (task.kind === "bmc-reset") {
+          const result = await resetBmcTarget(task, target, exec, waits, bmcBack);
+          // null：重启已发出，在后台等它回来，这台的结果和结束时间到时候再写。
+          if (!result) continue;
+          Object.assign(target, result);
+          target.finishedAt = new Date().toISOString();
+          writeTask(task);
+          continue;
+        }
         Object.assign(
           target,
           task.kind === "inventory"
             ? await collectInventory(task, target, exec, redfish)
-            : task.kind === "bmc-reset"
-              ? await resetBmcTarget(task, target, exec)
               : task.kind === "bmc-clock"
                 ? await clockTarget(task, target)
                 : task.kind === "bmc-logs"
@@ -745,6 +842,7 @@ export async function runTask(id: string, exec: Exec = defaultExec, redfish: Red
   };
   if (task.kind === "bmc-logs") cleanupBundles();
   await Promise.all(Array.from({ length: Math.min(task.concurrency, queue.length) }, worker));
+  await Promise.all(waits);
   task.status = "done";
   task.finishedAt = new Date().toISOString();
   if (task.bmcUser?.password) task.bmcUser = { ...task.bmcUser, password: "" };
