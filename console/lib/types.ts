@@ -493,9 +493,10 @@ export interface SnmpProfile {
 
 export type PublicSnmpProfile = Omit<SnmpProfile, "community" | "authPass" | "privPass"> & { hasCommunity: boolean; hasAuthPass: boolean; hasPrivPass: boolean };
 
-export type PortGroup = "drive" | "pcie" | "net";
+/** psu、fan 不是采集出来的，页面上按电源、风扇部件的槽位现排。 */
+export type PortGroup = "cpu" | "memory" | "drive" | "pcie" | "net" | "psu" | "fan";
 
-/** 机器上的一个接口：一个盘位、一个 PCIe 插槽或一个网口。 */
+/** 机器上的一个接口：一个 CPU 插座、内存槽、盘位、PCIe 插槽或网口。 */
 export interface HwPort {
   group: PortGroup;
   /** 槽位或网口名，例如 Slot 3、ata2、ens1f0。 */

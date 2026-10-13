@@ -444,7 +444,7 @@ function withDeadline<T>(work: Promise<T>, deadline: number, label: string): Pro
  * 有一边成功就把结果存下；要读的两边都成功才算成功。
  */
 function portLines(ports: HwPort[]): string[] {
-  return (["drive", "pcie", "net"] as const).map((group) => `  ${portSummary(ports, group)}`);
+  return (["cpu", "memory", "pcie", "drive", "net"] as const).map((group) => `  ${portSummary(ports, group)}`);
 }
 
 export async function collectInventory(

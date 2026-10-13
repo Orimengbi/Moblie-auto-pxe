@@ -7,13 +7,18 @@ import type { HwComponent, HwPort, PortGroup } from "./types.ts";
  * 系统内：PCIe 插槽和 M.2 槽来自 BIOS 的 SMBIOS 表（dmidecode -t 9），再按总线地址找插在上面的设备；
  * 盘位来自背板的 SES（/sys/class/enclosure）、板载 SATA 口（/sys/class/ata_port）和 PCIe 热插拔槽（多为 NVMe 盘位），
  * 对不上盘位的盘单独列出；网口读链路、速率、IP 和所属 bond，IB 模式的口没有网口名，按 RDMA 设备列。
+ * CPU 插座和内存槽（含空的）系统内来自 dmidecode -t 4、-t 17，BMC 来自 Processors、Memory 里 Absent 的条目。
  * BMC：Chassis 的 PCIeSlots（名字是 NVMe、M.2 这类的算盘位，按 PCIe 设备编号对上里面的盘）、Storage 里的盘位（有的 BMC 会列出空盘位）、网卡的 Ports。
  */
 
 export const PORT_GROUP_LABEL: Record<PortGroup, string> = {
+  cpu: "CPU 插座",
+  memory: "内存槽",
   drive: "硬盘位",
   pcie: "PCIe 插槽",
   net: "网口",
+  psu: "电源位",
+  fan: "风扇位",
 };
 
 /** 接在 INVENTORY_SCRIPT 里执行，用它的 sec、have、pci_of。字段用 | 分隔，因为有的值会是空的。 */
@@ -136,6 +141,27 @@ function diskText(disk: HwComponent | undefined, name: string): string {
   return [name, disk.model, cap].filter(Boolean).join(" ");
 }
 
+/** CPU 插座（dmidecode 类型 4）和内存槽（类型 17），空的也列。名字和部件的槽位名取法一样，parts 就是槽位名。 */
+function dmiSockets(dmi: { type: number; fields: Record<string, string> }[]): HwPort[] {
+  const ports: HwPort[] = [];
+  dmi
+    .filter((block) => block.type === 4)
+    .forEach(({ fields }, index) => {
+      const name = clean(fields["Socket Designation"]) || `CPU${index}`;
+      const used = /unpopulated/i.test(fields.Status || "") ? false : /populated/i.test(fields.Status || "") ? true : null;
+      ports.push({ group: "cpu", name, type: clean(fields.Upgrade).replace(/^Socket\s+/i, "Socket "), used, device: used ? clean(fields.Version) : "", ...(used ? { parts: [name] } : {}) });
+    });
+  for (const { fields } of dmi.filter((block) => block.type === 17)) {
+    const name = clean(fields.Locator) || clean(fields["Bank Locator"]);
+    if (!name) continue;
+    const size = fields.Size || "";
+    const used = /no module|not installed|^0\b/i.test(size) ? false : /\d/.test(size) ? true : null;
+    const type = [used ? clean(fields.Type).replace(/^(unknown|other)$/i, "") : "", clean(fields["Form Factor"]).replace(/^(unknown|other)$/i, "")].filter(Boolean).join(" ");
+    ports.push({ group: "memory", name, type, used, device: used ? [clean(fields["Part Number"]), size.trim()].filter(Boolean).join(" ") : "", ...(used ? { parts: [name] } : {}) });
+  }
+  return ports;
+}
+
 /** 解析 PORTS_BODY 的输出。components 是同一次采集解析出的部件，用来给盘和网口配上型号。 */
 export function parseOsPorts(sections: Map<string, string>, components: HwComponent[], parseDmidecode: (text: string) => { type: number; fields: Record<string, string> }[]): HwPort[] {
   const ports: HwPort[] = [];
@@ -149,6 +175,7 @@ export function parseOsPorts(sections: Map<string, string>, components: HwCompon
   for (const [, pci, ns] of rows(sections.get("nvme"), 3)) if (ns) nvmeByPci.set(pci.toLowerCase(), ns);
   const usedDisks = new Set<string>();
   const claimed = new Set<string>();
+  ports.push(...dmiSockets(parseDmidecode(sections.get("dmidecode") || "")));
 
   /** 地址本身或挂在它下面的终端设备（桥不算）。 */
   const endpointsUnder = (addr: string) => pcidevs.filter((dev) => !dev.cls.startsWith("0x06") && (dev.addr === addr || dev.path.includes(`/${addr}/`)));
@@ -365,6 +392,23 @@ function driveText(doc: RedfishDoc): string {
 /** 从 crawlRedfish 读到的文档里取接口。 */
 export function redfishPorts(raw: RedfishRaw): HwPort[] {
   const ports: HwPort[] = [];
+  // CPU 插座和内存槽：Absent 的是空的。GPU 和它的显存也在 Processors、Memory 里，不算。
+  const gpuIds = raw.processors.filter((doc) => str(doc, "ProcessorType") === "GPU").map(id);
+  for (const doc of raw.processors) {
+    const type = str(doc, "ProcessorType");
+    if ((type && type !== "CPU") || (!type && !doc.TotalCores && state(doc) !== "Absent")) continue;
+    const name = str(doc, "Socket") || id(doc);
+    const used = state(doc) !== "Absent";
+    ports.push({ group: "cpu", name, type: "", used, device: used ? str(doc, "Model") : "", ...(used ? { parts: [name] } : {}) });
+  }
+  for (const doc of raw.memory) {
+    if (str(doc, "MemoryDeviceType") === "HBM" || gpuIds.some((gpu) => id(doc).startsWith(`${gpu}_`))) continue;
+    const name = str(doc, "DeviceLocator") || id(doc);
+    const used = state(doc) !== "Absent" && (Number(doc.CapacityMiB) || 0) > 0;
+    const type = [used ? str(doc, "MemoryDeviceType") : "", str(doc, "BaseModuleType")].filter(Boolean).join(" ");
+    const gb = Math.round((Number(doc.CapacityMiB) || 0) / 1024);
+    ports.push({ group: "memory", name, type, used, device: used ? [str(doc, "PartNumber"), gb ? `${gb} GB` : ""].filter(Boolean).join(" ") : "", ...(used ? { parts: [name] } : {}) });
+  }
   const devices = new Map(raw.pcieDevices.map((doc) => [String(doc["@odata.id"] || ""), doc]));
   const drivePorts: HwPort[] = [];
   const placed = new Set<RedfishDoc>();
@@ -459,21 +503,78 @@ export function portSummary(ports: HwPort[], group: PortGroup): string {
   return `${PORT_GROUP_LABEL[group]} ${list.length} 个：占用 ${used}，空闲 ${free}${unknown ? `，不确定 ${unknown}` : ""}`;
 }
 
+/** 页面上的接口分组顺序。 */
+export const VIEW_GROUPS: PortGroup[] = ["cpu", "memory", "pcie", "drive", "net", "psu", "fan"];
+
+export interface InterfaceGroup {
+  group: PortGroup;
+  ports: HwPort[];
+  /** 这一组是按部件现排的，只有插着东西的位置（以前的采集没记空的 CPU 插座、内存槽）。 */
+  fromParts?: boolean;
+}
+
+export interface InterfaceView {
+  groups: InterfaceGroup[];
+  /** 接口 → 插在上面的部件。网口上是光模块。 */
+  parts: Map<HwPort, HwComponent[]>;
+  /** 整机、主板、固件这类不插在接口上的。 */
+  machine: HwComponent[];
+  /** 该插在接口上、但没对上的部件，比如没对上插槽的网卡、BMC 采的 GPU。 */
+  loose: HwComponent[];
+}
+
+const MACHINE_KINDS = new Set<HwComponent["kind"]>(["system", "board", "firmware"]);
+
 /**
- * 部件插在哪个槽或盘位：按采集时记下的 parts 对部件的 slot 或 attrs.pci。
- * 以前的采集没有 parts，盘按「插着的」开头的盘符对。返回 部件 → 槽位名。
+ * 先接口后部件：把一次采集的部件挂到它插着的接口下面。
+ * CPU、内存按槽位名对；PCIe 插槽、盘位按采集时记下的 parts 对部件的槽位或 PCI 地址（旧采集没有 parts，盘按盘符对）；
+ * 光模块按它服务的网口名挂到网口上；电源、风扇的槽位就是位置，一个部件排一个位。
  */
-export function partLocations(components: HwComponent[], ports: HwPort[]): Map<HwComponent, string> {
-  const byKey = new Map<string, string>();
-  for (const port of ports) {
-    if (port.group === "net" || port.note === "没对上盘位") continue;
-    const keys = port.parts || (port.group === "drive" && port.device ? [port.device.split(" ")[0]] : []);
-    for (const key of keys) if (key && !byKey.has(key.toLowerCase())) byKey.set(key.toLowerCase(), port.name);
+export function interfaceView(components: HwComponent[], ports: HwPort[] | undefined): InterfaceView {
+  const list = [...(ports || [])];
+  const parts = new Map<HwPort, HwComponent[]>();
+  const attach = (port: HwPort, item: HwComponent) => parts.set(port, [...(parts.get(port) || []), item]);
+  const fromParts = new Set<PortGroup>();
+
+  // 以前的采集没有 CPU、内存这两组，按部件补上。
+  for (const [group, kind] of [["cpu", "cpu"], ["memory", "memory"], ["psu", "psu"], ["fan", "fan"]] as const) {
+    if (list.some((port) => port.group === group)) continue;
+    const items = components.filter((item) => item.kind === kind);
+    if (!items.length) continue;
+    if (group === "cpu" || group === "memory") fromParts.add(group);
+    for (const item of items) list.push({ group, name: item.slot, type: "", used: true, device: item.model, parts: [item.slot] });
   }
-  const found = new Map<HwComponent, string>();
+
+  const byKey = new Map<string, HwPort>();
+  for (const port of list) {
+    if (port.group === "net") continue;
+    const keys = port.parts || (port.note === "没对上盘位" ? [port.name] : port.group === "drive" && port.device ? [port.device.split(" ")[0]] : []);
+    for (const key of keys) if (key && !byKey.has(key.toLowerCase())) byKey.set(key.toLowerCase(), port);
+  }
+  const netByName = new Map(list.filter((port) => port.group === "net").map((port) => [port.name, port]));
+
+  const machine: HwComponent[] = [];
+  const loose: HwComponent[] = [];
   for (const item of components) {
-    const name = [item.slot, String(item.attrs.pci || "")].map((key) => byKey.get(key.toLowerCase())).find(Boolean);
-    if (name && name !== item.slot) found.set(item, name);
+    if (MACHINE_KINDS.has(item.kind)) {
+      machine.push(item);
+      continue;
+    }
+    if (item.kind === "transceiver") {
+      const served = item.slot.split(/,\s*/).map((name) => netByName.get(name)).filter((port): port is HwPort => Boolean(port));
+      served.forEach((port) => attach(port, item));
+      if (!served.length) loose.push(item);
+      continue;
+    }
+    const port = [item.slot, String(item.attrs.pci || "")]
+      .map((key) => byKey.get(key.toLowerCase()))
+      .find((found) => found && (found.group === item.kind || !["cpu", "memory", "psu", "fan"].includes(found.group)));
+    if (port) attach(port, item);
+    else loose.push(item);
   }
-  return found;
+
+  const groups = VIEW_GROUPS.map((group) => ({ group, ports: list.filter((port) => port.group === group), ...(fromParts.has(group) ? { fromParts: true } : {}) })).filter(
+    (item) => item.ports.length || ["cpu", "memory", "pcie", "drive", "net"].includes(item.group),
+  );
+  return { groups, parts, machine, loose };
 }
