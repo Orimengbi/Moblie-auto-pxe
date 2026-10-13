@@ -17,6 +17,7 @@ import { OPEN_TICKET_STATUS, priorityTone, TICKET_KINDS, TICKET_PRIORITY, TICKET
 import type { Ticket } from "@/lib/types";
 import { formatTime } from "@/lib/time";
 import { useCan } from "@/components/role-context";
+import { gridText } from "@/components/mui/theme";
 
 export type TicketRow = Ticket & { assetTag: string; assetSn: string };
 
@@ -134,7 +135,7 @@ export function TicketList({ tickets, me }: { tickets: TicketRow[]; me: string }
           initialState={{ pagination: { paginationModel: { pageSize: 100 } } }}
           pageSizeOptions={[25, 50, 100]}
           hideFooter={shown.length <= 100}
-          localeText={{ noRowsLabel: tickets.length ? "没有符合条件的工单。" : "还没有工单。" }}
+          localeText={gridText({ noRowsLabel: tickets.length ? "没有符合条件的工单。" : "还没有工单。" })}
           sx={{ "& .MuiDataGrid-row": { cursor: "pointer" } }}
         />
       </Box>

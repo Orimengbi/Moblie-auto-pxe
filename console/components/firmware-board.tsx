@@ -23,6 +23,7 @@ import { InventoryCollectDialog, type CollectTarget } from "@/components/invento
 import { StatusChip } from "@/components/mui/status-chip";
 import type { FleetComponent, FleetMachine, FleetModel } from "@/lib/firmware-fleet";
 import { formatTime } from "@/lib/time";
+import { gridText } from "@/components/mui/theme";
 
 const MONO = "var(--font-geist-mono), monospace";
 
@@ -170,7 +171,7 @@ export function FirmwareBoard({ models }: { models: FleetModel[] }) {
               pageSizeOptions={[25, 50, 100]}
               hideFooter={rows.length <= 100}
               disableRowSelectionOnClick
-              localeText={{ noRowsLabel: onlyDiff ? "这一类的部件版本都一致。" : "没有符合条件的部件。" }}
+              localeText={gridText({ noRowsLabel: onlyDiff ? "这一类的部件版本都一致。" : "没有符合条件的部件。" })}
               sx={{ "& .MuiDataGrid-cell": { display: "flex", alignItems: "center", py: 0.5 } }}
             />
           </Box>

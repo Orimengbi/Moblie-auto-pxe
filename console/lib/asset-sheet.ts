@@ -81,6 +81,9 @@ export const SHEET_COLUMNS: { field: SheetField; header: string; aliases: string
   { field: "note", header: "备注", aliases: [] },
 ];
 
+/** 能导出的列：不带密码。 */
+export const EXPORT_COLUMNS = SHEET_COLUMNS.filter((column) => column.field !== "bmcPassword" && column.field !== "bmcFallbackPassword");
+
 const DATE_FIELDS: SheetField[] = ["purchaseDate", "warrantyStart", "warrantyEnd"];
 
 function headerKey(value: unknown): string {
@@ -165,13 +168,15 @@ export function assetsToRows(
   sites: Site[] = [],
   snmpProfiles: { id: string; name: string }[] = [],
   datacenters: Datacenter[] = [],
+  /** 只要这几列（按 SHEET_COLUMNS 的顺序），不给就全要。密码列怎么都不导。 */
+  fields?: SheetField[],
 ): string[][] {
   const datacenterById = new Map(datacenters.map((item) => [item.id, item]));
   const profileById = new Map(snmpProfiles.map((item) => [item.id, item.name]));
   const byId = new Map(customers.map((item) => [item.id, item]));
   const rackById = new Map(racks.map((item) => [item.id, item]));
   const siteById = new Map(sites.map((item) => [item.id, item]));
-  const columns = SHEET_COLUMNS.filter((column) => column.field !== "bmcPassword" && column.field !== "bmcFallbackPassword");
+  const columns = EXPORT_COLUMNS.filter((column) => !fields || fields.includes(column.field));
   return [
     ["编号", ...columns.map((column) => column.header)],
     ...assets.map((asset) => [

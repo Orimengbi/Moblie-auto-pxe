@@ -93,6 +93,8 @@ const WRITES: [RegExp, Permission | null][] = [
   [/^\/api\/parts\/[^/]+\/status$/, "parts.status"],
   [/^\/api\/parts(\/[^/]+)?$/, "parts.edit"],
   [/^\/api\/(part-groups|catalog)(\/.*)?$/, "catalog"],
+  // 导出按选的机器和表生成 Excel，只读，和 GET 一样登录了就行。
+  [/^\/api\/assets\/export$/, null],
   [/^\/api\/assets\/[^/]+\/control$/, "power"],
   [/^\/api\/assets\/[^/]+\/(sensors|monitor|optics|network)$/, "refresh"],
   [/^\/api\/assets\/[^/]+\/network\/baseline$/, "assets.edit"],

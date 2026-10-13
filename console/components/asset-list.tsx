@@ -20,11 +20,17 @@ import Typography from "@mui/material/Typography";
 import ArrowDownwardOutlined from "@mui/icons-material/ArrowDownwardOutlined";
 import ArrowUpwardOutlined from "@mui/icons-material/ArrowUpwardOutlined";
 import ClearOutlined from "@mui/icons-material/ClearOutlined";
-import { DataGrid, type GridColDef, type GridRowProps, type GridRowSelectionModel } from "@mui/x-data-grid";
+import { DataGrid, GridColumnMenu, type GridColDef, type GridColumnMenuItemProps, type GridColumnMenuProps, type GridRowProps, type GridRowSelectionModel } from "@mui/x-data-grid";
+import ListItemIcon from "@mui/material/ListItemIcon";
+import ListItemText from "@mui/material/ListItemText";
+import MenuItem from "@mui/material/MenuItem";
+import ViewColumnOutlined from "@mui/icons-material/ViewColumnOutlined";
+import VisibilityOffOutlined from "@mui/icons-material/VisibilityOffOutlined";
 import { AssetEditDialog } from "@/components/asset-edit-dialog";
 import { AssetImportDialog } from "@/components/asset-import-dialog";
+import { AssetExportDialog } from "@/components/asset-export-dialog";
 import { StatusChip } from "@/components/mui/status-chip";
-import { FONT_SANS } from "@/components/mui/theme";
+import { FONT_SANS, gridText } from "@/components/mui/theme";
 import { InventoryCollectDialog, type CollectTarget } from "@/components/inventory-collect-dialog";
 import { HOST_SOURCE, ProjectTaskRunner } from "@/components/project-task-runner";
 import { RemoteConsole } from "@/components/remote-console";
@@ -55,6 +61,43 @@ function arrange<T extends { field: string }>(columns: T[], layout: Layout): T[]
   const body = columns.filter((column) => column.field !== "actions").sort((a, b) => rank(a.field) - rank(b.field));
   return [...body.filter((column) => !layout.hidden.includes(column.field)), ...columns.filter((column) => column.field === "actions")];
 }
+/** 表头三点菜单里的列操作，由列表组件挂上去：藏这一列、打开列设置（排顺序、选显示哪些列）。 */
+const columnActions: { hide: (field: string) => void; arrange: () => void } = { hide: () => {}, arrange: () => {} };
+
+function ColumnLayoutItems({ colDef, onClick }: GridColumnMenuItemProps) {
+  return (
+    <>
+      <MenuItem
+        onClick={(event) => {
+          onClick(event);
+          columnActions.hide(colDef.field);
+        }}
+      >
+        <ListItemIcon>
+          <VisibilityOffOutlined fontSize="small" />
+        </ListItemIcon>
+        <ListItemText>隐藏这一列</ListItemText>
+      </MenuItem>
+      <MenuItem
+        onClick={(event) => {
+          onClick(event);
+          columnActions.arrange();
+        }}
+      >
+        <ListItemIcon>
+          <ViewColumnOutlined fontSize="small" />
+        </ListItemIcon>
+        <ListItemText>列设置（顺序、显示哪些列）</ListItemText>
+      </MenuItem>
+    </>
+  );
+}
+
+/** 换掉表格自带的「隐藏 / 管理列」：自带的不记顺序也不存，用这个浏览器记住的列设置。 */
+function AssetColumnMenu(props: GridColumnMenuProps) {
+  return <GridColumnMenu {...props} slots={{ columnMenuColumnsItem: ColumnLayoutItems }} />;
+}
+
 const NATIVE = { select: { native: true } } as const;
 
 interface Filters {
@@ -163,6 +206,7 @@ export function AssetList({
   const search = useSearchParams();
   const [filters, setFilters] = useState<Filters>(EMPTY);
   const [picked, setPicked] = useState<string[]>([]);
+  const [exporting, setExporting] = useState(false);
   const [sideId, setSideId] = useState<string | null>(null);
   const [sideTab, setSideTab] = useState<SidebarTab>("overview");
   const canConsole = useCan("console");
@@ -457,6 +501,14 @@ export function AssetList({
   /** 设置对话框里列的名字和当前顺序（含藏起来的）。 */
   const arrangeable = useMemo(() => arrange(columns, { order: (arranging || layout).order, hidden: [] }).filter((column) => column.field !== "actions"), [columns, arranging, layout]);
 
+  // 表头三点菜单里点的。最后一列不让藏，不然表就空了。
+  useEffect(() => {
+    columnActions.hide = (field) => {
+      if (shownColumns.filter((column) => column.field !== "actions").length > 1) saveLayout({ ...layout, hidden: [...layout.hidden, field] });
+    };
+    columnActions.arrange = () => setArranging({ order: arrangeable.map((column) => column.field), hidden: layout.hidden });
+  });
+
   function moveColumn(field: string, step: number) {
     if (!arranging) return;
     const order = arrangeable.map((column) => column.field);
@@ -534,10 +586,7 @@ export function AssetList({
         />
         {filtering ? <Button onClick={() => setFilters(EMPTY)}>清除筛选</Button> : null}
         <Stack direction="row" useFlexGap spacing={1} sx={{ ml: "auto", flexWrap: "wrap" }}>
-          <Button variant="outlined" onClick={() => setArranging({ order: arrangeable.map((column) => column.field), hidden: layout.hidden })}>
-            列设置
-          </Button>
-          <Button variant="outlined" onClick={() => window.location.assign("/api/assets/export")}>
+          <Button variant="outlined" onClick={() => setExporting(true)}>
             导出 Excel
           </Button>
           {canEdit ? (
@@ -655,7 +704,8 @@ export function AssetList({
               setSideId(String(id));
             }}
             slotProps={{ row: { "data-server-row": "" } as Partial<GridRowProps> }}
-            localeText={{ noRowsLabel: "没有符合筛选条件的资产。" }}
+            slots={{ columnMenu: AssetColumnMenu }}
+            localeText={gridText({ noRowsLabel: "没有符合筛选条件的资产。" })}
             autoHeight
             pageSizeOptions={[25, 50, 100]}
             initialState={{ pagination: { paginationModel: { pageSize: 100 } } }}
@@ -743,6 +793,7 @@ export function AssetList({
         }}
         onDone={() => router.refresh()}
       />
+      <AssetExportDialog open={exporting} picked={picked} shown={shown.map((row) => row.id)} total={rows.length} onClose={() => setExporting(false)} />
       <ServerPowerDialog targets={powerTargets.map((row) => ({ id: row.id, sn: row.sn, bmcIp: row.bmcIp, power: row.power?.state }))} onClose={() => setPowerTargets([])} />
       <InventoryCollectDialog targets={collectTargets} onClose={() => setCollectTargets([])} />
       <BmcLogsBatchDialog targets={logTargets} onClose={() => setLogTargets([])} />

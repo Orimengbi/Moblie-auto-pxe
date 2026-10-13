@@ -3,7 +3,16 @@
 import { createTheme } from "@mui/material/styles";
 import { zhCN as coreZhCN } from "@mui/material/locale";
 import { zhCN as gridZhCN } from "@mui/x-data-grid/locales";
+import type { GridLocaleText } from "@mui/x-data-grid";
 import type {} from "@mui/x-data-grid/themeAugmentation";
+
+/**
+ * 表格的文字：中文默认文案加上各表自己的几句。表格上传 localeText 会整个顶掉主题里的中文，
+ * 只传自己那几句的话列菜单、分页又变回英文，所以都经这里合一下。
+ */
+export function gridText(text: Partial<GridLocaleText>): Partial<GridLocaleText> {
+  return { ...gridZhCN.components.MuiDataGrid.defaultProps.localeText, ...text };
+}
 
 /** 字体：Geist 管西文和数字，中文按系统依次找苹方、雅黑、思源黑体。 */
 export const FONT_SANS = 'var(--font-sans), "PingFang SC", "Microsoft YaHei", "Noto Sans SC", "Noto Sans CJK SC", "Source Han Sans SC", sans-serif';

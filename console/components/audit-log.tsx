@@ -10,6 +10,7 @@ import Typography from "@mui/material/Typography";
 import { DataGrid, type GridColDef, type GridPaginationModel } from "@mui/x-data-grid";
 import type { AuditEntry } from "@/lib/types";
 import { formatTime } from "@/lib/time";
+import { gridText } from "@/components/mui/theme";
 
 const MONO = "var(--font-geist-mono), monospace";
 
@@ -126,7 +127,7 @@ export function AuditLog() {
           onPaginationModelChange={setPage}
           pageSizeOptions={[25, 50, 100]}
           hideFooter={entries.length <= 100 && page.pageSize === 100}
-          localeText={{ noRowsLabel: "没有记录。" }}
+          localeText={gridText({ noRowsLabel: "没有记录。" })}
           sx={{ "& .MuiDataGrid-cell": { display: "flex", alignItems: "center", py: 0.75 } }}
         />
       </Box>

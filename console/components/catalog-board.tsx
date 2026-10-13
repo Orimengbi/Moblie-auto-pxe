@@ -19,6 +19,7 @@ import { CATALOG_CATEGORIES, CATALOG_FIELDS, specText } from "@/lib/catalog-sche
 import type { CatalogCategory, CatalogEntry } from "@/lib/types";
 import type { HeightSync } from "@/lib/catalog";
 import { api } from "@/lib/client-api";
+import { gridText } from "@/components/mui/theme";
 
 const MONO = "var(--font-geist-mono), monospace";
 const NATIVE_LABELED = { select: { native: true }, inputLabel: { shrink: true } } as const;
@@ -167,7 +168,7 @@ export function CatalogBoard({ entries, admin }: { entries: CatalogEntry[]; admi
           initialState={{ pagination: { paginationModel: { pageSize: 100 } } }}
           pageSizeOptions={[25, 50, 100]}
           hideFooter={shown.length <= 100}
-          localeText={{ noRowsLabel: entries.length ? "没有符合条件的型号。" : "字典还是空的。管理员可以点「按硬件采集补全」，把采集到的型号和规格先填进来。" }}
+          localeText={gridText({ noRowsLabel: entries.length ? "没有符合条件的型号。" : "字典还是空的。管理员可以点「按硬件采集补全」，把采集到的型号和规格先填进来。" })}
           sx={{ "& .MuiDataGrid-cell": { display: "flex", alignItems: "center", py: 0.75 } }}
         />
       </Box>

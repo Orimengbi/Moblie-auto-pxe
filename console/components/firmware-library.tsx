@@ -32,6 +32,7 @@ import {
   type VersionRelation,
 } from "@/lib/firmware-types";
 import { formatTime } from "@/lib/time";
+import { gridText } from "@/components/mui/theme";
 
 const MONO = "var(--font-geist-mono), monospace";
 const NATIVE_LABELED = { select: { native: true }, inputLabel: { shrink: true } } as const;
@@ -284,7 +285,7 @@ export function FirmwareLibrary({ packages, admin }: { packages: FirmwarePackage
           initialState={{ pagination: { paginationModel: { pageSize: 100 } } }}
           pageSizeOptions={[25, 50, 100]}
           hideFooter={shown.length <= 100}
-          localeText={{ noRowsLabel: packages.length ? "没有符合条件的固件包。" : "固件库还是空的。把厂商官网下载的固件包（zip、tar、fwpkg、bin…）直接传上来，会自动认出类型、版本和适用型号。" }}
+          localeText={gridText({ noRowsLabel: packages.length ? "没有符合条件的固件包。" : "固件库还是空的。把厂商官网下载的固件包（zip、tar、fwpkg、bin…）直接传上来，会自动认出类型、版本和适用型号。" })}
           sx={{ "& .MuiDataGrid-cell": { display: "flex", alignItems: "center", py: 0.75 }, "& .MuiDataGrid-row": { cursor: "pointer" } }}
         />
       </Box>
