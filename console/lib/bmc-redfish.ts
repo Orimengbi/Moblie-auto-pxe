@@ -1101,7 +1101,12 @@ export interface FirmwarePushInput {
   oem: Record<string, unknown>;
   /** HGX 底板（HMC）升级前要先让 BMC 腾出内存（技嘉 H100_tool 的做法）。 */
   prepareHmc?: boolean;
+  /** 走到哪一步：prepare 腾内存，upload 上传（带已发字节），verify 传完等 BMC 校验回话。 */
+  onStage?: (stage: "prepare" | "upload" | "verify", sent?: number, total?: number) => void;
 }
+
+/** 腾内存时 BMC 要停掉一些服务，技嘉工具不设超时一直等；这里等 5 分钟。 */
+const PREPARE_HMC_TIMEOUT = 5 * 60_000;
 
 /** 把控制台上的镜像直接推给 BMC 刷写（MultipartHttpPushUri），BMC 不用能访问控制台。返回 BMC 的任务路径。 */
 export async function pushUpdate(session: BmcSession, input: FirmwarePushInput): Promise<string> {
@@ -1112,9 +1117,14 @@ export async function pushUpdate(session: BmcSession, input: FirmwarePushInput):
   const max = num(update.MaxImageSizeBytes);
   if (max && size > max) throw new RedfishFailure(`镜像 ${size} 字节，超过 BMC 允许的 ${max} 字节`);
   if (input.prepareHmc) {
-    const prepared = ok(await session.request("POST", "/redfish/v1/UpdateService/Action/Oem/Gbt/HMCUpdate.PrepareFreeMemory", {}), "让 BMC 腾内存失败");
+    input.onStage?.("prepare");
+    const response = await session.request("POST", "/redfish/v1/UpdateService/Action/Oem/Gbt/HMCUpdate.PrepareFreeMemory", {}, {}, { timeoutMs: PREPARE_HMC_TIMEOUT }).catch((error: Error) => {
+      throw new RedfishFailure(`让 BMC 腾内存：${error.message}`);
+    });
+    const prepared = ok(response, "让 BMC 腾内存失败");
     const status = str(prepared.body?.Status);
-    if (status && !/success/i.test(status)) throw new RedfishFailure(`让 BMC 腾内存失败：${status}`);
+    const resolution = str(prepared.body?.Resolution);
+    if (status && !/success/i.test(status)) throw new RedfishFailure(`让 BMC 腾内存失败：${status}${resolution ? `（${resolution}）` : ""}`);
   }
   const body = new UploadBody([
     // 参数段也带 filename，跟技嘉 H100_tool 用 curl -F 'UpdateParameters=@parameters.json;type=application/json' 发的一样。
@@ -1122,7 +1132,12 @@ export async function pushUpdate(session: BmcSession, input: FirmwarePushInput):
     { name: "OemParameters", json: input.oem, filename: "oem_parameters.json" },
     { name: "UpdateFile", file: input.file, filename: input.fileName },
   ]);
-  const response = ok(await session.request("POST", uri, body), "上传固件失败");
+  input.onStage?.("upload", 0, body.length);
+  body.onProgress = (sent, total) => input.onStage?.(sent >= total ? "verify" : "upload", sent, total);
+  const sent = await session.request("POST", uri, body).catch((error: Error) => {
+    throw new RedfishFailure(`上传固件：${error.message}`);
+  });
+  const response = ok(sent, "上传固件失败");
   // 有的 BMC 在 Location 里给完整网址，只留路径。
   return (response.headers.location || str(response.body?.["@odata.id"])).replace(/^https?:\/\/[^/]+/i, "");
 }

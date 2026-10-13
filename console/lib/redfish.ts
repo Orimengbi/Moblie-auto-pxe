@@ -78,7 +78,7 @@ export interface RedfishResponse {
 }
 
 /** 写操作用的请求：PATCH、POST、DELETE。返回状态码和响应体，401 照样抛 RedfishAuthError。 */
-export type RedfishRequest = (method: string, path: string, body?: unknown, headers?: Record<string, string>) => Promise<RedfishResponse>;
+export type RedfishRequest = (method: string, path: string, body?: unknown, headers?: Record<string, string>, options?: { timeoutMs?: number }) => Promise<RedfishResponse>;
 
 /** 一段 multipart：JSON 参数或一个文件。 */
 export type UploadPart = { name: string; json: unknown; filename?: string } | { name: string; file: string; filename: string };
@@ -91,6 +91,8 @@ export class UploadBody {
   readonly boundary = `----pxe${crypto.randomBytes(12).toString("hex")}`;
   readonly parts: UploadPart[];
   readonly timeoutMs: number;
+  /** 每写出一块调一次：已发的字节数、总字节数。发完最后一块时 sent === total。 */
+  onProgress?: (sent: number, total: number) => void;
   constructor(parts: UploadPart[], timeoutMs = 10 * 60_000) {
     this.parts = parts;
     this.timeoutMs = timeoutMs;
@@ -123,14 +125,16 @@ export class UploadBody {
 
   /** 按顺序写进请求，写完 end。 */
   async writeTo(stream: NodeJS.WritableStream): Promise<void> {
+    const total = this.length;
+    let sent = 0;
+    const write = async (data: Buffer) => {
+      if (!stream.write(data)) await new Promise((resolve) => stream.once("drain", resolve));
+      sent += data.length;
+      this.onProgress?.(sent, total);
+    };
     for (const chunk of this.chunks()) {
-      if (Buffer.isBuffer(chunk)) {
-        if (!stream.write(chunk)) await new Promise((resolve) => stream.once("drain", resolve));
-        continue;
-      }
-      for await (const data of fs.createReadStream(chunk.file, { highWaterMark: 1024 * 1024 })) {
-        if (!stream.write(data as Buffer)) await new Promise((resolve) => stream.once("drain", resolve));
-      }
+      if (Buffer.isBuffer(chunk)) await write(chunk);
+      else for await (const data of fs.createReadStream(chunk.file, { highWaterMark: 1024 * 1024 })) await write(data as Buffer);
     }
     stream.end();
   }
@@ -138,7 +142,7 @@ export class UploadBody {
 
 export function redfishRequester(host: string, user: string, password: string, timeoutMs = 30_000): RedfishRequest {
   const auth = `Basic ${Buffer.from(`${user}:${password}`).toString("base64")}`;
-  return (method, path, body, extra = {}) =>
+  return (method, path, body, extra = {}, options = {}) =>
     new Promise((resolve, reject) => {
       const upload = body instanceof UploadBody ? body : null;
       const payload = body === undefined || upload ? undefined : Buffer.from(JSON.stringify(body));
@@ -151,7 +155,7 @@ export function redfishRequester(host: string, user: string, password: string, t
         headers["Content-Type"] = upload.contentType;
         headers["Content-Length"] = upload.length;
       }
-      const request = https.request({ host, port: bmcPort(), path, method, agent, timeout: upload ? upload.timeoutMs : timeoutMs, headers }, (response) => {
+      const request = https.request({ host, port: bmcPort(), path, method, agent, timeout: upload ? upload.timeoutMs : options.timeoutMs || timeoutMs, headers }, (response) => {
         const chunks: Buffer[] = [];
         response.on("data", (chunk: Buffer) => chunks.push(chunk));
         response.on("error", reject);
