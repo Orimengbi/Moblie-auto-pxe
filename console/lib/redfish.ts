@@ -81,7 +81,7 @@ export interface RedfishResponse {
 export type RedfishRequest = (method: string, path: string, body?: unknown, headers?: Record<string, string>) => Promise<RedfishResponse>;
 
 /** 一段 multipart：JSON 参数或一个文件。 */
-export type UploadPart = { name: string; json: unknown } | { name: string; file: string; filename: string };
+export type UploadPart = { name: string; json: unknown; filename?: string } | { name: string; file: string; filename: string };
 
 /**
  * 推固件用的 multipart/form-data 请求体（Redfish MultipartHttpPushUri）。文件边读边发，不整个读进内存。
@@ -101,7 +101,8 @@ export class UploadBody {
     const out: (Buffer | { file: string })[] = [];
     for (const part of this.parts) {
       if ("json" in part) {
-        out.push(Buffer.from(`--${this.boundary}\r\nContent-Disposition: form-data; name="${part.name}"\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(part.json)}\r\n`));
+        const filename = part.filename ? `; filename="${part.filename.replace(/["\r\n]/g, "_")}"` : "";
+        out.push(Buffer.from(`--${this.boundary}\r\nContent-Disposition: form-data; name="${part.name}"${filename}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(part.json)}\r\n`));
       } else {
         out.push(Buffer.from(`--${this.boundary}\r\nContent-Disposition: form-data; name="${part.name}"; filename="${part.filename.replace(/["\r\n]/g, "_")}"\r\nContent-Type: application/octet-stream\r\n\r\n`));
         out.push({ file: part.file });

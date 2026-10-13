@@ -1117,8 +1117,9 @@ export async function pushUpdate(session: BmcSession, input: FirmwarePushInput):
     if (status && !/success/i.test(status)) throw new RedfishFailure(`让 BMC 腾内存失败：${status}`);
   }
   const body = new UploadBody([
-    { name: "UpdateParameters", json: { Targets: input.targets } },
-    { name: "OemParameters", json: input.oem },
+    // 参数段也带 filename，跟技嘉 H100_tool 用 curl -F 'UpdateParameters=@parameters.json;type=application/json' 发的一样。
+    { name: "UpdateParameters", json: { Targets: input.targets }, filename: "parameters.json" },
+    { name: "OemParameters", json: input.oem, filename: "oem_parameters.json" },
     { name: "UpdateFile", file: input.file, filename: input.fileName },
   ]);
   const response = ok(await session.request("POST", uri, body), "上传固件失败");

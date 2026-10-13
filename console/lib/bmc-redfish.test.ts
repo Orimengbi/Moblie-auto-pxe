@@ -302,6 +302,7 @@ test("firmware from the library is pushed to the BMC as multipart, streamed from
   assert.equal(call.path, "/redfish/v1/UpdateService/upload");
   assert.ok(call.body instanceof UploadBody);
   assert.deepEqual((call.body as InstanceType<typeof UploadBody>).parts.map((part) => part.name), ["UpdateParameters", "OemParameters", "UpdateFile"]);
+  assert.deepEqual((call.body as InstanceType<typeof UploadBody>).parts.map((part) => part.filename), ["parameters.json", "oem_parameters.json", "image.RBU"]);
 
   fake.docs.set("/redfish/v1/UpdateService", { MultipartHttpPushUri: "/redfish/v1/UpdateService/upload", MaxImageSizeBytes: 1024 });
   await assert.rejects(bmc.pushUpdate(session, { file, fileName: "image.RBU", targets: [], oem: {} }), /超过 BMC 允许/);
