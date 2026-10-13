@@ -105,6 +105,7 @@ const EXPECTED = [
   "DELETE /api/snmp-profiles/x1 settings",
   "POST /api/snmp-profiles settings",
   "POST /api/tasks null",
+  "POST /api/tasks/archive null",
   "POST /api/tickets/x1/comments tickets",
   "POST /api/tickets/x1/replace tickets",
   "PATCH /api/tickets/x1 tickets",
@@ -127,6 +128,8 @@ const SELF_CHECKED: Record<string, RegExp | null> = {
   // 导出只读：按选的机器和表生成 Excel，和 GET 一样登录了就能导。
   "/api/assets/export": null,
   "/api/tasks": /taskPermission\(/,
+  // 归档只影响右上角列表显示，登录了就能做。
+  "/api/tasks/archive": null,
   "/api/projects/x1/tasks": /taskPermission\(/,
   "/api/users/x1": /requireSelfOrAdmin\(/,
   "/api/users/x1/access-keys": /requireSelfOrAdmin\(/,

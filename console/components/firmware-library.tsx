@@ -37,6 +37,12 @@ import { gridText } from "@/components/mui/theme";
 const MONO = "var(--font-geist-mono), monospace";
 const NATIVE_LABELED = { select: { native: true }, inputLabel: { shrink: true } } as const;
 
+const NO_VENDOR = "-";
+
+function vendorKey(vendor: string): string {
+  return vendor.trim().toLowerCase() || NO_VENDOR;
+}
+
 const RELATION_TONE: Record<VersionRelation | "unread", Tone> = { same: "success", older: "warning", newer: "info", unknown: "neutral", unread: "neutral" };
 
 
@@ -95,6 +101,8 @@ export function FirmwareLibrary({ packages, admin }: { packages: FirmwarePackage
   const router = useRouter();
   const [kind, setKind] = useState<FirmwareKind | "">("");
   const [q, setQ] = useState("");
+  /** 厂商筛选：小写后的厂商名，NO_VENDOR 是没填厂商的。 */
+  const [vendor, setVendor] = useState("");
   const [open, setOpen] = useState<string | null>(null);
   const uploads = useUploads();
   const [error, setError] = useState("");
@@ -106,10 +114,27 @@ export function FirmwareLibrary({ packages, admin }: { packages: FirmwarePackage
     return map;
   }, [packages]);
 
+  // 厂商不分大小写合并，显示第一次见到的写法。
+  const vendors = useMemo(() => {
+    const map = new Map<string, { label: string; count: number }>();
+    for (const pkg of packages) {
+      const key = vendorKey(pkg.vendor);
+      const entry = map.get(key) || { label: pkg.vendor.trim() || "（没填厂商）", count: 0 };
+      entry.count++;
+      map.set(key, entry);
+    }
+    return [...map.entries()].sort((a, b) => Number(a[0] === NO_VENDOR) - Number(b[0] === NO_VENDOR) || a[1].label.localeCompare(b[1].label, "zh"));
+  }, [packages]);
+
   const shown = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    return packages.filter((pkg) => (!kind || pkg.kind === kind) && (!needle || [pkg.fileName, pkg.vendor, pkg.version, ...pkg.models, pkg.note].join(" ").toLowerCase().includes(needle)));
-  }, [packages, kind, q]);
+    return packages.filter(
+      (pkg) =>
+        (!kind || pkg.kind === kind) &&
+        (!vendor || vendorKey(pkg.vendor) === vendor) &&
+        (!needle || [pkg.fileName, pkg.vendor, pkg.version, ...pkg.models, pkg.note].join(" ").toLowerCase().includes(needle)),
+    );
+  }, [packages, kind, vendor, q]);
 
   // 上传在全局的 UploadProvider 里跑，换页面不断；这里只发起和显示进度。
   const firmwareUploads = Object.values(uploads.live).filter((item) => item.kind === "firmware");
@@ -207,6 +232,14 @@ export function FirmwareLibrary({ packages, admin }: { packages: FirmwarePackage
       </Stack>
       <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center" }}>
         <TextField placeholder="搜文件名、版本、型号…" value={q} onChange={(event) => setQ(event.target.value)} sx={{ width: 260 }} />
+        <TextField select label="厂商" value={vendor} onChange={(event) => setVendor(event.target.value)} slotProps={NATIVE_LABELED} sx={{ width: 180 }}>
+          <option value="">全部厂商</option>
+          {vendors.map(([key, entry]) => (
+            <option key={key} value={key}>
+              {entry.label}（{entry.count}）
+            </option>
+          ))}
+        </TextField>
         {admin ? (
           <Box sx={{ ml: "auto" }}>
             <input

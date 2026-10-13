@@ -1,16 +1,20 @@
 import fs from "node:fs";
 import path from "node:path";
 import { addEvent, getAsset } from "./assets.ts";
-import { assetSession, pushUpdate, readTask, updateProgress, type BmcSession } from "./bmc-redfish.ts";
+import { assetSession, firmwareInventory, pushUpdate, readTask, saveFirmwareSnapshot, updateProgress, type BmcSession, type FirmwareItem } from "./bmc-redfish.ts";
+import { compareVersions } from "./firmware-pkg.ts";
+import { FIRMWARE_KIND_LABEL } from "./firmware-types.ts";
+import { waitBmcBack } from "./remote.ts";
 import type { FirmwarePushJob } from "./firmware-types.ts";
 import { dataDir } from "./paths.ts";
 import { consoleBootId, getTask, writeTask } from "./store.ts";
-import type { RemoteTask, TaskTargetStatus } from "./types.ts";
+import type { RemoteTask, TaskProgress, TaskTargetStatus } from "./types.ts";
 
 /**
  * 从固件库推固件给 BMC 刷，在控制台后台跑：腾内存 → 上传 → BMC 校验 → 跟着 BMC 的刷写任务直到结束。
  * 页面点了开始马上返回，进度存在 data/redfish/assets/<id>/firmware-push.json，关了窗口、换个人打开都看得到。
  * HGX 全量升级要三四十分钟，期间主机断电重启两次、BMC 时不时连不上，读不到进度就接着等。
+ * 刷 BMC 的，BMC 报完成后还要等它重启回来、重新读版本跟包对上，才算成功。
  * 每次推送同时在右上角「任务」里建一条「固件升级」任务，进度跟着同步过去。
  */
 
@@ -42,16 +46,40 @@ export function pushSummary(job: FirmwarePushJob, now = Date.now()): string {
     upload: `上传镜像 ${job.total ? Math.floor((job.sent / job.total) * 100) : 0}%（${Math.round(job.sent / MB)}/${Math.round(job.total / MB)} MB）`,
     verify: "镜像传完，BMC 在校验",
     flash: `BMC 在刷写（${flashing() || "等 BMC 报进度"}）`,
+    reboot: "刷完了，等 BMC 重启回来",
+    check: "BMC 回来了，读版本核对",
     done: "刷写完成",
     failed: "失败",
   }[job.stage];
   lines.push(`阶段：${stage}`);
+  if (job.note) lines.push(job.note);
   if (job.error) lines.push(job.error);
   if (job.messages.length) lines.push(...job.messages.map((message) => `BMC：${message}`));
   return `${lines.join("\n")}\n`;
 }
 
-const TARGET_STATUS: Record<FirmwarePushJob["stage"], TaskTargetStatus> = { prepare: "running", upload: "running", verify: "running", flash: "running", done: "ok", failed: "failed" };
+/** 任务列表里这台的进度条：哪一步、百分比。 */
+export function pushProgress(job: FirmwarePushJob): TaskProgress {
+  const upload = job.total ? Math.floor((job.sent / job.total) * 100) : 0;
+  const flash = job.percent ?? job.bmcPercent ?? null;
+  if (job.stage === "prepare") return { label: "BMC 腾内存", percent: null };
+  if (job.stage === "upload") return { label: "上传镜像", percent: upload };
+  if (job.stage === "verify") return { label: "BMC 校验镜像", percent: null };
+  if (job.stage === "reboot") return { label: "等 BMC 重启回来", percent: null };
+  if (job.stage === "check") return { label: "核对版本", percent: null };
+  return { label: `BMC 刷写${job.bmcStatus ? `（${job.bmcStatus}）` : ""}`, percent: flash };
+}
+
+const TARGET_STATUS: Record<FirmwarePushJob["stage"], TaskTargetStatus> = {
+  prepare: "running",
+  upload: "running",
+  verify: "running",
+  flash: "running",
+  reboot: "running",
+  check: "running",
+  done: "ok",
+  failed: "failed",
+};
 
 /** 推送的进度写到对应的任务里。任务被删了就不写。 */
 function syncTask(job: FirmwarePushJob): void {
@@ -63,6 +91,8 @@ function syncTask(job: FirmwarePushJob): void {
   target.status = TARGET_STATUS[job.stage];
   target.exitCode = job.stage === "done" ? 0 : null;
   target.output = pushSummary(job);
+  if (finished) delete target.progress;
+  else target.progress = pushProgress(job);
   if (finished) target.finishedAt = job.finishedAt || new Date().toISOString();
   task.status = finished ? "done" : "running";
   if (finished) task.finishedAt = target.finishedAt;
@@ -133,13 +163,13 @@ const FOLLOW_MS = 90 * 60_000;
 
 /**
  * 开一个推送。先开 BMC 会话（账号不对、连不上当场报错），然后后台跑。
- * deps 给测试换掉会话和等待。
+ * deps 给测试换掉会话、等待、等 BMC 回来和读版本。
  */
 export async function startPush(
   assetId: string,
   input: PushStart,
   user: string,
-  deps: { session?: BmcSession; sleep?: (ms: number) => Promise<void>; now?: () => number } = {},
+  deps: PushDeps = {},
 ): Promise<FirmwarePushJob> {
   if (running.has(assetId)) throw new Error("这台正在推固件，等它结束再推");
   const session = deps.session || (await assetSession(assetId)).session;
@@ -168,11 +198,73 @@ export async function startPush(
   running.add(assetId);
   job.taskId = createPushTask(job).id;
   save(job);
-  void follow(job, input, session, deps.sleep || ((ms) => new Promise((resolve) => setTimeout(resolve, ms))), deps.now || Date.now).finally(() => running.delete(assetId));
+  void follow(job, input, session, deps.sleep || ((ms) => new Promise((resolve) => setTimeout(resolve, ms))), deps.now || Date.now, deps).finally(() => running.delete(assetId));
   return job;
 }
 
-async function follow(job: FirmwarePushJob, input: PushStart, session: BmcSession, sleep: (ms: number) => Promise<void>, now: () => number): Promise<void> {
+export interface PushDeps {
+  session?: BmcSession;
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+  /** 等 BMC 重启回来，默认用重启 BMC 任务的 waitBmcBack。 */
+  waitBack?: (assetId: string, onProgress: (text: string) => void) => Promise<{ ok: boolean; message: string }>;
+  /** 重新读这台的固件清单（并存成「上次读到的」）。 */
+  readFirmware?: (assetId: string) => Promise<FirmwareItem[]>;
+}
+
+async function readFirmwareNow(assetId: string): Promise<FirmwareItem[]> {
+  const { asset, session } = await assetSession(assetId);
+  return saveFirmwareSnapshot(assetId, await firmwareInventory(session, asset)).data;
+}
+
+/** BMC 刚回来时固件清单可能还没准备好，读不到或版本没变就隔一会儿再读，最多读这么多次。 */
+const CHECK_TRIES = 4;
+const CHECK_RETRY_MS = 30_000;
+
+/** 刷 BMC 的收尾：等 BMC 重启回来，读版本跟包比。返回 null 是对上了，否则是失败原因。 */
+async function confirmBmc(job: FirmwarePushJob, input: PushStart, sleep: (ms: number) => Promise<void>, deps: PushDeps): Promise<string | null> {
+  job.stage = "reboot";
+  job.note = "等 BMC 重启回来…";
+  save(job);
+  const back = await (deps.waitBack || ((assetId, onProgress) => waitBmcBack(assetId, onProgress)))(job.assetId, (text) => {
+    job.note = text;
+    save(job);
+  });
+  job.note = back.message;
+  if (!back.ok) return `BMC 报刷写完成，但${back.message}`;
+  job.stage = "check";
+  save(job);
+  // 推的 Targets 指着哪一项就看哪一项，默认看当前运行的那个镜像 BMCImage1。
+  const inventoryId = input.targets[0]?.split("/").pop() || "BMCImage1";
+  let found = "";
+  let problem = "";
+  for (let attempt = 1; attempt <= CHECK_TRIES; attempt++) {
+    try {
+      const items = await (deps.readFirmware || readFirmwareNow)(job.assetId);
+      found = (items.find((item) => item.id === inventoryId) || items.find((item) => item.id === "BMCImage1"))?.version || "";
+      problem = found ? "" : `固件清单里没有 ${inventoryId}`;
+    } catch (error) {
+      problem = `读不到版本：${error instanceof Error ? error.message : "失败"}`;
+    }
+    if (found && compareVersions(found, job.version) === "same") {
+      job.note = `${back.message}。重新读到 BMC 版本 ${found}，和包一致`;
+      return null;
+    }
+    job.note = `${back.message}。第 ${attempt} 次核对：${problem || `BMC 版本是 ${found}`}`;
+    save(job);
+    if (attempt < CHECK_TRIES) await sleep(CHECK_RETRY_MS);
+  }
+  return problem ? `BMC 重启回来了，但${problem}，没法确认版本` : `BMC 重启回来了，但版本是 ${found}，不是包里的 ${job.version}，没刷上`;
+}
+
+/** 刷完以后什么时候生效：BIOS、CPLD 当场核对不了。 */
+function effectNote(kind: string): string {
+  if (kind === FIRMWARE_KIND_LABEL.bios) return "BIOS 要关机再开机（或重启主机）后才生效，生效后点「读取」核对版本。";
+  if (kind === FIRMWARE_KIND_LABEL.cpld) return "CPLD 要整机断电再上电后才生效，生效后点「读取」核对版本。";
+  return "";
+}
+
+async function follow(job: FirmwarePushJob, input: PushStart, session: BmcSession, sleep: (ms: number) => Promise<void>, now: () => number, deps: PushDeps): Promise<void> {
   const what = `${input.kind} ${input.version}（${input.fileName}）`;
   // 上传时每 1% 存一次，免得每 MB 写一次盘。
   let savedPercent = -1;
@@ -225,13 +317,22 @@ async function follow(job: FirmwarePushJob, input: PushStart, session: BmcSessio
       }
       save(job);
     }
-    const ok = /^Completed$/i.test(job.taskState);
-    job.stage = ok ? "done" : "failed";
+    let ok = /^Completed$/i.test(job.taskState);
     if (!ok) job.error = job.taskState ? `BMC 刷写任务结束在 ${job.taskState}` : `跟了 ${FOLLOW_MS / 60_000} 分钟还没结束，后台不再跟了，到 BMC 网页看任务`;
-    else job.error = "";
+    else {
+      job.error = "";
+      if (input.kind === FIRMWARE_KIND_LABEL.bmc) {
+        const failed = await confirmBmc(job, input, sleep, deps);
+        if (failed) {
+          ok = false;
+          job.error = failed;
+        }
+      } else job.note = effectNote(input.kind) || job.note;
+    }
+    job.stage = ok ? "done" : "failed";
     job.finishedAt = new Date().toISOString();
     save(job);
-    addEvent(job.assetId, "bmc", `推送固件 ${what}：${ok ? "刷写完成" : job.error}`, job.user);
+    addEvent(job.assetId, "bmc", `推送固件 ${what}：${ok ? `刷写完成${job.note ? `，${job.note}` : ""}` : job.error}`, job.user);
   } catch (error) {
     job.stage = "failed";
     job.error = error instanceof Error ? error.message : "失败";

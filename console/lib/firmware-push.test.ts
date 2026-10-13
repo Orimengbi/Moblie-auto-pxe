@@ -8,7 +8,7 @@ import test from "node:test";
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pxe-firmware-push-test-"));
 process.env.PXE_DATA_DIR = temp;
 
-const { startPush, getPush, pushSummary } = await import("./firmware-push.ts");
+const { startPush, getPush, pushProgress, pushSummary } = await import("./firmware-push.ts");
 const { getTask } = await import("./store.ts");
 const assets = await import("./assets.ts");
 const { UploadBody } = await import("./redfish.ts");
@@ -57,11 +57,18 @@ test("a push runs in the background: prepare, upload with progress, then follows
   fs.writeFileSync(file, Buffer.alloc(3 * 1024 * 1024, 1));
   const log: string[] = [];
   const stages: string[] = [];
+  const taskProgress: string[] = [];
   const started = await startPush(
     asset.id,
     { packageId: "p", fileName: "hmc.fwpkg", kind: "HGX", version: "1.1", image: "hmc.fwpkg", file, targets: ["/redfish/v1/UpdateService/FirmwareInventory/HGX_FW_BMC_0"], oem: { ImageType: "HMC" }, prepareHmc: true },
     "admin",
-    { session: fakeSession(log), sleep: async () => void stages.push(getPush(asset.id)!.stage) },
+    {
+      session: fakeSession(log),
+      sleep: async () => {
+        stages.push(getPush(asset.id)!.stage);
+        taskProgress.push(getTask(getPush(asset.id)!.taskId!)!.targets[0].progress?.label || "");
+      },
+    },
   );
   assert.equal(started.stage, "prepare");
   await assert.rejects(startPush(asset.id, { packageId: "p", fileName: "x", kind: "", version: "", image: "x", file, targets: [], oem: {}, prepareHmc: false }, "admin", { session: fakeSession([]) }), /正在推固件/);
@@ -88,14 +95,76 @@ test("a push runs in the background: prepare, upload with progress, then follows
   assert.equal(task.targets[0].sn, "PUSH-1");
   assert.equal(task.targets[0].status, "ok");
   assert.match(task.targets[0].output, /阶段：刷写完成/);
+  // 刷写时任务里有结构化的进度（任务列表显示进度条用），结束后去掉。
+  assert.ok(taskProgress.length && taskProgress.every((label) => /^BMC 刷写/.test(label)), taskProgress.join(","));
+  assert.equal(task.targets[0].progress, undefined);
   // 控制台重启后没人跟了：任务显示没执行完。
   globalThis.pxeBootId = "after-restart";
   fs.writeFileSync(path.join(temp, "tasks", `${job.taskId}.json`), JSON.stringify({ ...task, status: "running", targets: [{ ...task.targets[0], status: "running" }] }));
   assert.equal(getTask(job.taskId!)!.targets[0].status, "failed");
 });
 
+test("a BMC push only counts as done after the BMC is back and reports the package version", async () => {
+  const file = path.join(temp, "bmc.ima");
+  fs.writeFileSync(file, Buffer.alloc(64 * 1024, 1));
+  const input = { packageId: "p", fileName: "bmc.zip", kind: "BMC", version: "13.06.29", image: "bmc.ima", file, targets: ["/redfish/v1/UpdateService/FirmwareInventory/BMCImage1"], oem: {}, prepareHmc: false };
+  const item = (version: string) => [{ id: "BMCImage1", name: "BMCImage1", version, updateable: true }, { id: "BMCImage2", name: "BMCImage2", version: "13.06.27", updateable: true }];
+
+  // 刚回来时还是旧版本，再读一次对上了。
+  const ok = assets.createAsset({ sn: "push-bmc-1", vendor: "Giga Computing", model: "G894-ZD3-AAX7-000" }, "t");
+  const reads = [item("13.06.27"), item("13.06.29")];
+  const backNotes: string[] = [];
+  await startPush(ok.id, input, "admin", {
+    session: fakeSession([]),
+    sleep: async () => {},
+    waitBack: async (_id, onProgress) => {
+      onProgress("BMC 已断开，在重启");
+      backNotes.push(getPush(ok.id)!.stage);
+      return { ok: true, message: "BMC 已经重启回来" };
+    },
+    readFirmware: async () => reads.shift() || item("13.06.29"),
+  });
+  const done = await settle(ok.id);
+  assert.equal(done.stage, "done", done.error);
+  assert.deepEqual(backNotes, ["reboot"]);
+  assert.match(done.note || "", /重新读到 BMC 版本 13\.06\.29，和包一致/);
+  assert.equal(getTask(done.taskId!)!.targets[0].status, "ok");
+
+  // 回来了但版本没变：算失败。
+  const stale = assets.createAsset({ sn: "push-bmc-2", vendor: "Giga Computing", model: "G894-ZD3-AAX7-000" }, "t");
+  await startPush(stale.id, input, "admin", { session: fakeSession([]), sleep: async () => {}, waitBack: async () => ({ ok: true, message: "回来了" }), readFirmware: async () => item("13.06.27") });
+  const wrong = await settle(stale.id);
+  assert.equal(wrong.stage, "failed");
+  assert.match(wrong.error, /版本是 13\.06\.27，不是包里的 13\.06\.29/);
+  assert.equal(getTask(wrong.taskId!)!.targets[0].status, "failed");
+
+  // BMC 没回来：算失败。
+  const gone = assets.createAsset({ sn: "push-bmc-3", vendor: "Giga Computing", model: "G894-ZD3-AAX7-000" }, "t");
+  await startPush(gone.id, input, "admin", { session: fakeSession([]), sleep: async () => {}, waitBack: async () => ({ ok: false, message: "等了 10 分钟 BMC 还没回来" }), readFirmware: async () => item("13.06.29") });
+  assert.match((await settle(gone.id)).error, /BMC 报刷写完成，但等了 10 分钟 BMC 还没回来/);
+});
+
+test("a BIOS push says it takes effect after a host power cycle", async () => {
+  const file = path.join(temp, "bios.rbu");
+  fs.writeFileSync(file, Buffer.alloc(64 * 1024, 1));
+  const asset = assets.createAsset({ sn: "push-bios-1", vendor: "Giga Computing", model: "G894-ZD3-AAX7-000" }, "t");
+  let waited = false;
+  await startPush(asset.id, { packageId: "p", fileName: "bios.zip", kind: "BIOS", version: "R07_F05", image: "bios.rbu", file, targets: [], oem: {}, prepareHmc: false }, "admin", {
+    session: fakeSession([]),
+    sleep: async () => {},
+    waitBack: async () => ((waited = true), { ok: true, message: "" }),
+  });
+  const job = await settle(asset.id);
+  assert.equal(job.stage, "done", job.error);
+  assert.equal(waited, false, "BIOS 不等 BMC 重启");
+  assert.match(job.note || "", /关机再开机/);
+});
+
 test("the task output says where the push is", () => {
   const base = { assetId: "a", packageId: "p", fileName: "f.fwpkg", kind: "HGX", version: "1.1", image: "f", targets: [], oem: {}, user: "u", startedAt: "", updatedAt: "", finishedAt: "", taskPath: "", taskState: "", percent: null, messages: [], error: "" };
+  assert.deepEqual(pushProgress({ ...base, stage: "upload", sent: 25, total: 100 }), { label: "上传镜像", percent: 25 });
+  assert.deepEqual(pushProgress({ ...base, stage: "flash", sent: 0, total: 0, bmcPercent: 63, bmcStatus: "Flashing" }), { label: "BMC 刷写（Flashing）", percent: 63 });
+  assert.deepEqual(pushProgress({ ...base, stage: "verify", sent: 0, total: 0 }), { label: "BMC 校验镜像", percent: null });
   assert.match(pushSummary({ ...base, stage: "upload", sent: 50 * 1024 * 1024, total: 100 * 1024 * 1024 }), /上传镜像 50%（50\/100 MB）/);
   const flash = pushSummary({ ...base, stage: "flash", sent: 0, total: 0, bmcPercent: 40, bmcStatus: "Flashing", flashAt: new Date(Date.now() - 12 * 60_000).toISOString(), messages: ["Task started"] });
   assert.match(flash, /BMC 在刷写（40%，Flashing，已刷 12 分钟）/);

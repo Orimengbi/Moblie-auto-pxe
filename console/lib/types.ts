@@ -344,6 +344,13 @@ export interface TaskTarget {
   output: string;
   startedAt?: string;
   finishedAt?: string;
+  /** 跑得久的（固件推送）在跑时报的进度：到哪一步、百分比（没有就是 null）。结束后去掉。 */
+  progress?: TaskProgress;
+}
+
+export interface TaskProgress {
+  label: string;
+  percent: number | null;
 }
 
 /** 装完系统后，控制台用自己的 SSH 密钥对一批机器执行同一段脚本。 */
@@ -376,6 +383,11 @@ export interface RemoteTask {
   bmcLogs?: string[];
   createdAt: string;
   finishedAt?: string;
+  /** 归档了就不在右上角任务列表里，任务中心照样能查。结束满 1 小时自动归档（archivedBy 记「自动」）。 */
+  archivedAt?: string;
+  archivedBy?: string;
+  /** 手动取消归档的时间，自动归档从这时重新算 1 小时。 */
+  unarchivedAt?: string;
 }
 
 /** 硬件部件的类别。firmware 是 BIOS、BMC、CPLD 这类只有版本号的固件。 */
@@ -653,6 +665,10 @@ export interface TaskSummary {
   failed: number;
   createdAt: string;
   finishedAt?: string;
+  archivedAt?: string;
+  archivedBy?: string;
+  /** 只有一台在跑、它报了进度时有（固件推送）。 */
+  progress?: TaskProgress;
 }
 
 export interface TaskFeed {

@@ -1,4 +1,4 @@
-import type { AlertSeverity, AlertSource, AlertStatus, Asset, AssetStatus, HealthLevel, BmcSettingKind, AssetType, Customer, FloorItemKind, PartKind, PartSource, PartStatus, RackFacing, TagSettings, TicketKind, TicketPriority, TicketStatus } from "./types.ts";
+import type { AlertSeverity, AlertSource, AlertStatus, Asset, AssetStatus, HealthLevel, BmcSettingKind, AssetType, Customer, FloorItemKind, PartKind, PartSource, PartStatus, RackFacing, TagSettings, TaskKind, TicketKind, TicketPriority, TicketStatus } from "./types.ts";
 
 /** 页面和服务端共用的名称。这个文件不碰数据库，客户端组件可以直接引用。 */
 /** HGX 底板（GPU、NVSwitch、HMC、ConnectX 等）的固件，Id 都以 HGX_ 开头。 */
@@ -117,6 +117,17 @@ export function partStatusTone(status: PartStatus): Tone {
 export function priorityTone(priority: TicketPriority): Tone {
   return priority === "urgent" ? "error" : priority === "high" ? "warning" : "neutral";
 }
+
+export const TASK_KIND_LABEL: Record<TaskKind, string> = {
+  script: "执行脚本",
+  inventory: "采集硬件配置",
+  revoke: "交付清理",
+  "bmc-reset": "重启 BMC",
+  "bmc-clock": "设 BMC 时区",
+  "bmc-logs": "收集 BMC 日志",
+  "bmc-user": "BMC 用户",
+  "firmware-push": "固件升级",
+};
 
 export function taskTargetTone(status: string): Tone {
   return status === "ok" ? "success" : status === "running" ? "info" : status === "pending" ? "neutral" : "error";

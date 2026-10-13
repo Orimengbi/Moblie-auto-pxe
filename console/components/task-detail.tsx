@@ -11,16 +11,16 @@ import Button from "@mui/material/Button";
 import ButtonBase from "@mui/material/ButtonBase";
 import MuiLink from "@mui/material/Link";
 import Paper from "@mui/material/Paper";
+import LinearProgress from "@mui/material/LinearProgress";
 import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
 import ExpandMoreOutlined from "@mui/icons-material/ExpandMoreOutlined";
 import { StatusChip } from "@/components/mui/status-chip";
 import { HOST_SOURCE, TARGET } from "@/components/project-task-runner";
-import { taskTargetTone } from "@/lib/asset-labels";
+import { TASK_KIND_LABEL, taskTargetTone } from "@/lib/asset-labels";
 import type { RemoteTask, TaskTargetStatus } from "@/lib/types";
 import { formatTime } from "@/lib/time";
 
-const KIND: Record<RemoteTask["kind"], string> = { script: "执行脚本", inventory: "采集硬件配置", revoke: "交付清理", "bmc-reset": "重启 BMC", "bmc-clock": "设 BMC 时区", "bmc-logs": "收集 BMC 日志", "bmc-user": "BMC 用户", "firmware-push": "固件升级" };
 
 const MONO = "var(--font-geist-mono), monospace";
 const OUTPUT_SX = { m: 0, overflow: "auto", borderRadius: 1, bgcolor: "action.hover", p: 1, fontFamily: MONO, fontSize: 12, whiteSpace: "pre-wrap" } as const;
@@ -56,7 +56,7 @@ export function TaskDetail({ initial, project, tags }: { initial: RemoteTask; pr
           tone={task.status === "running" ? "info" : failed.length ? "error" : "success"}
           label={task.status === "running" ? "执行中" : failed.length ? `${failed.length} 台没成功` : "全部成功"}
         />
-        <Typography variant="body2">{KIND[task.kind]}</Typography>
+        <Typography variant="body2">{TASK_KIND_LABEL[task.kind]}</Typography>
         <Typography variant="body2" sx={{ color: "text.secondary" }}>
           共 {task.targets.length} 台，成功 {by("ok")}
           {by("running") ? `，执行中 ${by("running")}` : ""}
@@ -141,6 +141,15 @@ export function TaskDetail({ initial, project, tags }: { initial: RemoteTask; pr
                 <Typography component="span" variant="caption" sx={{ ml: "auto", color: "text.secondary" }}>
                   {expanded ? "收起" : "看输出"}
                 </Typography>
+                {target.status === "running" && target.progress ? (
+                  <Stack spacing={0.5} sx={{ width: "100%" }}>
+                    <Typography variant="caption">
+                      {target.progress.label}
+                      {target.progress.percent !== null ? ` ${target.progress.percent}%` : ""}
+                    </Typography>
+                    <LinearProgress variant={target.progress.percent === null ? "indeterminate" : "determinate"} value={target.progress.percent ?? undefined} sx={{ height: 6, borderRadius: 3 }} />
+                  </Stack>
+                ) : null}
               </ButtonBase>
               {expanded ? (
                 <Stack spacing={1} sx={{ borderTop: 1, borderColor: "divider", px: 1.5, py: 1 }}>

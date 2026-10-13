@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Box from "@mui/material/Box";
 import Alert from "@mui/material/Alert";
 import Button from "@mui/material/Button";
@@ -49,18 +49,34 @@ function minutesSince(at: string): number {
   return Math.max(0, Math.floor((Date.now() - Date.parse(at)) / 60_000));
 }
 
-const PUSH_STEPS: { stage: FirmwarePushJob["stage"][]; label: string }[] = [
+const PUSH_STEPS: { stage: FirmwarePushJob["stage"][]; label: string; bmcOnly?: boolean }[] = [
   { stage: ["prepare"], label: "腾内存" },
   { stage: ["upload"], label: "上传" },
   { stage: ["verify"], label: "BMC 校验" },
   { stage: ["flash"], label: "BMC 刷写" },
+  { stage: ["reboot"], label: "BMC 重启", bmcOnly: true },
+  { stage: ["check"], label: "核对版本", bmcOnly: true },
   { stage: ["done", "failed"], label: "结束" },
 ];
+
+/** 刷写阶段按部件给的说明；job.kind 存的是 FIRMWARE_KIND_LABEL 里的名字。 */
+function flashHint(kind: string): string {
+  if (kind === FIRMWARE_KIND_LABEL.hgx) {
+    return "HGX 全量升级大约 30~40 分钟，分几段刷，每段的百分比会从 0 重新走，段与段之间 BMC 不报百分比（进度条来回滚）；期间主机会重启、BMC 偶尔连不上，读不到会接着等。可以关掉页面，回来再看。";
+  }
+  if (kind === FIRMWARE_KIND_LABEL.bmc) {
+    return "BMC 刷写一般几分钟，刷完 BMC 会自己重启，期间网页和 Redfish 连不上，读不到会接着等，主机不受影响。可以关掉页面，回来再看。";
+  }
+  if (kind === FIRMWARE_KIND_LABEL.bios) return "BIOS 刷写一般几分钟，刷完要开机或重启后才生效。期间不要断电。";
+  return "刷写期间不要断电。可以关掉页面，回来再看。";
+}
 
 /** 一次从固件库推送的进度：走到哪一步、上传和刷写的百分比、BMC 最近的消息。 */
 function PushProgress({ job }: { job: FirmwarePushJob }) {
   const active = job.stage !== "done" && job.stage !== "failed";
-  const current = PUSH_STEPS.findIndex((step) => step.stage.includes(job.stage));
+  // 刷 BMC 的要等它重启回来、核对版本；别的刷完就结束。
+  const steps = PUSH_STEPS.filter((step) => !step.bmcOnly || job.kind === FIRMWARE_KIND_LABEL.bmc);
+  const current = steps.findIndex((step) => step.stage.includes(job.stage));
   // 刷写任务的百分比是空的（AMI），就用 BMC 升级状态里的。
   const flashValue = job.percent ?? job.bmcPercent ?? null;
   const uploadPercent = job.total ? Math.floor((job.sent / job.total) * 100) : 0;
@@ -73,9 +89,13 @@ function PushProgress({ job }: { job: FirmwarePushJob }) {
           ? "镜像传完了，BMC 正在校验，校验完会建刷写任务"
           : job.stage === "flash"
             ? `BMC 正在刷写：${job.bmcStatus || job.taskState || "已提交"}${flashValue !== null ? `，${flashValue}%` : ""}${job.flashAt ? `（已经 ${minutesSince(job.flashAt)} 分钟）` : ""}`
-            : job.stage === "done"
-              ? "刷写完成。点「读取」看新版本。"
-              : `没成功：${job.error}`;
+            : job.stage === "reboot"
+              ? `刷完了，等 BMC 重启回来：${job.note || ""}`
+              : job.stage === "check"
+                ? `BMC 回来了，重新读版本核对：${job.note || ""}`
+                : job.stage === "done"
+                  ? `刷写完成。${job.note || "点「读取」看新版本。"}`
+                  : `没成功：${job.error}`;
   const value = job.stage === "upload" ? uploadPercent : job.stage === "flash" ? flashValue : job.stage === "done" ? 100 : null;
   return (
     <Alert severity={job.stage === "failed" ? "error" : job.stage === "done" ? "success" : "info"} icon={false} sx={{ "& .MuiAlert-message": { width: "100%" } }}>
@@ -87,7 +107,7 @@ function PushProgress({ job }: { job: FirmwarePushJob }) {
           </Typography>
         </Typography>
         <Stack direction="row" useFlexGap spacing={0.5} sx={{ flexWrap: "wrap" }}>
-          {PUSH_STEPS.map((step, index) => (
+          {steps.map((step, index) => (
             <Typography
               key={step.label}
               variant="caption"
@@ -102,7 +122,7 @@ function PushProgress({ job }: { job: FirmwarePushJob }) {
         <Typography variant="body2">{text}</Typography>
         {job.stage === "flash" ? (
           <Typography variant="caption" color="text.secondary">
-            HGX 全量升级大约 30~40 分钟，分几段刷，每段的百分比会从 0 重新走，段与段之间 BMC 不报百分比（进度条来回滚）；期间主机会重启、BMC 偶尔连不上，读不到会接着等。可以关掉页面，回来再看。
+            {flashHint(job.kind)}
           </Typography>
         ) : null}
         {active && job.error ? (
@@ -211,6 +231,7 @@ export function ServerFirmware({ assetId }: { assetId: string }) {
     async (refresh: boolean) => {
       const result = await api<{ readAt: string; items: FirmwareItem[] | null }>(`/api/assets/${assetId}/redfish/firmware${refresh ? "?refresh=1" : ""}`);
       if (result.ok) setData(result.data);
+      if (result.ok && refresh) window.dispatchEvent(new CustomEvent("pxe:inventory-updated", { detail: assetId }));
       return result.error;
     },
     [assetId],
@@ -246,6 +267,16 @@ export function ServerFirmware({ assetId }: { assetId: string }) {
     const timer = window.setInterval(() => void loadPush(), 3000);
     return () => window.clearInterval(timer);
   }, [pushActive, loadPush]);
+
+  // 推送在这个页面上看着结束的：刷 BMC 的后台已经重新读过版本，把清单和标题都换成新的。
+  const wasActive = useRef(false);
+  useEffect(() => {
+    if (wasActive.current && !pushActive) {
+      void loadInventory(false);
+      window.dispatchEvent(new CustomEvent("pxe:inventory-updated", { detail: assetId }));
+    }
+    wasActive.current = pushActive;
+  }, [pushActive, loadInventory, assetId]);
 
   const items = data.items;
   const hgxCount = items?.filter((item) => isHgxFirmware(item.id)).length || 0;
