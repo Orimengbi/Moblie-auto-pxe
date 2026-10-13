@@ -428,3 +428,16 @@ test("firmware inventory reads HGX items one by one when $expand leaves out thei
   const second = await bmc.collectSettings(target, ["firmware"]);
   assert.deepEqual(second.lines, ["固件版本：60 项，其中 HGX 59 项", "  和上次读的比变了 2 项：", "    HGX_FW_GPU_03：97.10.7E.00.03 → 97.10.80.00.01", "    HGX_FW_GPU_59：97.10.7E.00.03 → （没有）"]);
 });
+
+test("a firmware read with the host off keeps the last HGX versions", () => {
+  const item = (id: string, version: string) => ({ id, name: id, version, updateable: true });
+  const first = bmc.saveFirmwareSnapshot("asset-hgx", [item("BIOS", "R07"), item("HGX_FW_GPU_0", "97.10")]);
+  // 关机后再读：HGX 一项都没有，留着上次的并记下时间；主板那几项用新的。
+  const off = bmc.saveFirmwareSnapshot("asset-hgx", [item("BIOS", "R08")]).data;
+  assert.deepEqual(off.map((entry) => [entry.id, entry.version, entry.keptFrom || ""]), [["BIOS", "R08", ""], ["HGX_FW_GPU_0", "97.10", first.readAt]]);
+  // 再关机读一次，时间还是最早读到的那次。
+  assert.equal(bmc.saveFirmwareSnapshot("asset-hgx", [item("BIOS", "R08")]).data[1].keptFrom, first.readAt);
+  // 开机读到了就换成新的。
+  const on = bmc.saveFirmwareSnapshot("asset-hgx", [item("BIOS", "R08"), item("HGX_FW_GPU_0", "97.11")]).data;
+  assert.deepEqual(on.map((entry) => [entry.id, entry.version, entry.keptFrom || ""]), [["BIOS", "R08", ""], ["HGX_FW_GPU_0", "97.11", ""]]);
+});

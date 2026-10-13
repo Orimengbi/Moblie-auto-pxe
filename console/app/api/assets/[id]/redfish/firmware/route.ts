@@ -1,7 +1,7 @@
 import { audited, jsonError, readJson } from "@/lib/api";
 import { addEvent, getAsset } from "@/lib/assets";
 import { requirePermission } from "@/lib/auth";
-import { assetSession, firmwareInventory, loadSnapshot, readTask, saveSnapshot, simpleUpdate, type FirmwareItem, type FirmwareUpdateInput } from "@/lib/bmc-redfish";
+import { assetSession, firmwareInventory, loadSnapshot, readTask, saveFirmwareSnapshot, simpleUpdate, type FirmwareItem, type FirmwareUpdateInput } from "@/lib/bmc-redfish";
 import { choiceImage, choicesForAsset } from "@/lib/firmware-lib";
 import { getPush, startPush } from "@/lib/firmware-push";
 import { FIRMWARE_KIND_LABEL } from "@/lib/firmware-types";
@@ -37,7 +37,7 @@ export async function GET(request: Request, context: Context) {
     }
     const { session } = await assetSession(id);
     if (task) return Response.json(await readTask(session, task));
-    const saved = saveSnapshot(id, "firmware", await firmwareInventory(session));
+    const saved = saveFirmwareSnapshot(id, await firmwareInventory(session));
     return Response.json({ readAt: saved.readAt, items: saved.data });
   } catch (error) {
     return jsonError(error);

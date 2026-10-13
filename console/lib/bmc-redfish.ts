@@ -738,9 +738,10 @@ export async function collectSettings(asset: Asset, kinds: BmcSettingKind[]): Pr
   if (kinds.includes("firmware")) {
     try {
       const previous = loadSnapshot<FirmwareItem[]>(asset.id, "firmware");
-      const items = saveSnapshot(asset.id, "firmware", await firmwareInventory(session)).data;
+      const items = saveFirmwareSnapshot(asset.id, await firmwareInventory(session)).data;
       const hgx = items.filter((item) => isHgxFirmware(item.id));
-      lines.push(`固件版本：${items.length} 项${hgx.length ? `，其中 HGX ${hgx.length} 项` : ""}`);
+      const kept = hgx.filter((item) => item.keptFrom).length;
+      lines.push(`固件版本：${items.length} 项${hgx.length ? `，其中 HGX ${hgx.length} 项` : ""}${kept ? `（这次没读到 HGX，主机关机时读不到，留着上次读的）` : ""}`);
       if (previous) {
         const changes = firmwareChanges(previous.data, items);
         lines.push(changes.length ? `  和上次读的比变了 ${changes.length} 项：` : "  和上次读的比没有变化", ...changes.slice(0, 40).map((line) => `    ${line}`), ...(changes.length > 40 ? [`    等，共 ${changes.length} 项`] : []));
@@ -1041,6 +1042,18 @@ export interface FirmwareItem {
   name: string;
   version: string;
   updateable: boolean;
+  /** 这次没读到、沿用上次的：上次读到它的时间。 */
+  keptFrom?: string;
+}
+
+/**
+ * 存固件清单。主机关机时 HGX 底板和 HMC 断电，BMC 列不出 HGX 那几十项：这次一项 HGX 都没读到、上次有，
+ * 就把上次的留着并记下是什么时候读的，不让关一次机就把 HGX 版本冲掉。开机后再读就换成新的。
+ */
+export function saveFirmwareSnapshot(assetId: string, items: FirmwareItem[]): { readAt: string; data: FirmwareItem[] } {
+  const previous = loadSnapshot<FirmwareItem[]>(assetId, "firmware");
+  const kept = previous && !items.some((item) => isHgxFirmware(item.id)) ? previous.data.filter((item) => isHgxFirmware(item.id)).map((item) => ({ ...item, keptFrom: item.keptFrom || previous.readAt })) : [];
+  return saveSnapshot(assetId, "firmware", [...items, ...kept]);
 }
 
 /**
