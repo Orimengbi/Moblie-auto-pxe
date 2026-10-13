@@ -224,6 +224,7 @@ export function ServerFirmware({ assetId }: { assetId: string }) {
 
   const items = data.items;
   const hgxCount = items?.filter((item) => isHgxFirmware(item.id)).length || 0;
+  const keptFrom = items?.find((item) => item.keptFrom)?.keptFrom || "";
   const shownItems = items?.filter((item) => scope === "all" || (scope === "hgx") === isHgxFirmware(item.id)) || null;
 
   async function submitLibrary() {
@@ -325,14 +326,20 @@ export function ServerFirmware({ assetId }: { assetId: string }) {
           <ToggleButton value="other">主板 {items.length - hgxCount}</ToggleButton>
         </ToggleButtonGroup>
       ) : null}
+      {keptFrom ? (
+        <Typography variant="body2" sx={{ color: "warning.main" }}>
+          这次没读到 HGX 的固件（主机关机时 GPU 底板和 HMC 断电，BMC 列不出来），HGX 那几项是 {formatTime(keptFrom)} 读到的。开机几分钟后再点「读取」会更新。
+        </Typography>
+      ) : null}
       {shownItems ? (
         <Box component="table" sx={{ width: "100%", borderCollapse: "collapse", "& td": { py: 0.5, pr: 2, borderBottom: 1, borderColor: "divider", fontSize: 13, verticalAlign: "top" } }}>
           <tbody>
             {shownItems.map((item) => (
               <tr key={item.id}>
                 <td>{item.name}</td>
-                <Box component="td" sx={{ fontFamily: MONO }}>
+                <Box component="td" sx={{ fontFamily: MONO, color: item.keptFrom ? "text.secondary" : undefined }}>
                   {item.version || "—"}
+                  {item.keptFrom ? <Box component="span" sx={{ fontFamily: "inherit", fontSize: 12 }}>{"（上次读的）"}</Box> : null}
                 </Box>
                 <Box component="td" sx={{ color: "text.secondary", whiteSpace: "nowrap" }}>
                   {item.updateable ? "可升级" : ""}
