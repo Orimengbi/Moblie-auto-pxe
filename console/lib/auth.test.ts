@@ -191,3 +191,13 @@ test("custom roles: pick permissions, change them live, cannot hand out what you
   assert.doesNotThrow(() => auth.requireSelfOrAdmin(asMia, nina.id));
   assert.doesNotThrow(() => auth.requireSelfOrAdmin(asMia, mia.id));
 });
+
+test("session cookies are Secure only when the request came over HTTPS", () => {
+  const plain = new Request("http://192.168.68.119:8080/api/auth/login", { method: "POST" });
+  const proxied = new Request("http://127.0.0.1:3000/api/auth/login", { method: "POST", headers: { "x-forwarded-proto": "https" } });
+  assert.equal(auth.secureRequest(plain), false);
+  assert.equal(auth.secureRequest(proxied), true);
+  assert.doesNotMatch(auth.sessionCookie("t", auth.secureRequest(plain)), /Secure/);
+  assert.match(auth.sessionCookie("t", auth.secureRequest(proxied)), /; Secure$/);
+  assert.match(auth.clearedSessionCookie(true), /Max-Age=0; Secure$/);
+});

@@ -11,7 +11,7 @@ import { mergeMachineRows } from "./machine-rows.ts";
 import { parsePlanTable } from "./plan-sheet.ts";
 import { ipmiFailure, parseIpmiUserList, setBootDevice } from "./ipmi-remote.ts";
 import { parseServerTable } from "./server-sheet.ts";
-import { menuFor, serialProbe } from "./boot.ts";
+import { menuFor, reportInstalled, serialProbe } from "./boot.ts";
 import { createTask, resolveHost, runTask, type Exec } from "./remote.ts";
 import { UploadConflict, appendUpload, assertExtractFits, assertUploadFits, discardUpload, extractKind, listUploadSessions, openUpload, queuedExtractBytes } from "./uploads.ts";
 import { acquireExtractLock } from "./extract-queue.ts";
@@ -612,7 +612,14 @@ test("an installed server boots from disk until someone asks to reinstall", asyn
   const projectId = listProjects().find((item) => item.name === "机房A")?.id || "";
   const mac = "aa:bb:cc:dd:ee:92";
   assert.equal(getMachine(mac)?.action, "install");
-  await markServerInstalled("SN-SRV9");
+  // /boot/installed 不要登录：不在装机网段的来源不能把它标成装好。
+  assert.equal((await reportInstalled("SN-SRV9", "10.9.9.9")).status, 403);
+  assert.equal((await reportInstalled("SN-SRV9", "")).status, 403);
+  assert.equal(getMachine(mac)?.action, "install");
+  // 没有这台机器的序列号什么都不改，照常回 ok。
+  assert.equal((await reportInstalled("SN-NOBODY", "10.9.9.9")).status, 200);
+  // 装机网段里、最近 PXE 启动过的那台自己报装好。
+  assert.equal((await reportInstalled("SN-SRV9", "192.168.77.92")).status, 200);
   assert.equal(getMachine(mac)?.action, "menu");
   assert.equal(getMachine(mac)?.profileId, undefined);
   const again = await bindServerBoot("SN-SRV9", mac);

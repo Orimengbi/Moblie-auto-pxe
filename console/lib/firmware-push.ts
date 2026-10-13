@@ -172,32 +172,41 @@ export async function startPush(
   deps: PushDeps = {},
 ): Promise<FirmwarePushJob> {
   if (running.has(assetId)) throw new Error("这台正在推固件，等它结束再推");
-  const session = deps.session || (await assetSession(assetId)).session;
-  const job: FirmwarePushJob = {
-    assetId,
-    packageId: input.packageId,
-    fileName: input.fileName,
-    kind: input.kind,
-    version: input.version,
-    image: input.image,
-    targets: input.targets,
-    oem: input.oem,
-    user,
-    startedAt: new Date().toISOString(),
-    updatedAt: "",
-    finishedAt: "",
-    stage: input.prepareHmc ? "prepare" : "upload",
-    sent: 0,
-    total: 0,
-    taskPath: "",
-    taskState: "",
-    percent: null,
-    messages: [],
-    error: "",
-  };
+  // 检查完马上占住：下面开 BMC 会话要等，等的时候第二个请求（双击、两个人同时点）进来也会被挡住，不会把同一台推两遍。
   running.add(assetId);
-  job.taskId = createPushTask(job).id;
-  save(job);
+  let job: FirmwarePushJob;
+  let session: BmcSession;
+  try {
+    session = deps.session || (await assetSession(assetId)).session;
+    job = {
+      assetId,
+      packageId: input.packageId,
+      fileName: input.fileName,
+      kind: input.kind,
+      version: input.version,
+      image: input.image,
+      targets: input.targets,
+      oem: input.oem,
+      user,
+      startedAt: new Date().toISOString(),
+      updatedAt: "",
+      finishedAt: "",
+      stage: input.prepareHmc ? "prepare" : "upload",
+      sent: 0,
+      total: 0,
+      taskPath: "",
+      taskState: "",
+      percent: null,
+      messages: [],
+      error: "",
+    };
+    job.taskId = createPushTask(job).id;
+    save(job);
+  } catch (error) {
+    // 连不上 BMC、建任务失败：没开始推，放掉，不然这台一直显示正在推。
+    running.delete(assetId);
+    throw error;
+  }
   void follow(job, input, session, deps.sleep || ((ms) => new Promise((resolve) => setTimeout(resolve, ms))), deps.now || Date.now, deps).finally(() => running.delete(assetId));
   return job;
 }

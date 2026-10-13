@@ -10,6 +10,7 @@ import {
   requirePermission,
   requireSelfOrAdmin,
   rolePermissions,
+  secureRequest,
   sessionCookie,
   updateUser,
   verifyLoginPassword,
@@ -49,7 +50,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     const headers = new Headers();
     if (user.id === identity.user.id && !user.disabled) {
       const method = identity.method === "password" && !user.passwordHash ? null : identity.method;
-      if (method) headers.set("set-cookie", sessionCookie(createSession({ user, method, credentialId: identity.credentialId })));
+      if (method) headers.set("set-cookie", sessionCookie(createSession({ user, method, credentialId: identity.credentialId }), secureRequest(request)));
     }
     return Response.json(publicUser(user), { headers });
   } catch (error) {
