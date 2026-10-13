@@ -8,7 +8,7 @@ const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pxe-bmc-reset-test-"));
 process.env.PXE_DATA_DIR = temp;
 
 const assets = await import("./assets.ts");
-const { createTask, resetBmc, runTask } = await import("./remote.ts");
+const { createTask, resetBmc, runTask, waitBmcBack } = await import("./remote.ts");
 
 const context = { nics: [], machines: [], leases: [], locals: ["10.0.0.1"] };
 
@@ -73,4 +73,48 @@ test("bmc clock task needs a BMC and validates the offset", async () => {
   assert.equal(task.targets[0].host, "10.0.1.9");
   assert.throws(() => createTask({ kind: "bmc-clock", bmcClock: { offset: "+8" }, assetIds: [withBmc.id] }, context), /\+08:00/);
   assert.throws(() => createTask({ kind: "bmc-clock", bmcClock: {}, assetIds: [withBmc.id] }, context), /至少改一项/);
+});
+
+/** 假时钟：sleep 直接把时间往前拨。 */
+function clock() {
+  let t = 0;
+  return { now: () => t, sleep: async (ms: number) => void (t += ms) };
+}
+
+test("after the reset the task waits for the BMC to drop and come back on IPMI and Redfish", async () => {
+  const asset = assets.createAsset({ sn: "bmc-back-1", bmcIp: "10.0.1.11", bmcUser: "admin", bmcPassword: "secret" }, "tester");
+  // 第 1 次探还在（没来得及断），第 2~4 次断开，之后 IPMI 回来；Redfish 第一次还没起来。
+  let probes = 0;
+  const ipmi = async (_host: string, _user: string, _password: string, args: string[]) => {
+    if (args[0] === "mc") return { code: 1, stdout: "Sent cold reset command to MC", stderr: "" };
+    probes++;
+    return probes === 1 || probes >= 5 ? { code: 0, stdout: "Chassis Power is on", stderr: "" } : { code: 1, stdout: "", stderr: "Unable to establish IPMI v2 / RMCP+ session" };
+  };
+  let reads = 0;
+  const redfish = () => async () => (++reads === 1 ? Promise.reject(new Error("ECONNREFUSED")) : { "@odata.id": "/redfish/v1" });
+  const progress: string[] = [];
+  const back = await waitBmcBack(asset.id, (text) => progress.push(text), { ipmi, redfish, ...clock() });
+  assert.equal(back.ok, true, back.message);
+  assert.match(back.message, /IPMI 和 Redfish 都能连上，用了 60 秒/);
+  assert.match(progress[0], /还没断开/);
+  assert.ok(progress.some((text) => /已断开/.test(text)));
+  assert.ok(progress.some((text) => /等 Redfish/.test(text)));
+
+  const task = createTask({ kind: "bmc-reset", assetIds: [asset.id] }, context);
+  probes = 0;
+  reads = 0;
+  const done = await runTask(task.id, undefined, undefined, { ipmi, redfish, ...clock() });
+  assert.equal(done.status, "done");
+  assert.equal(done.targets[0].status, "ok");
+  assert.match(done.targets[0].output, /冷重启（带外）[\s\S]*已经重启回来/);
+  assert.ok(done.targets[0].finishedAt);
+  assert.ok(assets.listEvents(asset.id).some((event) => /BMC 重启完成/.test(event.text)));
+});
+
+test("a BMC that never comes back ends as unreachable after ten minutes", async () => {
+  const asset = assets.createAsset({ sn: "bmc-back-2", bmcIp: "10.0.1.12", bmcUser: "admin", bmcPassword: "secret" }, "tester");
+  const dead = async () => ({ code: 1, stdout: "", stderr: "Unable to establish IPMI v2 / RMCP+ session" });
+  const back = await waitBmcBack(asset.id, () => {}, { ipmi: dead, redfish: () => async () => null, ...clock() });
+  assert.equal(back.ok, false);
+  assert.match(back.message, /等了 10 分钟.*还没回来/);
 });
