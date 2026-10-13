@@ -365,6 +365,11 @@ export function ServerFirmware({ assetId }: { assetId: string }) {
                 <Box component="td" sx={{ fontFamily: MONO, color: item.keptFrom ? "text.secondary" : undefined }}>
                   {item.version || "—"}
                   {item.keptFrom ? <Box component="span" sx={{ fontFamily: "inherit", fontSize: 12 }}>{"（上次读的）"}</Box> : null}
+                  {item.redfishVersion !== undefined ? (
+                    <Box component="span" title="这台 BMC 的 Redfish 把 BIOS 版本截短了，这里是 BMC 存的原始 SMBIOS 里的完整版本" sx={{ fontFamily: "inherit", fontSize: 12, color: "text.secondary" }}>
+                      {`（Redfish 报 ${item.redfishVersion || "空"}）`}
+                    </Box>
+                  ) : null}
                 </Box>
                 <Box component="td" sx={{ color: "text.secondary", whiteSpace: "nowrap" }}>
                   {item.updateable ? "可升级" : ""}

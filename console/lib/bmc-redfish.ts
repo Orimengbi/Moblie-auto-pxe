@@ -4,6 +4,7 @@ import { assetBmcAccounts, getAsset } from "./assets.ts";
 import { dataDir } from "./paths.ts";
 import { link, members, RedfishAuthError, redfishError, redfishRequester, UploadBody, type RedfishDoc, type RedfishRequest, type RedfishResponse } from "./redfish.ts";
 import { BMC_SETTING_LABEL, isHgxFirmware } from "./asset-labels.ts";
+import { fullerBiosVersion, smbiosBiosVersionOf } from "./bmc-web.ts";
 import type { Asset, BmcSettingKind, HealthProblem } from "./types.ts";
 
 /**
@@ -738,7 +739,7 @@ export async function collectSettings(asset: Asset, kinds: BmcSettingKind[]): Pr
   if (kinds.includes("firmware")) {
     try {
       const previous = loadSnapshot<FirmwareItem[]>(asset.id, "firmware");
-      const items = saveFirmwareSnapshot(asset.id, await firmwareInventory(session)).data;
+      const items = saveFirmwareSnapshot(asset.id, await firmwareInventory(session, asset)).data;
       const hgx = items.filter((item) => isHgxFirmware(item.id));
       const kept = hgx.filter((item) => item.keptFrom).length;
       lines.push(`固件版本：${items.length} 项${hgx.length ? `，其中 HGX ${hgx.length} 项` : ""}${kept ? `（这次没读到 HGX，主机关机时读不到，留着上次读的）` : ""}`);
@@ -1044,6 +1045,8 @@ export interface FirmwareItem {
   updateable: boolean;
   /** 这次没读到、沿用上次的：上次读到它的时间。 */
   keptFrom?: string;
+  /** BMC 的 Redfish 把版本截短了（R05），version 是从原始 SMBIOS 补全的（R05_F04），这里留着 Redfish 原来报的。 */
+  redfishVersion?: string;
 }
 
 /**
@@ -1060,7 +1063,7 @@ export function saveFirmwareSnapshot(assetId: string, items: FirmwareItem[]): { 
  * HGX 机器的固件清单有上百项，分页读完。$expand 时 AMI 对 HGX_ 开头的条目（HMC 代理过来的）只给 Id、Name，
  * 没有版本，这种逐条再读一遍（技嘉 H100_tool 的 list 也是逐条读，每条约 0.2 秒）。
  */
-export async function firmwareInventory(session: BmcSession): Promise<FirmwareItem[]> {
+export async function firmwareInventory(session: BmcSession, asset?: Asset): Promise<FirmwareItem[]> {
   const update = await rfFind(session, "/redfish/v1/UpdateService");
   let next = link(update, "FirmwareInventory");
   const out: FirmwareItem[] = [];
@@ -1077,6 +1080,11 @@ export async function firmwareInventory(session: BmcSession): Promise<FirmwareIt
       out.push({ id, name, version: str(item.Version), updateable: item.Updateable === true });
     }
     next = str(doc["Members@odata.nextLink"]);
+  }
+  const bios = out.find((item) => item.id === "BIOS");
+  if (bios && asset) {
+    const full = fullerBiosVersion(bios.version, await smbiosBiosVersionOf(asset));
+    if (full !== bios.version) Object.assign(bios, { version: full, redfishVersion: bios.version });
   }
   return out;
 }
