@@ -481,7 +481,7 @@ function PackageDialog({ id, admin, onClose, onChanged }: { id: string | null; a
                 <Box sx={{ maxHeight: 240, overflow: "auto" }}>
                   {pkg.components.map((component, index) => (
                     <Stack key={index} direction="row" spacing={2} sx={{ py: 0.25, fontSize: 13 }}>
-                      <Box sx={{ width: 120, color: "text.secondary", flexShrink: 0 }}>{component.name}</Box>
+                      <Box sx={{ width: 220, color: "text.secondary", flexShrink: 0 }}>{component.name}</Box>
                       <Box sx={{ fontFamily: MONO, overflowWrap: "anywhere" }}>{component.version}</Box>
                     </Stack>
                   ))}
@@ -510,7 +510,10 @@ function PackageDialog({ id, admin, onClose, onChanged }: { id: string | null; a
                 <>
                   {pkg.fleet.inventoryId ? (
                     <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                      按各台上次读到的固件清单里的 <Box component="span" sx={{ fontFamily: MONO }}>{pkg.fleet.inventoryId}</Box> 版本对比。没读过的去「固件版本」页或资产页批量采集时勾「固件版本」。
+                      {pkg.kind === "hgx"
+                        ? "按各台上次读到的 HGX 固件清单逐个部件对比（GPU、NVSwitch、ConnectX 等每一块都比），版本一栏列出跟包不一样的部件。"
+                        : <>按各台上次读到的固件清单里的 <Box component="span" sx={{ fontFamily: MONO }}>{pkg.fleet.inventoryId}</Box> 版本对比。</>}
+                      没读过的去「固件版本」页或资产页批量采集时勾「固件版本」。
                     </Typography>
                   ) : (
                     <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
