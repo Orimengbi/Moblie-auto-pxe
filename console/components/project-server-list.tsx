@@ -31,6 +31,7 @@ import type { Tone } from "@/lib/asset-labels";
 import type { InstallState, InventoryStatus, IpmiLink, IpSource, PowerState, RemoteFile, RemoteTask, ServerImportReport, ServerRow, ServerStage, TaskHostSource } from "@/lib/types";
 import { formatTime } from "@/lib/time";
 import { useCan } from "@/components/role-context";
+import { gridText } from "@/components/mui/theme";
 
 const STAGE: Record<ServerStage, string> = {
   waiting: "等待发现",
@@ -629,7 +630,7 @@ export function ProjectServerList({
               }}
               initialState={{ pagination: { paginationModel: { pageSize: 100 } } }}
               pageSizeOptions={[25, 50, 100]}
-              localeText={{ noResultsOverlayLabel: "没有符合筛选条件的机器。" }}
+              localeText={gridText({ noResultsOverlayLabel: "没有符合筛选条件的机器。" })}
               sx={{
                 "& .MuiDataGrid-row": { cursor: "pointer" },
                 "& .MuiDataGrid-cell": { py: 0.75, whiteSpace: "normal", wordBreak: "break-word" },

@@ -25,6 +25,7 @@ import { SiteOptions } from "@/components/site-options";
 import { formatTime } from "@/lib/time";
 import { api } from "@/lib/client-api";
 import { useCan } from "@/components/role-context";
+import { gridText } from "@/components/mui/theme";
 
 type AssetRef = { id: string; tag: string };
 
@@ -320,7 +321,7 @@ export function PartsBoard({
           initialState={{ pagination: { paginationModel: { pageSize: 100 } } }}
           pageSizeOptions={[25, 50, 100]}
           hideFooter={shown.length <= 100}
-          localeText={{ noRowsLabel: parts.length ? "没有符合条件的备件。" : "还没有备件。点「备件入库」，序列号可以从 Excel 整列贴进来。" }}
+          localeText={gridText({ noRowsLabel: parts.length ? "没有符合条件的备件。" : "还没有备件。点「备件入库」，序列号可以从 Excel 整列贴进来。" })}
           sx={{ "& .MuiDataGrid-cell": { display: "flex", alignItems: "center", py: 0.5 } }}
         />
       </Box>

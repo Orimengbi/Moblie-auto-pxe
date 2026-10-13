@@ -17,6 +17,7 @@ import type { Alert } from "@/lib/types";
 import { formatTime } from "@/lib/time";
 import { api } from "@/lib/client-api";
 import { useCan } from "@/components/role-context";
+import { gridText } from "@/components/mui/theme";
 
 export type AlertRow = Alert & { assetTag: string; assetSn: string };
 
@@ -211,7 +212,7 @@ export function AlertBoard({ alerts, summary }: { alerts: AlertRow[]; summary: s
           initialState={{ pagination: { paginationModel: { pageSize: 100 } } }}
           pageSizeOptions={[25, 50, 100]}
           hideFooter={shown.length <= 100}
-          localeText={{ noRowsLabel: status === "open" ? "没有告警。" : "没有符合条件的告警。" }}
+          localeText={gridText({ noRowsLabel: status === "open" ? "没有告警。" : "没有符合条件的告警。" })}
           sx={{ "& .alert-resolved": { opacity: 0.6 }, "& .MuiDataGrid-cell": { display: "flex", alignItems: "center" } }}
         />
       </Box>

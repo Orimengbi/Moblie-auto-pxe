@@ -63,3 +63,22 @@ export function xlsxWithDropdowns(rows: unknown[][], sheetName: string, dropdown
   entry.content = Buffer.from(sheet.replace(anchor, `${anchor}${block}`), "utf8");
   return Buffer.from(CFB.write(zip, { fileType: "zip", type: "buffer" }) as Uint8Array);
 }
+
+/** 多页的 xlsx（导出用，不带下拉）。列宽按每列最长的内容估，最宽 60 个字符。 */
+export function xlsxBook(sheets: { name: string; rows: unknown[][] }[]): Buffer {
+  const book = XLSX.utils.book_new();
+  for (const sheet of sheets) {
+    const ws = XLSX.utils.aoa_to_sheet(sheet.rows);
+    const widths: number[] = [];
+    for (const row of sheet.rows.slice(0, 2000)) {
+      row.forEach((cell, index) => {
+        const longest = Math.max(...String(cell ?? "").split("\n").map((line) => [...line].reduce((sum, char) => sum + (char.charCodeAt(0) > 255 ? 2 : 1), 0)));
+        widths[index] = Math.max(widths[index] || 6, Math.min(60, longest + 2));
+      });
+    }
+    ws["!cols"] = widths.map((wch) => ({ wch }));
+    // 页名最长 31 个字符，不能有 []:*?/\。
+    XLSX.utils.book_append_sheet(book, ws, sheet.name.replace(/[[\]:*?/\\]/g, " ").slice(0, 31));
+  }
+  return XLSX.write(book, { type: "buffer", bookType: "xlsx" }) as Buffer;
+}

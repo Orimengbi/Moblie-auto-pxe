@@ -32,6 +32,7 @@ const EXPECTED = [
   "POST /api/assets/x1/sensors refresh",
   "POST /api/assets/import assets.edit",
   "POST /api/assets assets.edit",
+  "POST /api/assets/export null",
   "POST /api/auth/challenge null",
   "POST /api/auth/login null",
   "POST /api/auth/logout null",
@@ -123,6 +124,8 @@ const SELF_CHECKED: Record<string, RegExp | null> = {
   "/api/auth/challenge": null,
   "/api/auth/login": null,
   "/api/auth/logout": null,
+  // 导出只读：按选的机器和表生成 Excel，和 GET 一样登录了就能导。
+  "/api/assets/export": null,
   "/api/tasks": /taskPermission\(/,
   "/api/projects/x1/tasks": /taskPermission\(/,
   "/api/users/x1": /requireSelfOrAdmin\(/,
