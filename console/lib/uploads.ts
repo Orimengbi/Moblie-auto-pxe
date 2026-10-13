@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { ISO_FORMATS_LABEL, isoSuffix } from "./iso-name.ts";
-import { createImageFromIncoming } from "./store.ts";
+import { createImageFromIncoming, listImages } from "./store.ts";
 import type { ImageRecord } from "./types.ts";
 import { ensureDataDirs, incomingDir, uploadDir, isSafeId, dataDir } from "./paths.ts";
 
@@ -32,12 +32,50 @@ function gb(bytes: number): string {
   return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
 }
 
-/** 数据盘放不下这次上传（加上其他没传完的）就直接拒绝，别传到一半把盘写满。 */
-export function assertUploadFits(size: number, pending: UploadSession[], free = diskFree()): void {
+/**
+ * 解包时还要额外占多少（源文件本身已经在盘上，不算）：
+ * 网络安装 ISO 展开安装树 ≈ 再来一份；整盘镜像先 dd 出根分区（≤ 整盘）再压缩，根分区和压缩包同时在，≈ 再来 1.4 份。
+ */
+export type ExtractKind = "tree" | "disk";
+const EXTRA_FACTOR: Record<ExtractKind, number> = { tree: 1, disk: 1.4 };
+
+export function extractKind(filename: string): ExtractKind {
+  return isoSuffix(filename)?.startsWith(".img") ? "disk" : "tree";
+}
+
+function extraBytes(kind: ExtractKind, size: number): number {
+  return Math.ceil(size * EXTRA_FACTOR[kind]);
+}
+
+function peakLabel(kind: ExtractKind): string {
+  return kind === "disk" ? "整盘镜像导入时峰值约 2.4 倍" : "展开安装树时峰值约 2 倍";
+}
+
+/** 还在排队或正在解包的镜像，解包时还要多占的空间（正在跑的那个有一部分已经占了，这里按全量算，偏保守）。 */
+export function queuedExtractBytes(images = listImages()): number {
+  return images
+    .filter((image) => image.status === "extracting")
+    .reduce((sum, image) => sum + extraBytes(extractKind(image.filename), image.size || 0), 0);
+}
+
+/**
+ * 数据盘放不下这次上传（加上其他没传完的、排队解包的、再加上传完解包的峰值）就直接拒绝，别传到一半或解包到一半把盘写满。
+ * 压缩包按压缩后的大小估，偏小；解包任务里拿到真实大小还会再查一次（assertExtractFits）。
+ */
+export function assertUploadFits(size: number, pending: UploadSession[], free = diskFree(), kind: ExtractKind = "tree", queued = 0): void {
   const owed = pending.reduce((sum, item) => sum + Math.max(0, item.size - item.offset), 0);
-  if (size + owed + FREE_RESERVE > free) {
-    const others = owed ? `，其他没传完的上传还要 ${gb(owed)}` : "";
-    throw new Error(`数据盘空间不够：这个文件 ${gb(size)}${others}，盘上只剩 ${gb(free)}（要留 ${gb(FREE_RESERVE)} 余量）`);
+  const need = size + extraBytes(kind, size);
+  if (need + owed + queued + FREE_RESERVE > free) {
+    const others = [owed && `其他没传完的上传还要 ${gb(owed)}`, queued && `排队解包的镜像还要 ${gb(queued)}`].filter(Boolean).map((text) => `，${text}`).join("");
+    throw new Error(`数据盘空间不够：这个文件 ${gb(size)}，${peakLabel(kind)}要 ${gb(need)}${others}，盘上只剩 ${gb(free)}（要留 ${gb(FREE_RESERVE)} 余量）`);
+  }
+}
+
+/** 解包前按峰值再查一次（拿着解包锁查，前面的都跑完了）：源文件已经在盘上，只看还要多占的部分。 */
+export function assertExtractFits(kind: ExtractKind, size: number, free = diskFree()): void {
+  const extra = extraBytes(kind, size);
+  if (extra + FREE_RESERVE > free) {
+    throw new Error(`数据盘空间不够：源文件 ${gb(size)}，${peakLabel(kind)}，还要再占 ${gb(extra)}，盘上只剩 ${gb(free)}（要留 ${gb(FREE_RESERVE)} 余量）。删掉不用的镜像后重新导入`);
   }
 }
 
@@ -110,7 +148,7 @@ export function openUpload(input: { filename: string; size: number; name?: strin
     writeSession(existing);
     return existing;
   }
-  assertUploadFits(input.size, listUploadSessions());
+  assertUploadFits(input.size, listUploadSessions(), undefined, extractKind(filename), queuedExtractBytes());
   const now = new Date().toISOString();
   const session: UploadSession = {
     id: crypto.randomUUID(),
