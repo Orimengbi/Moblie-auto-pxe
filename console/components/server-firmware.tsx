@@ -57,6 +57,18 @@ const PUSH_STEPS: { stage: FirmwarePushJob["stage"][]; label: string }[] = [
   { stage: ["done", "failed"], label: "结束" },
 ];
 
+/** 刷写阶段按部件给的说明；job.kind 存的是 FIRMWARE_KIND_LABEL 里的名字。 */
+function flashHint(kind: string): string {
+  if (kind === FIRMWARE_KIND_LABEL.hgx) {
+    return "HGX 全量升级大约 30~40 分钟，分几段刷，每段的百分比会从 0 重新走，段与段之间 BMC 不报百分比（进度条来回滚）；期间主机会重启、BMC 偶尔连不上，读不到会接着等。可以关掉页面，回来再看。";
+  }
+  if (kind === FIRMWARE_KIND_LABEL.bmc) {
+    return "BMC 刷写一般几分钟，刷完 BMC 会自己重启，期间网页和 Redfish 连不上，读不到会接着等，主机不受影响。可以关掉页面，回来再看。";
+  }
+  if (kind === FIRMWARE_KIND_LABEL.bios) return "BIOS 刷写一般几分钟，刷完要开机或重启后才生效。期间不要断电。";
+  return "刷写期间不要断电。可以关掉页面，回来再看。";
+}
+
 /** 一次从固件库推送的进度：走到哪一步、上传和刷写的百分比、BMC 最近的消息。 */
 function PushProgress({ job }: { job: FirmwarePushJob }) {
   const active = job.stage !== "done" && job.stage !== "failed";
@@ -102,7 +114,7 @@ function PushProgress({ job }: { job: FirmwarePushJob }) {
         <Typography variant="body2">{text}</Typography>
         {job.stage === "flash" ? (
           <Typography variant="caption" color="text.secondary">
-            HGX 全量升级大约 30~40 分钟，分几段刷，每段的百分比会从 0 重新走，段与段之间 BMC 不报百分比（进度条来回滚）；期间主机会重启、BMC 偶尔连不上，读不到会接着等。可以关掉页面，回来再看。
+            {flashHint(job.kind)}
           </Typography>
         ) : null}
         {active && job.error ? (
