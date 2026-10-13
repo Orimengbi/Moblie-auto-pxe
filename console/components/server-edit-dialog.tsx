@@ -161,7 +161,7 @@ export function ServerEditDialog({
                 multiline
                 minRows={3}
                 placeholder="可留空，会附加到这台的安装后脚本"
-                slotProps={{ inputLabel: { shrink: true }, htmlInput: { style: { fontFamily: "var(--font-geist-mono), monospace", fontSize: 12 } } }}
+                slotProps={{ inputLabel: { shrink: true }, htmlInput: { style: { fontFamily: '"SF Mono", ui-monospace, var(--font-geist-mono), monospace', fontSize: 12 } } }}
               />
             </Grid>
           </Grid>

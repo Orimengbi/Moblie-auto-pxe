@@ -29,7 +29,7 @@ import { gridText } from "@/components/mui/theme";
 
 type AssetRef = { id: string; tag: string };
 
-const MONO = "var(--font-geist-mono), monospace";
+const MONO = '"SF Mono", ui-monospace, var(--font-geist-mono), monospace';
 const NATIVE = { select: { native: true } } as const;
 // 带标签的原生下拉框和日期框：标签始终浮在上面，免得和空值叠在一起。
 const NATIVE_LABELED = { select: { native: true }, inputLabel: { shrink: true } } as const;

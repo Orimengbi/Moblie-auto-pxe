@@ -34,7 +34,7 @@ import {
 import { formatTime } from "@/lib/time";
 import { gridText } from "@/components/mui/theme";
 
-const MONO = "var(--font-geist-mono), monospace";
+const MONO = '"SF Mono", ui-monospace, var(--font-geist-mono), monospace';
 const NATIVE_LABELED = { select: { native: true }, inputLabel: { shrink: true } } as const;
 
 const NO_VENDOR = "-";

@@ -21,7 +21,7 @@ import type { HeightSync } from "@/lib/catalog";
 import { api } from "@/lib/client-api";
 import { gridText } from "@/components/mui/theme";
 
-const MONO = "var(--font-geist-mono), monospace";
+const MONO = '"SF Mono", ui-monospace, var(--font-geist-mono), monospace';
 const NATIVE_LABELED = { select: { native: true }, inputLabel: { shrink: true } } as const;
 const WIDE_PAPER = { paper: { sx: { maxWidth: 720 } } } as const;
 const FORM_SX = { display: "flex", flexDirection: "column", minHeight: 0 } as const;

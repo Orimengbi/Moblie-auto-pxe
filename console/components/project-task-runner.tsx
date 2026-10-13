@@ -81,7 +81,7 @@ function counts(task: RemoteTask): string {
   return `${parts.join(" · ")} / 共 ${task.targets.length} 台`;
 }
 
-const MONO = "var(--font-geist-mono), monospace";
+const MONO = '"SF Mono", ui-monospace, var(--font-geist-mono), monospace';
 
 /** 折叠块去掉 MUI 默认的分隔线，和上下的块之间留空。 */
 const FOLD_SX = { borderRadius: 2, "&::before": { display: "none" } } as const;

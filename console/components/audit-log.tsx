@@ -12,7 +12,7 @@ import type { AuditEntry } from "@/lib/types";
 import { formatTime } from "@/lib/time";
 import { gridText } from "@/components/mui/theme";
 
-const MONO = "var(--font-geist-mono), monospace";
+const MONO = '"SF Mono", ui-monospace, var(--font-geist-mono), monospace';
 
 const COLUMNS: GridColDef<AuditEntry>[] = [
   { field: "at", headerName: "时间", width: 160, renderCell: ({ row }) => <Box sx={{ fontSize: 12, whiteSpace: "nowrap" }}>{formatTime(row.at)}</Box> },

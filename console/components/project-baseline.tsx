@@ -18,7 +18,7 @@ import type { Baseline, BaselineRule, HwKind } from "@/lib/types";
 import { formatTime } from "@/lib/time";
 import { useCan } from "@/components/role-context";
 
-const MONO = "var(--font-geist-mono), monospace";
+const MONO = '"SF Mono", ui-monospace, var(--font-geist-mono), monospace';
 
 /** 装机批次的基准配置：从一台好机器生成后，在这里改数量、固件要求，删掉不想检查的条目。 */
 export function ProjectBaseline({ projectId, baseline, matched, mismatched }: { projectId: string; baseline: Baseline | null; matched: number; mismatched: number }) {

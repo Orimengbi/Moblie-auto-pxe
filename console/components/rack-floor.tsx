@@ -40,7 +40,7 @@ const CELL_W = 64;
 const CELL_H = 44;
 /** 外墙的厚度（像素）。 */
 const WALL = 12;
-const MONO = "var(--font-geist-mono), monospace";
+const MONO = '"SF Mono", ui-monospace, var(--font-geist-mono), monospace';
 
 type Mode = "usage" | "alerts";
 type Obstacle = Omit<FloorItem, "siteId">;

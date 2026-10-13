@@ -6,9 +6,9 @@ import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Paper from "@mui/material/Paper";
 import Stack from "@mui/material/Stack";
-import Tab from "@mui/material/Tab";
-import Tabs from "@mui/material/Tabs";
 import TextField from "@mui/material/TextField";
+import ToggleButton from "@mui/material/ToggleButton";
+import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
 import Typography from "@mui/material/Typography";
 
 type Method = "password" | "key" | "ssh";
@@ -82,13 +82,16 @@ export function LoginForm({ next }: { next: string }) {
   }
 
   return (
-    <Paper variant="outlined" component="form" onSubmit={submit} sx={{ borderRadius: 3, overflow: "hidden" }}>
-      <Tabs value={method} onChange={(_, value: Method) => choose(value)} variant="fullWidth" sx={{ borderBottom: 1, borderColor: "divider" }}>
+    <Paper component="form" onSubmit={submit} sx={{ borderRadius: "20px", p: { xs: 3, sm: 4 }, boxShadow: "0 1px 2px rgba(0,0,0,0.04), 0 8px 32px rgba(0,0,0,0.06)" }}>
+      {/* 登录方式：Apple 的分段控件。 */}
+      <ToggleButtonGroup exclusive fullWidth value={method} onChange={(_, value: Method | null) => value && choose(value)} aria-label="登录方式" sx={{ mb: 3 }}>
         {TABS.map((tab) => (
-          <Tab key={tab.id} value={tab.id} label={tab.label} />
+          <ToggleButton key={tab.id} value={tab.id}>
+            {tab.label}
+          </ToggleButton>
         ))}
-      </Tabs>
-      <Stack spacing={2.5} sx={{ p: 3 }}>
+      </ToggleButtonGroup>
+      <Stack spacing={2.5}>
         {method !== "key" ? (
           <TextField
             label="用户名"
@@ -132,7 +135,7 @@ export function LoginForm({ next }: { next: string }) {
               </Typography>
               <Box
                 component="pre"
-                sx={{ m: 0, p: 1.5, borderRadius: 2, bgcolor: "action.hover", fontFamily: "var(--font-geist-mono), monospace", fontSize: 12, whiteSpace: "pre-wrap", wordBreak: "break-all", userSelect: "all" }}
+                sx={{ m: 0, p: 1.5, borderRadius: 2, bgcolor: "action.hover", fontFamily: '"SF Mono", ui-monospace, var(--font-geist-mono), monospace', fontSize: 12, whiteSpace: "pre-wrap", wordBreak: "break-all", userSelect: "all" }}
               >
                 {challenge.command}
               </Box>
@@ -149,7 +152,7 @@ export function LoginForm({ next }: { next: string }) {
               minRows={6}
               required
               fullWidth
-              slotProps={{ htmlInput: { style: { fontFamily: "var(--font-geist-mono), monospace", fontSize: 12 } } }}
+              slotProps={{ htmlInput: { style: { fontFamily: '"SF Mono", ui-monospace, var(--font-geist-mono), monospace', fontSize: 12 } } }}
             />
           </Stack>
         ) : null}

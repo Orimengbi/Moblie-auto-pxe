@@ -311,7 +311,7 @@ function Field({ mono, select, htmlInput, ...props }: TextFieldProps & { mono?: 
       select={select}
       {...props}
       slotProps={{ inputLabel: { shrink: true }, ...(select ? { select: { native: true } } : {}), ...(htmlInput ? { htmlInput } : {}) }}
-      sx={mono ? { "& .MuiInputBase-input": { fontFamily: "var(--font-geist-mono), monospace" } } : undefined}
+      sx={mono ? { "& .MuiInputBase-input": { fontFamily: '"SF Mono", ui-monospace, var(--font-geist-mono), monospace' } } : undefined}
     />
   );
 }

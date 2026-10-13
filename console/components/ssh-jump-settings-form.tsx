@@ -12,7 +12,7 @@ import Typography from "@mui/material/Typography";
 import { api } from "@/lib/client-api";
 import type { JumpHost } from "@/lib/ssh-jump";
 
-const MONO = "var(--font-geist-mono), monospace";
+const MONO = '"SF Mono", ui-monospace, var(--font-geist-mono), monospace';
 
 /** 表单里的一台：端口和网段先按文本编辑，保存时服务端再校验。 */
 type Draft = Omit<JumpHost, "port" | "targetPort" | "networks"> & { port: string; targetPort: string; networks: string; probe: string };

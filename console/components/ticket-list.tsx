@@ -21,7 +21,7 @@ import { gridText } from "@/components/mui/theme";
 
 export type TicketRow = Ticket & { assetTag: string; assetSn: string };
 
-const MONO = "var(--font-geist-mono), monospace";
+const MONO = '"SF Mono", ui-monospace, var(--font-geist-mono), monospace';
 const NATIVE = { select: { native: true } } as const;
 
 const COLUMNS: GridColDef<TicketRow>[] = [

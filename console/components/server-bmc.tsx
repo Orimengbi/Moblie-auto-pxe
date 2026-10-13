@@ -33,7 +33,7 @@ import type { StreamStatus } from "@/lib/redfish-events";
 import { formatTime, UTC_OFFSETS } from "@/lib/time";
 import { useCan } from "@/components/role-context";
 
-const MONO = "var(--font-geist-mono), monospace";
+const MONO = '"SF Mono", ui-monospace, var(--font-geist-mono), monospace';
 
 type View = BmcOverview & { isos: { name: string; url: string }[]; events: StreamStatus };
 

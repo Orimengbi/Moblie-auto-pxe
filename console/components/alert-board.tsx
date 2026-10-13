@@ -21,7 +21,7 @@ import { gridText } from "@/components/mui/theme";
 
 export type AlertRow = Alert & { assetTag: string; assetSn: string };
 
-const MONO = "var(--font-geist-mono), monospace";
+const MONO = '"SF Mono", ui-monospace, var(--font-geist-mono), monospace';
 const NATIVE = { select: { native: true } } as const;
 
 export async function alertAction(id: number, action: "ack" | "resolve" | "ticket"): Promise<{ error: string; ticketId?: string }> {

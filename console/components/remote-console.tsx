@@ -49,7 +49,7 @@ export function RemoteConsole({
         <Typography variant="body1" sx={{ fontWeight: 500 }}>
           远程控制台
         </Typography>
-        <Typography variant="body2" sx={{ fontFamily: "var(--font-geist-mono), monospace" }}>
+        <Typography variant="body2" sx={{ fontFamily: '"SF Mono", ui-monospace, var(--font-geist-mono), monospace' }}>
           {row.sn}
         </Typography>
         <Typography variant="body2" color="text.secondary">

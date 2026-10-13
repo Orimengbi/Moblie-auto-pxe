@@ -22,7 +22,7 @@ import type { RemoteTask, TaskTargetStatus } from "@/lib/types";
 import { formatTime } from "@/lib/time";
 
 
-const MONO = "var(--font-geist-mono), monospace";
+const MONO = '"SF Mono", ui-monospace, var(--font-geist-mono), monospace';
 const OUTPUT_SX = { m: 0, overflow: "auto", borderRadius: 1, bgcolor: "action.hover", p: 1, fontFamily: MONO, fontSize: 12, whiteSpace: "pre-wrap" } as const;
 
 /** 一个批量任务的详情：每台机器的状态、地址、退出码和输出。执行中每 3 秒刷新。 */

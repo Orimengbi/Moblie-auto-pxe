@@ -98,7 +98,7 @@ function FirmwareVersions({ assetId }: { assetId: string }) {
   const parts = [versions?.bios && `BIOS ${versions.bios}`, versions?.bmc && `BMC ${versions.bmc}`].filter(Boolean);
   if (!parts.length) return null;
   return (
-    <Typography component="span" variant="caption" sx={{ color: "text.secondary", fontFamily: "var(--font-geist-mono), monospace", whiteSpace: "nowrap" }}>
+    <Typography component="span" variant="caption" sx={{ color: "text.secondary", fontFamily: '"SF Mono", ui-monospace, var(--font-geist-mono), monospace', whiteSpace: "nowrap" }}>
       {parts.join(" · ")}
     </Typography>
   );
@@ -152,7 +152,7 @@ export function ServerSidebar({ projectId, row, initialTab = "overview", onClose
             <Box sx={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
               <Box sx={{ position: "relative", px: 2.5, pt: 2, pr: 6, borderBottom: 1, borderColor: "divider" }}>
                 <Box sx={{ display: "flex", alignItems: "baseline", flexWrap: "wrap", columnGap: 1.5, rowGap: 0.25 }}>
-                  <Typography variant="h3" sx={{ fontFamily: "var(--font-geist-mono), monospace", wordBreak: "break-all" }}>
+                  <Typography variant="h3" sx={{ fontFamily: '"SF Mono", ui-monospace, var(--font-geist-mono), monospace', wordBreak: "break-all" }}>
                     {row.sn}
                   </Typography>
                   {network ? null : <FirmwareVersions key={row.id} assetId={row.id} />}

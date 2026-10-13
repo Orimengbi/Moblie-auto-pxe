@@ -285,7 +285,7 @@ export function ImportDialog<R extends ImportRow>({
                     </Typography>
                     <StatusChip tone={ACTION_TONE[row.action]} outlined={row.action === "update" || row.action === "same"} label={ACTION[row.action]} />
                     <Box sx={{ minWidth: 0 }}>
-                      <Box component="span" sx={{ fontFamily: "var(--font-geist-mono), monospace", fontSize: 12 }}>
+                      <Box component="span" sx={{ fontFamily: '"SF Mono", ui-monospace, var(--font-geist-mono), monospace', fontSize: 12 }}>
                         {label(row) || "（空）"}
                       </Box>
                       {row.message ? (

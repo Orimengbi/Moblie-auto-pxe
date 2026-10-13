@@ -25,8 +25,9 @@ export function StatusChip({ tone, label, outlined, ...rest }: { tone: Tone; lab
       sx={[
         (theme) => ({
           height: 22,
-          borderRadius: 1.5,
-          "& .MuiChip-label": { px: 1 },
+          borderRadius: 980,
+          fontWeight: 500,
+          "& .MuiChip-label": { px: 1.125 },
           ...(outlined || color === "default"
             ? {}
             : {

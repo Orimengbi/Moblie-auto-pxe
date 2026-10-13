@@ -28,7 +28,7 @@ interface View {
   asset: { id: string; tag: string; sn: string; status: AssetStatus } | null;
 }
 
-const MONO = "var(--font-geist-mono), monospace";
+const MONO = '"SF Mono", ui-monospace, var(--font-geist-mono), monospace';
 // 带标签的原生下拉框：标签始终浮在上面，免得和空值选项叠在一起。
 const NATIVE = { select: { native: true }, inputLabel: { shrink: true } } as const;
 const NATIVE_PLAIN = { select: { native: true } } as const;

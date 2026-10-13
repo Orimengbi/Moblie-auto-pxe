@@ -16,7 +16,7 @@ import { useCan } from "@/components/role-context";
 import { attrText, InterfaceSections } from "@/components/server-ports";
 import { interfaceView } from "@/lib/ports";
 
-const MONO = "var(--font-geist-mono), monospace";
+const MONO = '"SF Mono", ui-monospace, var(--font-geist-mono), monospace';
 
 interface View {
   history: InventoryMeta[];

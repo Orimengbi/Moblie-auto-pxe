@@ -15,7 +15,7 @@ import type { AssetPartSet, Part, Ticket } from "@/lib/types";
 import { formatTime } from "@/lib/time";
 import { useCan } from "@/components/role-context";
 
-const MONO = "var(--font-geist-mono), monospace";
+const MONO = '"SF Mono", ui-monospace, var(--font-geist-mono), monospace';
 
 /** 侧边栏「工单」：这台的工单、库里能给这台用的备件，和登记装在这台上的备件。 */
 export function AssetTickets({ asset, onChanged }: { asset: { id: string; tag: string; sn: string; model: string }; onChanged?: () => void }) {

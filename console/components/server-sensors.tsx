@@ -18,7 +18,7 @@ import type { OpticsPort, OpticsReading } from "@/lib/types";
 import { formatTime } from "@/lib/time";
 import { useCan } from "@/components/role-context";
 
-const MONO = "var(--font-geist-mono), monospace";
+const MONO = '"SF Mono", ui-monospace, var(--font-geist-mono), monospace';
 
 const TABLE_SX = {
   width: "100%",

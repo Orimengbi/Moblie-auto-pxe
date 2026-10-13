@@ -10,7 +10,7 @@ import Typography from "@mui/material/Typography";
 import { ASSET_TYPES, renderTag } from "@/lib/asset-labels";
 import type { AssetType, Customer, TagSettings } from "@/lib/types";
 
-const MONO = "var(--font-geist-mono), monospace";
+const MONO = '"SF Mono", ui-monospace, var(--font-geist-mono), monospace';
 const MONO_INPUT = { "& input": { fontFamily: MONO } } as const;
 
 /** 规则说明里的占位符。 */

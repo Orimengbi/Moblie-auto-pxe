@@ -24,7 +24,7 @@ import type { BmcEvent, StreamStatus } from "@/lib/redfish-events";
 import { formatTime } from "@/lib/time";
 import { useCan } from "@/components/role-context";
 
-const MONO = "var(--font-geist-mono), monospace";
+const MONO = '"SF Mono", ui-monospace, var(--font-geist-mono), monospace';
 const PAGE = 50;
 
 function Entry({ at, severity, title, detail, hint }: { at: string; severity: string; title: string; detail: string; hint?: string }) {

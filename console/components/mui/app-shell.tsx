@@ -19,6 +19,8 @@ import Stack from "@mui/material/Stack";
 import Toolbar from "@mui/material/Toolbar";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
+import { AppIcon } from "./app-icon";
+import { GLASS } from "./theme";
 import AccountCircleOutlined from "@mui/icons-material/AccountCircleOutlined";
 import AlbumOutlined from "@mui/icons-material/AlbumOutlined";
 import AssignmentOutlined from "@mui/icons-material/AssignmentOutlined";
@@ -47,7 +49,17 @@ import { ThemeToggle } from "./theme-toggle";
 export type NavCounts = { alerts: { critical: number; warning: number }; tickets: number };
 type NavLink = { href: string; label: string; icon: SvgIconComponent; badge?: { value: number; color: "error" | "warning" | "primary" } };
 
-const DRAWER_WIDTH = 236;
+const DRAWER_WIDTH = 240;
+
+/** 侧边栏：macOS 那样的半透明灰色边栏，右边一条细线。 */
+const SIDEBAR_SX = {
+  borderRight: "1px solid",
+  borderColor: "divider",
+  bgcolor: "rgba(246, 246, 248, 0.78)",
+  backdropFilter: GLASS,
+  WebkitBackdropFilter: GLASS,
+  ".dark &": { bgcolor: "rgba(28, 28, 30, 0.78)" },
+} as const;
 
 /** 分组显示：资产运维在前，装机是其中一项功能。 */
 type ShellUser = { username: string; roleName: string; permissions: Permission[]; limited: boolean };
@@ -96,13 +108,11 @@ function groups(permissions: Permission[], counts: NavCounts): { title: string; 
 
 function Brand() {
   return (
-    <Stack direction="row" spacing={1.25} sx={{ alignItems: "center", px: 2.5, height: 64, flexShrink: 0 }}>
-      <Avatar variant="rounded" sx={{ width: 32, height: 32, bgcolor: "primary.main", color: "primary.contrastText" }}>
-        <DnsOutlined sx={{ fontSize: 18 }} />
-      </Avatar>
+    <Stack direction="row" spacing={1.25} sx={{ alignItems: "center", px: 2.25, height: 64, flexShrink: 0 }}>
+      <AppIcon size={32} />
       <Box sx={{ lineHeight: 1.2 }}>
-        <Typography sx={{ fontWeight: 600, fontSize: 15 }}>资产运维平台</Typography>
-        <Typography variant="caption" sx={{ color: "text.secondary", letterSpacing: "0.12em" }}>
+        <Typography sx={{ fontWeight: 600, fontSize: 15, letterSpacing: "-0.01em" }}>资产运维平台</Typography>
+        <Typography variant="caption" sx={{ color: "text.secondary" }}>
           资产 · 运维 · 装机
         </Typography>
       </Box>
@@ -128,7 +138,7 @@ function NavBody({ user, counts, onNavigate }: { user: ShellUser; counts: NavCou
             dense
             disablePadding
             subheader={
-              <ListSubheader disableSticky sx={{ bgcolor: "transparent", lineHeight: "32px", fontSize: 11, letterSpacing: "0.12em", px: 1.5, mt: 1 }}>
+              <ListSubheader disableSticky sx={{ bgcolor: "transparent", lineHeight: "28px", fontSize: 11, fontWeight: 600, color: "text.secondary", px: 1.25, mt: 1.5 }}>
                 {group.title}
               </ListSubheader>
             }
@@ -144,10 +154,19 @@ function NavBody({ user, counts, onNavigate }: { user: ShellUser; counts: NavCou
                   selected={active}
                   onClick={onNavigate}
                   aria-current={active ? "page" : undefined}
-                  sx={{ mb: 0.25, py: 0.75, "&.Mui-selected": { color: "primary.main", "& .MuiListItemIcon-root": { color: "primary.main" } } }}
+                  sx={{
+                    mb: 0.25,
+                    py: 0.625,
+                    px: 1.25,
+                    minHeight: 34,
+                    "& .MuiListItemIcon-root": { color: "primary.main" },
+                    "&:hover": { bgcolor: "action.hover" },
+                    // 选中项：macOS 侧边栏那样的浅色块。
+                    "&.Mui-selected, &.Mui-selected:hover": { bgcolor: "action.selected", color: "text.primary" },
+                  }}
                 >
-                  <ListItemIcon sx={{ minWidth: 34 }}>
-                    <Icon sx={{ fontSize: 20 }} />
+                  <ListItemIcon sx={{ minWidth: 32 }}>
+                    <Icon sx={{ fontSize: 19 }} />
                   </ListItemIcon>
                   <ListItemText primary={link.label} slotProps={{ primary: { sx: { fontSize: 14, fontWeight: active ? 600 : 400 } } }} />
                   {link.badge && link.badge.value > 0 ? <Badge color={link.badge.color} badgeContent={link.badge.value} max={99} sx={{ mr: 1.25 }} /> : null}
@@ -157,9 +176,9 @@ function NavBody({ user, counts, onNavigate }: { user: ShellUser; counts: NavCou
           </List>
         ))}
       </Box>
-      <Divider />
+      <Divider sx={{ mx: 2 }} />
       <Stack direction="row" spacing={1.25} sx={{ alignItems: "center", p: 2 }}>
-        <Avatar sx={(theme) => ({ width: 32, height: 32, fontSize: 13, bgcolor: "grey.200", color: "grey.800", ...theme.applyStyles("dark", { bgcolor: "grey.800", color: "grey.200" }) })}>{user.username.slice(0, 2).toUpperCase()}</Avatar>
+        <Avatar sx={{ width: 32, height: 32, fontSize: 13, fontWeight: 600, color: "#fff", background: "linear-gradient(180deg, #a1a1a6 0%, #6e6e73 100%)" }}>{user.username.slice(0, 2).toUpperCase()}</Avatar>
         <Box sx={{ minWidth: 0, flex: 1 }}>
           <Typography noWrap sx={{ fontSize: 14, fontWeight: 500 }}>
             {user.username}
@@ -208,7 +227,8 @@ export function AppShell({ user, counts: initial, children }: { user: ShellUser;
       <Box sx={{ display: "flex", minHeight: "100vh" }}>
         <Drawer
           variant="permanent"
-          sx={{ display: { xs: "none", md: "block" }, width: DRAWER_WIDTH, flexShrink: 0, "& .MuiDrawer-paper": { width: DRAWER_WIDTH, boxSizing: "border-box" } }}
+          sx={{ display: { xs: "none", md: "block" }, width: DRAWER_WIDTH, flexShrink: 0, "& .MuiDrawer-paper": { width: DRAWER_WIDTH, boxSizing: "border-box", ...SIDEBAR_SX } }}
+          slotProps={{ paper: { className: "pxe-glass" } }}
         >
           <NavBody user={user} counts={counts} />
         </Drawer>
@@ -217,23 +237,38 @@ export function AppShell({ user, counts: initial, children }: { user: ShellUser;
           open={mobileOpen}
           onClose={() => setMobileOpen(false)}
           ModalProps={{ keepMounted: true }}
-          sx={{ display: { xs: "block", md: "none" }, "& .MuiDrawer-paper": { width: DRAWER_WIDTH } }}
+          sx={{ display: { xs: "block", md: "none" }, "& .MuiDrawer-paper": { width: DRAWER_WIDTH, ...SIDEBAR_SX } }}
+          slotProps={{ paper: { className: "pxe-glass" } }}
         >
           <NavBody user={user} counts={counts} onNavigate={() => setMobileOpen(false)} />
         </Drawer>
         <Box sx={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
-          <AppBar position="sticky" color="inherit" elevation={0} sx={{ borderBottom: 1, borderColor: "divider", bgcolor: "background.default" }}>
-            <Toolbar sx={{ gap: 1, minHeight: { xs: 56 }, px: { xs: 2, md: 4 } }}>
+          <AppBar
+            position="sticky"
+            color="inherit"
+            elevation={0}
+            className="pxe-glass"
+            sx={(theme) => ({
+              borderBottom: 1,
+              borderColor: "divider",
+              // 顶栏是毛玻璃，内容从下面滚过去时透出来。
+              bgcolor: theme.alpha("#f5f5f7", 0.72),
+              backdropFilter: GLASS,
+              WebkitBackdropFilter: GLASS,
+              ...theme.applyStyles("dark", { bgcolor: theme.alpha("#000000", 0.66) }),
+            })}
+          >
+            <Toolbar sx={{ gap: 1, minHeight: { xs: 52 }, px: { xs: 2, md: 4 } }}>
               <IconButton edge="start" onClick={() => setMobileOpen(true)} sx={{ display: { md: "none" } }} aria-label="打开导航">
                 <MenuOutlined />
               </IconButton>
-              <Typography sx={{ display: { md: "none" }, fontWeight: 600 }}>资产运维平台</Typography>
+              <Typography sx={{ display: { md: "none" }, fontWeight: 600, letterSpacing: "-0.01em" }}>资产运维平台</Typography>
               <Box sx={{ flex: 1 }} />
               <TaskCenter />
               <ThemeToggle />
             </Toolbar>
           </AppBar>
-          <Box component="main" sx={{ flex: 1, width: "100%", maxWidth: 1600, mx: "auto", px: { xs: 2, md: 4 }, py: { xs: 3, md: 3.5 } }}>
+          <Box component="main" sx={{ flex: 1, width: "100%", maxWidth: 1600, mx: "auto", px: { xs: 2, md: 4 }, py: { xs: 3, md: 4 } }}>
             {children}
           </Box>
         </Box>
