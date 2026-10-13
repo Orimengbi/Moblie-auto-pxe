@@ -325,6 +325,33 @@ export function rbuTrailer(file: string): { ok: boolean; checksumLow: number } {
 
 const PLDM_UUIDS = new Set(["f018878ccb7d49439800a02f059aca02", "1244d2648d7d4718a030fc8a56587d5a", "3119ce2fe80a4a99af6d46f8b121f6bf", "7b291c996db64208801b02026e463c78"]);
 
+/**
+ * NVIDIA HGX 包里设备记录的名字（ComponentImageSetVersionString）是「类型[,类型]:SKU:」，如 ERoT,NVSwitch:NVD0000000113:、GPU:PG540_SKU216:。
+ * 按类型起中文名，并对上 HGX 固件清单里的项（在 B300 机器上逐项核对过版本）。SMA 有两种：NV0004 管 SXM（GPU 板），NV000B 管 ConnectX。
+ */
+const HGX_PARTS: { type: RegExp; sku?: RegExp; name: string; inventory: string }[] = [
+  { type: /^ERoT$/i, name: "ERoT 安全芯片", inventory: "^HGX_FW_ERoT_" },
+  { type: /^HMC$/i, name: "HMC（底板管理控制器）", inventory: "^HGX_FW_(BMC|HMC)_\\d+$" },
+  { type: /^FPGA$/i, name: "FPGA", inventory: "^HGX_FW_FPGA_\\d+$" },
+  { type: /^NVSwitch$/i, name: "NVSwitch", inventory: "^HGX_FW_NVSwitch_\\d+$" },
+  { type: /^GPU$/i, name: "GPU VBIOS", inventory: "^HGX_FW_GPU_\\d+$" },
+  { type: /^CX8$/i, name: "ConnectX-8 网卡", inventory: "^HGX_FW_ConnectX_\\d+$" },
+  { type: /^CX7$/i, name: "ConnectX-7（NVLink 管理网卡）", inventory: "^HGX_FW_NVLinkManagementNIC_\\d+$" },
+  { type: /^SMA$/i, sku: /^NV0004$/i, name: "SMA（SXM）", inventory: "^HGX_FW_SXM_SMA_\\d+$" },
+  { type: /^SMA$/i, sku: /^NV000B$/i, name: "SMA（ConnectX）", inventory: "^HGX_FW_ConnectX_SMA_\\d+$" },
+];
+
+/** 一个部件的名字：被几种设备共用的（ERoT）取它们共有的类型；只属于一种设备的取这个设备最后一个类型，再带上 SKU。 */
+function pldmComponentName(devices: { types: string[]; sku: string }[]): Pick<FirmwareComponent, "name" | "inventory" | "sku"> {
+  if (!devices.length) return { name: "" };
+  const shared = devices[0].types.filter((type) => devices.every((device) => device.types.includes(type)));
+  const type = devices.length > 1 ? shared[0] || "" : devices[0].types.at(-1) || "";
+  const sku = devices.length === 1 ? devices[0].sku : "";
+  const known = HGX_PARTS.find((part) => part.type.test(type) && (!part.sku || part.sku.test(sku)));
+  const label = known?.name || type;
+  return { name: sku && !label.includes("（") ? `${label}（${sku}）` : label, ...(known ? { inventory: known.inventory } : {}), ...(sku ? { sku } : {}) };
+}
+
 export interface PldmPackage {
   version: string;
   releaseDate: string;
@@ -355,6 +382,8 @@ export function parsePldm(file: string): PldmPackage | null {
     let at = 36 + buffer[35];
     const descriptors: string[] = [];
     const ianaIds: number[] = [];
+    const bitmapBytes = Math.ceil(bitmapBits / 8);
+    const devices: { types: string[]; sku: string; components: number[] }[] = [];
     const readRecords = (withDescriptors: boolean) => {
       const count = buffer[at];
       at += 1;
@@ -363,7 +392,14 @@ export function parsePldm(file: string): PldmPackage | null {
         if (withDescriptors) {
           const descriptorCount = buffer[at + 2];
           const versionLength = buffer[at + 8];
-          let d = at + 11 + Math.ceil(bitmapBits / 8) + versionLength;
+          const bitmap = buffer.subarray(at + 11, at + 11 + bitmapBytes);
+          const [typeText = "", sku = ""] = pldmString(buffer, buffer[at + 7], at + 11 + bitmapBytes, versionLength).split(":");
+          devices.push({
+            types: typeText.split(",").map((type) => type.trim()).filter(Boolean),
+            sku: sku.trim(),
+            components: [...Array(bitmapBits).keys()].filter((bit) => (bitmap[bit >> 3] >> (bit & 7)) & 1),
+          });
+          let d = at + 11 + bitmapBytes + versionLength;
           for (let k = 0; k < descriptorCount && d + 4 <= at + recordLength; k++) {
             const type = buffer.readUInt16LE(d);
             const length = buffer.readUInt16LE(d + 2);
@@ -390,7 +426,8 @@ export function parsePldm(file: string): PldmPackage | null {
       const identifier = buffer.readUInt16LE(at + 2);
       const versionType = buffer[at + 20];
       const versionLength = buffer[at + 21];
-      components.push({ name: `部件 0x${identifier.toString(16).padStart(4, "0")}`, version: pldmString(buffer, versionType, at + 22, versionLength) });
+      const named = pldmComponentName(devices.filter((device) => device.components.includes(index)));
+      components.push({ ...named, name: named.name || `部件 0x${identifier.toString(16).padStart(4, "0")}`, version: pldmString(buffer, versionType, at + 22, versionLength) });
       at += 22 + versionLength;
       if (formatRevision >= 4) at += 4 + buffer.readUInt32LE(at);
     }
@@ -426,8 +463,11 @@ export function compareVersions(current: string, target: string): VersionRelatio
   const b = target.trim();
   if (!a || !b) return "unknown";
   if (a.toLowerCase() === b.toLowerCase()) return "same";
-  const x = versionNumbers(a);
-  const y = versionNumbers(b);
+  // GPU VBIOS 这种 97.10.7E.00.03 每段是十六进制，按十进制取数字会把 7E 当成 7。
+  const hex = /^[0-9a-f]+(\.[0-9a-f]+)+$/i;
+  const hexy = hex.test(a) && hex.test(b) && /[a-f]/i.test(a + b);
+  const x = hexy ? a.split(".").map((part) => parseInt(part, 16)) : versionNumbers(a);
+  const y = hexy ? b.split(".").map((part) => parseInt(part, 16)) : versionNumbers(b);
   if (!x.length || !y.length) return "unknown";
   for (let index = 0; index < Math.max(x.length, y.length); index++) {
     const p = x[index] ?? -1;
@@ -555,7 +595,8 @@ export async function analyzeTree(root: string, fileName: string, knownModels: s
     const found = new Set<string>();
     for (const image of images.filter((item) => item.type !== "tool")) for (const model of modelsInFile(path.join(root, image.path), knownModels)) found.add(model);
     models = [...found];
-    if (!models.length) warnings.push("认不出适用的机型，请手动填写");
+    // HGX 包不写整机型号，按 GPU 板卡 SKU 在机群里找（firmware-lib 里补）。
+    if (!models.length && !components.some((item) => item.sku && /GPU/i.test(item.name))) warnings.push("认不出适用的机型，请手动填写");
   }
 
   const version = notes?.version || pldm?.version || versionFromName(fileName);

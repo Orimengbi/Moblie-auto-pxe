@@ -143,6 +143,9 @@ test("versions compare by their numbers", () => {
   assert.equal(pkgs.compareVersions("r07_f05", "R07_F05"), "same");
   assert.equal(pkgs.compareVersions("13.06.27", "13.06.26"), "newer");
   assert.equal(pkgs.compareVersions("", "R07"), "unknown");
+  // GPU VBIOS 每段是十六进制：52 比 7E 小。
+  assert.equal(pkgs.compareVersions("97.10.52.00.17", "97.10.7E.00.03"), "older");
+  assert.equal(pkgs.compareVersions("97.10.7e.00.03", "97.10.7E.00.03"), "same");
   assert.equal(pkgs.versionFromName("MZB3-PE2_R07_F05.zip"), "R07_F05");
   assert.equal(pkgs.versionFromName("G894_BMC_13.06.27.zip"), "13.06.27");
 });
@@ -168,7 +171,8 @@ test("PLDM fwpkg header gives the package and component versions", () => {
   top[35] = version.length;
   header.push(top, version);
   // 一条设备记录：IANA 5703 + 厂商自定义 APSKU。
-  const setVersion = Buffer.from("set-1");
+  // 设备名是「类型:SKU:」，部件按它起名、对上 HGX 固件清单。
+  const setVersion = Buffer.from("GPU:PG540_SKU216:");
   const iana = Buffer.alloc(8);
   iana.writeUInt16LE(0x0001, 0);
   iana.writeUInt16LE(4, 2);
@@ -197,7 +201,7 @@ test("PLDM fwpkg header gives the package and component versions", () => {
   assert.equal(parsed.releaseDate, "2026-09-01");
   assert.deepEqual(parsed.ianaIds, [5703]);
   assert.deepEqual(parsed.descriptors, ["APSKU=B300"]);
-  assert.deepEqual(parsed.components, [{ name: "部件 0x0010", version: "GPU-FW 96.00.AB" }]);
+  assert.deepEqual(parsed.components, [{ name: "GPU VBIOS（PG540_SKU216）", version: "GPU-FW 96.00.AB", inventory: "^HGX_FW_GPU_\\d+$", sku: "PG540_SKU216" }]);
 });
 
 async function uploadBuffer(name: string, data: Buffer) {

@@ -24,6 +24,10 @@ export interface FirmwareImage {
 export interface FirmwareComponent {
   name: string;
   version: string;
+  /** 机器固件清单（Redfish FirmwareInventory）里对应项的 Id，正则，如 ^HGX_FW_GPU_\d+$。没有就没法跟机器比。 */
+  inventory?: string;
+  /** 板卡 SKU，如 GPU 的 PG540_SKU216，用来认适用的机器。 */
+  sku?: string;
 }
 
 export interface FirmwareChecksum {

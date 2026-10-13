@@ -78,12 +78,64 @@ function firmwareOf(assetId: string, cache: FirmwareCache): FirmwareItem[] | nul
   return cache.get(assetId)!;
 }
 
+/** GPU 板卡 SKU 对 HGX 固件清单里的 InfoROM：包里写 PG540_SKU216，机器上 HGX_InfoROM_GPU_n 是 G540.0216.00.03。 */
+function gpuBoardMatches(items: FirmwareItem[] | null, sku: string): boolean {
+  const found = /^PG(\d+)_SKU(\d+)$/i.exec(sku);
+  if (!found || !items) return false;
+  const prefix = `G${found[1]}.${found[2].padStart(4, "0")}.`.toLowerCase();
+  return items.some((item) => /^HGX_InfoROM_GPU_/i.test(item.id) && item.version.toLowerCase().startsWith(prefix));
+}
+
+function gpuSku(pkg: { components: FirmwarePackage["components"] }): string {
+  return pkg.components.find((item) => item.sku && /^\^HGX_FW_GPU_/.test(item.inventory || ""))?.sku || "";
+}
+
+/** HGX 包没写整机型号：读过固件清单、GPU 板卡 SKU 对得上的机器是哪些型号。 */
+function modelsByGpuSku(sku: string): string[] {
+  const cache: FirmwareCache = new Map();
+  const models = new Set<string>();
+  for (const asset of listAssets()) if (asset.type === "server" && asset.model && gpuBoardMatches(firmwareOf(asset.id, cache), sku)) models.add(asset.model);
+  return [...models];
+}
+
+/**
+ * HGX 包逐个部件跟机器固件清单比：每个部件对上清单里的几项（8 块 GPU 就是 8 项），
+ * 有一项比包旧就算可升级。版本一栏列出跟包不一样的部件。
+ */
+function hgxRelation(pkg: FirmwarePackage, items: FirmwareItem[]): { version: string; relation: FirmwareFleetMachine["relation"] } {
+  const differ: string[] = [];
+  const relations = new Set<string>();
+  for (const [name, group] of Map.groupBy(pkg.components.filter((item) => item.inventory), (item) => item.name.replace(/（.*）$/, "") + (item.inventory || ""))) {
+    const pattern = new RegExp(group[0].inventory!, "i");
+    const versions = group.map((item) => item.version);
+    const found = items.filter((item) => pattern.test(item.id) && item.version);
+    if (!found.length) continue;
+    const odd = found.filter((item) => !versions.some((version) => compareVersions(item.version, version) === "same"));
+    for (const item of found) relations.add(odd.includes(item) ? compareVersions(item.version, versions[0]) : "same");
+    if (odd.length) {
+      const label = group[0].name.replace(/（[^）]*\d[^）]*）$/, "");
+      const values = [...new Set(odd.map((item) => item.version))].join("、");
+      differ.push(`${label || name} ${values}${found.length > 1 ? `（${odd.length}/${found.length}）` : ""}`);
+    }
+  }
+  if (!relations.size) return { version: "", relation: "unknown" };
+  const relation = relations.has("older") ? "older" : relations.has("unknown") ? "unknown" : relations.has("newer") ? "newer" : "same";
+  return { version: differ.length ? differ.join("；") : "各部件和包一致", relation };
+}
+
 function fleetMachines(pkg: FirmwarePackage, assets: Asset[], cache: FirmwareCache): FirmwareFleetMachine[] {
   const matches = modelMatcher(pkg.models);
   const inventoryId = INVENTORY_ID[pkg.kind] || "";
+  const hgx = pkg.kind === "hgx" && pkg.components.some((item) => item.inventory);
+  const sku = hgx ? gpuSku(pkg) : "";
   return assets
-    .filter((asset) => asset.type === "server" && matches(asset.model))
+    .filter((asset) => asset.type === "server" && (matches(asset.model) || (sku !== "" && !pkg.models.length && gpuBoardMatches(firmwareOf(asset.id, cache), sku))))
     .map((asset) => {
+      if (hgx) {
+        const items = firmwareOf(asset.id, cache);
+        const compared = items ? hgxRelation(pkg, items) : { version: "", relation: "unread" as const };
+        return { id: asset.id, tag: asset.tag, sn: asset.sn, hostname: asset.hostname, bmcIp: asset.bmcIp, ...compared };
+      }
       const items = inventoryId ? firmwareOf(asset.id, cache) : null;
       const version = items?.find((item) => item.id === inventoryId)?.version ?? "";
       return {
@@ -112,7 +164,7 @@ function summarize(pkg: FirmwarePackage, machines: FirmwareFleetMachine[], asset
     unread: machines.filter((machine) => machine.relation === "unread").length,
     upgradable: machines.filter((machine) => machine.relation === "older").length,
     versions: [...counts.values()].sort((a, b) => b.count - a.count),
-    inventoryId: INVENTORY_ID[pkg.kind] || "",
+    inventoryId: INVENTORY_ID[pkg.kind] || (pkg.kind === "hgx" && pkg.components.some((item) => item.inventory) ? "HGX_FW_*" : ""),
     models: pkg.models.filter((model) => {
       const matches = modelMatcher([model]);
       return [...fleetModels].some((name) => matches(name));
@@ -223,7 +275,13 @@ async function unpackAndAnalyze(dir: string, fileName: string) {
     fs.linkSync(original, path.join(unpacked, fileName));
   }
   await extractNested(unpacked);
-  return analyzeTree(unpacked, fileName, knownModels());
+  const found = await analyzeTree(unpacked, fileName, knownModels());
+  const sku = found.kind === "hgx" && !found.models.length ? gpuSku(found) : "";
+  if (sku) {
+    found.models = modelsByGpuSku(sku);
+    if (!found.models.length) found.warnings.push(`按 GPU 板卡 ${sku} 在机群里没找到机器（要先读过固件版本），请手动填适用型号`);
+  }
+  return found;
 }
 
 async function createPackage(file: string, fileName: string, user: string): Promise<FirmwarePackage> {
