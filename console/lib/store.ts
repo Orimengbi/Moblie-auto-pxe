@@ -1955,7 +1955,18 @@ export function writeTask(task: RemoteTask): void {
   writeJson(taskPath(task.id), task);
 }
 
+declare global {
+  var pxeBootId: string | undefined;
+}
+
+/** 这次控制台进程的标记。放在 globalThis 上，Next 把模块打进几个包时也是同一个。 */
+export function consoleBootId(): string {
+  globalThis.pxeBootId ||= crypto.randomUUID();
+  return globalThis.pxeBootId;
+}
+
 function runnerAlive(task: RemoteTask): boolean {
+  if (task.runnerBoot) return task.runnerBoot === consoleBootId();
   const pid = task.runnerPid;
   // 进程刚拉起来、还没写回自己的 pid 时，先当它活着。
   if (!pid) return Date.now() - Date.parse(task.createdAt) < 60000;

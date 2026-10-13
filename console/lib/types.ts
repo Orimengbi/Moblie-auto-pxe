@@ -325,7 +325,8 @@ export const DEFAULT_STATE: ApplianceState = {
   },
 };
 
-export type TaskKind = "script" | "revoke" | "inventory" | "bmc-reset" | "bmc-clock" | "bmc-logs" | "bmc-user";
+/** firmware-push 不是从任务接口建的：固件页推送时顺带建一条，进度从推送那边同步过来（firmware-push.ts）。 */
+export type TaskKind = "script" | "revoke" | "inventory" | "bmc-reset" | "bmc-clock" | "bmc-logs" | "bmc-user" | "firmware-push";
 /** 重启 BMC 的方式：outband 经 BMC 网口发 IPMI，inband SSH 进系统用系统里的 ipmitool 发。 */
 export type BmcResetVia = "outband" | "inband";
 export type TaskStatus = "running" | "done";
@@ -358,6 +359,8 @@ export interface RemoteTask {
   timeoutSec: number;
   status: TaskStatus;
   runnerPid?: number;
+  /** 在控制台进程里跑的任务（固件推送）记控制台这次启动的标记；控制台重启后对不上，就当没人跟了。容器里重启后 pid 常常一样，不能用 pid 判断。 */
+  runnerBoot?: string;
   targets: TaskTarget[];
   /** 采集硬件任务读哪几边。旧任务没有这一项。 */
   inventorySources?: InventorySource[];

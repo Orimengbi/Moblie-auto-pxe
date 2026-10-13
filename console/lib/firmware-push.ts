@@ -1,14 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
-import { addEvent } from "./assets.ts";
+import { addEvent, getAsset } from "./assets.ts";
 import { assetSession, pushUpdate, readTask, updateProgress, type BmcSession } from "./bmc-redfish.ts";
 import type { FirmwarePushJob } from "./firmware-types.ts";
 import { dataDir } from "./paths.ts";
+import { consoleBootId, getTask, writeTask } from "./store.ts";
+import type { RemoteTask, TaskTargetStatus } from "./types.ts";
 
 /**
  * 从固件库推固件给 BMC 刷，在控制台后台跑：腾内存 → 上传 → BMC 校验 → 跟着 BMC 的刷写任务直到结束。
  * 页面点了开始马上返回，进度存在 data/redfish/assets/<id>/firmware-push.json，关了窗口、换个人打开都看得到。
  * HGX 全量升级要三四十分钟，期间主机断电重启两次、BMC 时不时连不上，读不到进度就接着等。
+ * 每次推送同时在右上角「任务」里建一条「固件升级」任务，进度跟着同步过去。
  */
 
 /** 每台只留最近一次。 */
@@ -21,6 +24,70 @@ function save(job: FirmwarePushJob): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(`${file}.tmp`, JSON.stringify({ ...job, updatedAt: new Date().toISOString() }));
   fs.renameSync(`${file}.tmp`, file);
+  syncTask(job);
+}
+
+const MB = 1024 * 1024;
+
+/** 任务页里这台的输出：现在到哪一步、进度、BMC 说的话。 */
+export function pushSummary(job: FirmwarePushJob, now = Date.now()): string {
+  const lines = [`推送 ${job.kind} ${job.version}（${job.fileName}）`];
+  const flashing = () => {
+    const percent = job.percent ?? job.bmcPercent;
+    const minutes = job.flashAt ? Math.max(0, Math.floor((now - Date.parse(job.flashAt)) / 60_000)) : null;
+    return [percent === null || percent === undefined ? "" : `${percent}%`, job.bmcStatus || job.taskState, minutes === null ? "" : `已刷 ${minutes} 分钟`].filter(Boolean).join("，");
+  };
+  const stage = {
+    prepare: "让 BMC 腾内存",
+    upload: `上传镜像 ${job.total ? Math.floor((job.sent / job.total) * 100) : 0}%（${Math.round(job.sent / MB)}/${Math.round(job.total / MB)} MB）`,
+    verify: "镜像传完，BMC 在校验",
+    flash: `BMC 在刷写（${flashing() || "等 BMC 报进度"}）`,
+    done: "刷写完成",
+    failed: "失败",
+  }[job.stage];
+  lines.push(`阶段：${stage}`);
+  if (job.error) lines.push(job.error);
+  if (job.messages.length) lines.push(...job.messages.map((message) => `BMC：${message}`));
+  return `${lines.join("\n")}\n`;
+}
+
+const TARGET_STATUS: Record<FirmwarePushJob["stage"], TaskTargetStatus> = { prepare: "running", upload: "running", verify: "running", flash: "running", done: "ok", failed: "failed" };
+
+/** 推送的进度写到对应的任务里。任务被删了就不写。 */
+function syncTask(job: FirmwarePushJob): void {
+  if (!job.taskId) return;
+  const task = getTask(job.taskId);
+  if (!task) return;
+  const target = task.targets[0];
+  const finished = job.stage === "done" || job.stage === "failed";
+  target.status = TARGET_STATUS[job.stage];
+  target.exitCode = job.stage === "done" ? 0 : null;
+  target.output = pushSummary(job);
+  if (finished) target.finishedAt = job.finishedAt || new Date().toISOString();
+  task.status = finished ? "done" : "running";
+  if (finished) task.finishedAt = target.finishedAt;
+  writeTask(task);
+}
+
+/** 建「固件升级」任务，一台一条。 */
+function createPushTask(job: FirmwarePushJob): RemoteTask {
+  const asset = getAsset(job.assetId);
+  const task: RemoteTask = {
+    id: crypto.randomUUID(),
+    projectId: "",
+    kind: "firmware-push",
+    name: `固件升级 ${job.kind} ${job.version}`.slice(0, 80),
+    script: "",
+    fileIds: [],
+    concurrency: 1,
+    timeoutSec: FOLLOW_MS / 1000,
+    status: "running",
+    runnerBoot: consoleBootId(),
+    targets: [{ serverId: job.assetId, sn: asset?.sn || job.assetId, host: asset?.bmcIp || "", hostSource: "", status: "running", exitCode: null, output: pushSummary(job), startedAt: job.startedAt }],
+    createdAt: job.startedAt,
+  };
+  writeTask(task);
+  return task;
 }
 
 /** 这个进程里正在跟的。控制台重启后文件里还写着在跑，但已经没人跟了。 */
@@ -99,6 +166,7 @@ export async function startPush(
     error: "",
   };
   running.add(assetId);
+  job.taskId = createPushTask(job).id;
   save(job);
   void follow(job, input, session, deps.sleep || ((ms) => new Promise((resolve) => setTimeout(resolve, ms))), deps.now || Date.now).finally(() => running.delete(assetId));
   return job;
