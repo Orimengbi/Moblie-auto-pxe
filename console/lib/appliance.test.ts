@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,7 +13,8 @@ import { ipmiFailure, parseIpmiUserList, setBootDevice } from "./ipmi-remote.ts"
 import { parseServerTable } from "./server-sheet.ts";
 import { menuFor, serialProbe } from "./boot.ts";
 import { createTask, resolveHost, runTask, type Exec } from "./remote.ts";
-import { UploadConflict, appendUpload, assertUploadFits, discardUpload, listUploadSessions, openUpload } from "./uploads.ts";
+import { UploadConflict, appendUpload, assertExtractFits, assertUploadFits, discardUpload, extractKind, listUploadSessions, openUpload, queuedExtractBytes } from "./uploads.ts";
+import { acquireExtractLock } from "./extract-queue.ts";
 import { applyHostname, normalizeMac } from "./net.ts";
 import {
   renderDebianPreseed,
@@ -948,8 +949,56 @@ test("power and boot device go to the BMC with the account it accepts now", asyn
 
 test("uploads are refused when the data disk cannot hold them", () => {
   const GB = 1024 ** 3;
-  assertUploadFits(5 * GB, [], 8 * GB);
-  assert.throws(() => assertUploadFits(7 * GB, [], 8 * GB), /空间不够.*只剩 8\.0 GB/);
-  const pending = [{ size: 4 * GB, offset: 1 * GB }] as Parameters<typeof assertUploadFits>[1];
-  assert.throws(() => assertUploadFits(4 * GB, pending, 8 * GB), /其他没传完的上传还要 3\.0 GB/);
+  // 网络安装 ISO 按 2 倍峰值估：3 GB × 2 + 2 GB 余量 = 8 GB
+  assertUploadFits(3 * GB, [], 8 * GB);
+  assert.throws(() => assertUploadFits(4 * GB, [], 8 * GB), /空间不够.*峰值约 2 倍要 8\.0 GB.*只剩 8\.0 GB/);
+  const pending = [{ size: 4 * GB, offset: 3 * GB }] as Parameters<typeof assertUploadFits>[1];
+  assert.throws(() => assertUploadFits(3 * GB, pending, 8 * GB), /其他没传完的上传还要 1\.0 GB/);
+  // 整盘镜像按 2.4 倍：5 GB × 2.4 + 2 = 14 GB
+  assertUploadFits(5 * GB, [], 14 * GB, "disk");
+  assert.throws(() => assertUploadFits(5 * GB, [], 13.9 * GB, "disk"), /峰值约 2\.4 倍/);
+  assert.equal(extractKind("a.img.zst"), "disk");
+  assert.equal(extractKind("a.iso.xz"), "tree");
+});
+
+test("uploads count the space queued extract jobs will still need", () => {
+  const GB = 1024 ** 3;
+  const images = [
+    { status: "extracting", filename: "a.iso", size: 4 * GB },
+    { status: "extracting", filename: "b.img.zst", size: 5 * GB },
+    { status: "ready", filename: "c.iso", size: 9 * GB },
+  ] as ImageRecord[];
+  assert.equal(queuedExtractBytes(images), 4 * GB + 7 * GB);
+  assertUploadFits(3 * GB, [], 19 * GB, "tree", 11 * GB);
+  assert.throws(() => assertUploadFits(3 * GB, [], 18.9 * GB, "tree", 11 * GB), /排队解包的镜像还要 11\.0 GB/);
+});
+
+test("extract jobs queue on one lock and steal it from dead owners", async () => {
+  const lock = path.join(temp, "extract.lock");
+  fs.mkdirSync(lock);
+  fs.writeFileSync(path.join(lock, "owner.json"), JSON.stringify({ pid: 999999, id: "dead" }));
+  acquireExtractLock("first", () => {});
+  assert.equal(JSON.parse(fs.readFileSync(path.join(lock, "owner.json"), "utf8")).pid, process.pid);
+
+  // 活着的解包任务拿着锁：等它退出才轮到。
+  const holder = spawn(process.execPath, ["-e", "setTimeout(() => {}, 1200)", "extract-iso"]);
+  fs.writeFileSync(path.join(lock, "owner.json"), JSON.stringify({ pid: holder.pid, id: "busy" }));
+  const exited = new Promise((resolve) => holder.on("exit", resolve));
+  const lines: string[] = [];
+  const started = Date.now();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  acquireExtractLock("second", (line) => lines.push(line), 100);
+  assert.ok(Date.now() - started >= 1000);
+  assert.match(lines[0], /等前面的镜像解包完（busy）/);
+  await exited;
+  fs.rmSync(lock, { recursive: true, force: true });
+});
+
+test("extract is refused when the peak would fill the data disk", () => {
+  const GB = 1024 ** 3;
+  // 源文件已经在盘上，只看额外的：ISO 再 1 份，整盘再 1.4 份，都加 2 GB 余量
+  assertExtractFits("tree", 6 * GB, 8 * GB);
+  assert.throws(() => assertExtractFits("tree", 6.5 * GB, 8 * GB), /还要再占 6\.5 GB.*只剩 8\.0 GB/);
+  assertExtractFits("disk", 10 * GB, 16 * GB);
+  assert.throws(() => assertExtractFits("disk", 10 * GB, 15.9 * GB), /峰值约 2\.4 倍.*还要再占 14\.0 GB/);
 });

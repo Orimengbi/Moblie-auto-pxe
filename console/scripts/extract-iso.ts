@@ -5,6 +5,8 @@ import { decompressIso, extractFile, extractTree, inspectIso } from "../lib/iso.
 import { ISO_SUFFIXES } from "../lib/iso-name.ts";
 import { imageDir } from "../lib/paths.ts";
 import { getImage, writeImage } from "../lib/store.ts";
+import { assertExtractFits } from "../lib/uploads.ts";
+import { acquireExtractLock } from "../lib/extract-queue.ts";
 
 const id = process.argv[2];
 if (!id) {
@@ -32,6 +34,9 @@ function readHead(file: string): Buffer {
 }
 
 try {
+  acquireExtractLock(id, (line) => console.log(line));
+  // 排队时可能已经被删了
+  if (!getImage(id)) process.exit(0);
   for (const suffix of ISO_SUFFIXES) {
     const packed = path.join(imageDir(id), `source${suffix}`);
     if (suffix === ".iso" || !fs.existsSync(packed)) continue;
@@ -41,6 +46,7 @@ try {
     writeImage({ ...getImage(id)!, size: fs.statSync(isoPath).size });
   }
   if (looksLikeDiskImage(readHead(isoPath))) {
+    assertExtractFits("disk", fs.statSync(isoPath).size);
     const imported = importDiskImage(imageDir(id), isoPath, (line) => console.log(line));
     writeImage({
       ...getImage(id)!,
@@ -62,6 +68,7 @@ try {
   extractFile(isoPath, detected.kernel, path.join(imageDir(id), "vmlinuz"));
   extractFile(isoPath, detected.initrd, path.join(imageDir(id), "initrd"));
   if (detected.explode) {
+    assertExtractFits("tree", fs.statSync(isoPath).size);
     console.log("展开安装树");
     extractTree(isoPath, path.join(imageDir(id), "tree"));
   }
