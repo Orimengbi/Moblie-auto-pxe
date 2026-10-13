@@ -3,6 +3,7 @@ import test from "node:test";
 import { INVENTORY_SCRIPT, parseOsInventory, splitSections } from "./inventory.ts";
 import { portSummary, redfishPorts } from "./ports.ts";
 import type { RedfishRaw } from "./redfish.ts";
+import type { HwComponent, HwPort } from "./types.ts";
 
 /** 一台机器的接口：两个 PCIe 槽一个插着网卡、一个空着，一个 M.2 槽装着 NVMe，背板 4 个盘位装了 1 块，板载 SATA 2 个口，一个 U.2 热插拔盘位。 */
 const OUTPUT = `
@@ -238,6 +239,16 @@ test("older collections without the port sections still parse", () => {
 
 test("maps Redfish slots, drives and adapter ports", () => {
   const raw = {
+    processors: [
+      { "@odata.id": "/c/0", Id: "CPU0", Socket: "CPU0", ProcessorType: "CPU", Model: "Xeon 8480", TotalCores: 56, Status: { State: "Enabled" } },
+      { "@odata.id": "/c/1", Id: "CPU1", Socket: "CPU1", ProcessorType: "CPU", Status: { State: "Absent" } },
+      { "@odata.id": "/c/g", Id: "GPU_0", ProcessorType: "GPU", Model: "B300", Status: { State: "Enabled" } },
+    ],
+    memory: [
+      { "@odata.id": "/m/0", Id: "DIMM_A0", DeviceLocator: "DIMM_A0", PartNumber: "M321", CapacityMiB: 65536, MemoryDeviceType: "DDR5", BaseModuleType: "RDIMM", Status: { State: "Enabled" } },
+      { "@odata.id": "/m/1", Id: "DIMM_A1", DeviceLocator: "DIMM_A1", BaseModuleType: "RDIMM", Status: { State: "Absent" } },
+      { "@odata.id": "/m/g", Id: "GPU_0_DRAM_0", CapacityMiB: 275040, MemoryDeviceType: "HBM", Status: { State: "Enabled" } },
+    ],
     pcieDevices: [{ "@odata.id": "/redfish/v1/Chassis/Self/PCIeDevices/00_41_00", Id: "00_41_00", Name: "ConnectX-7" }],
     pcieSlots: [
       {
@@ -262,6 +273,10 @@ test("maps Redfish slots, drives and adapter ports", () => {
   assert.deepEqual(
     ports.map((port) => [port.group, port.name, port.type, port.used, port.device]),
     [
+      ["cpu", "CPU0", "", true, "Xeon 8480"],
+      ["cpu", "CPU1", "", false, ""],
+      ["memory", "DIMM_A0", "DDR5 RDIMM", true, "M321 64 GB"],
+      ["memory", "DIMM_A1", "RDIMM", false, ""],
       ["pcie", "Slot 1", "PCIe Gen5 x16 FullLength", true, "ConnectX-7"],
       ["pcie", "Slot 2", "PCIe Gen5 x16", false, ""],
       ["drive", "Disk Bay 0", "SAS", true, "ST4000NM 4001 GB"],
@@ -270,8 +285,8 @@ test("maps Redfish slots, drives and adapter ports", () => {
       ["net", "ConnectX-7 口 2", "", false, ""],
     ],
   );
-  assert.equal(ports[4].speed, "100G");
-  assert.equal(ports[4].mac, "74:25:54:00:00:01");
+  assert.equal(ports[8].speed, "100G");
+  assert.equal(ports[8].mac, "74:25:54:00:00:01");
 });
 
 test("NVMe and M.2 slots from the BMC count as drive bays and carry their drive (Gigabyte G894)", () => {
@@ -286,6 +301,8 @@ test("NVMe and M.2 slots from the BMC count as drive bays and carry their drive 
   // 和真机一样：Id 是 NVMe0_NameSpace1 这种，总线编号在 Name 里。
   const drive = (driveId: string, model: string, bytes: number) => ({ "@odata.id": `/redfish/v1/Systems/Self/Storage/S/Drives/${driveId}`, Id: `NVMe${driveId.slice(3, 5)}_NameSpace1`, Name: driveId, Model: model, CapacityBytes: bytes, Protocol: "NVMe", Status: { State: "Enabled" } });
   const raw = {
+    processors: [],
+    memory: [],
     pcieDevices: [device("00_2D_00", "NVMe DC SSD [Atomos Prime]"), device("00_33_00", "ConnectX-7"), device("00_51_00", "ASM1166"), device("00_54_00", "SSSTC NVMe")],
     pcieSlots: [{ "@odata.id": "/redfish/v1/Chassis/Self/PCIeSlots", Id: "PCIeSlots", Slots: [slot("SLOT1", 16, ["00_33_00"]), slot("P0_M.2", 32, ["00_51_00", "00_54_00"]), slot("NVME3", 4, ["00_2D_00"]), slot("NVME7", 4, [])] }],
     drives: [drive("00_2D_00_00", "SOLIDIGM SB5PH27X076T", 7681501126656), drive("00_54_00_00", "SSSTC CA6-8D1024", 1024209543168), drive("00_99_00_00", "Other", 1e12)],
@@ -303,23 +320,109 @@ test("NVMe and M.2 slots from the BMC count as drive bays and carry their drive 
   );
 });
 
-test("parts are located in the slot or bay they sit in", async () => {
-  const { partLocations } = await import("./ports.ts");
-  const gpu = { kind: "gpu" as const, slot: "0000:06:00.0", model: "B300", vendor: "", sn: "", firmware: "", attrs: { index: 0 } };
-  const nic = { kind: "nic" as const, slot: "eth_p1_r1", model: "CX8", vendor: "", sn: "", firmware: "", attrs: { pci: "0000:03:00.0" } };
-  const disk = { kind: "disk" as const, slot: "nvme1n1", model: "SOLIDIGM", vendor: "", sn: "", firmware: "", attrs: {} };
-  const old = { kind: "disk" as const, slot: "nvme2n1", model: "SOLIDIGM", vendor: "", sn: "", firmware: "", attrs: {} };
-  const loose = { kind: "disk" as const, slot: "nvme0n1", model: "SSSTC", vendor: "", sn: "", firmware: "", attrs: {} };
-  const found = partLocations([gpu, nic, disk, old, loose], [
+test("interfaces list the parts plugged into them", async () => {
+  const { interfaceView } = await import("./ports.ts");
+  const part = (kind: HwComponent["kind"], slot: string, attrs: HwComponent["attrs"] = {}): HwComponent => ({ kind, slot, model: slot, vendor: "", sn: "", firmware: "", attrs });
+  const gpu = part("gpu", "0000:06:00.0");
+  const nic = part("nic", "eth_p1_r1", { pci: "0000:03:00.0" });
+  const disk = part("disk", "nvme1n1");
+  const old = part("disk", "nvme2n1");
+  const loose = part("disk", "nvme0n1");
+  const mezz = part("nic", "ib0", { pci: "0000:d9:00.0" });
+  const cpu = part("cpu", "P0");
+  const dimm = part("memory", "DIMM_P0_A0");
+  const optic = part("transceiver", "eth_p1_r1, eth_p2_r1");
+  const bios = part("firmware", "BIOS");
+  const ports: HwPort[] = [
+    { group: "cpu", name: "P0", type: "Socket SP5", used: true, device: "", parts: ["P0"] },
+    { group: "cpu", name: "P1", type: "Socket SP5", used: false, device: "" },
+    { group: "memory", name: "DIMM_P0_A0", type: "DDR5 DIMM", used: true, device: "", parts: ["DIMM_P0_A0"] },
     { group: "pcie", name: "SXM1_GPU0", type: "", used: true, device: "CX8；NVIDIA Device 3182", parts: ["0000:03:00.0", "0000:03:00.1", "0000:06:00.0"] },
     { group: "drive", name: "NVME3", type: "", used: true, device: "nvme1n1 SOLIDIGM 7682 GB", parts: ["0000:a1:00.0", "nvme1n1"] },
     // 以前的采集没有 parts：按盘符对。
     { group: "drive", name: "NVME2", type: "", used: true, device: "nvme2n1 SOLIDIGM 7682 GB" },
     { group: "drive", name: "nvme0n1", type: "NVMe", used: true, device: "SSSTC 1024 GB", note: "没对上盘位" },
+    { group: "net", name: "eth_p1_r1", type: "", used: true, device: "" },
+    { group: "net", name: "eth_p2_r1", type: "", used: true, device: "" },
+  ];
+  const view = interfaceView([bios, cpu, dimm, gpu, nic, disk, old, loose, mezz, optic], ports);
+  const at = (name: string) => (view.parts.get(ports.find((port) => port.name === name)!) || []).map((item) => item.slot);
+  assert.deepEqual(view.groups.map((group) => [group.group, group.ports.length]), [["cpu", 2], ["memory", 1], ["pcie", 1], ["drive", 3], ["net", 2]]);
+  assert.deepEqual(at("P0"), ["P0"]);
+  assert.deepEqual(at("P1"), []);
+  assert.deepEqual(at("DIMM_P0_A0"), ["DIMM_P0_A0"]);
+  assert.deepEqual(at("SXM1_GPU0"), ["0000:06:00.0", "eth_p1_r1"]);
+  assert.deepEqual(at("NVME3"), ["nvme1n1"]);
+  assert.deepEqual(at("NVME2"), ["nvme2n1"]);
+  assert.deepEqual(at("nvme0n1"), ["nvme0n1"]);
+  assert.deepEqual(at("eth_p2_r1"), ["eth_p1_r1, eth_p2_r1"]);
+  assert.deepEqual(view.machine, [bios]);
+  assert.deepEqual(view.loose, [mezz]);
+});
+
+test("old snapshots without CPU and memory slots get them from the parts", async () => {
+  const { interfaceView } = await import("./ports.ts");
+  const cpu: HwComponent = { kind: "cpu", slot: "P0", model: "EPYC", vendor: "", sn: "", firmware: "", attrs: {} };
+  const psu: HwComponent = { kind: "psu", slot: "PSU1", model: "", vendor: "", sn: "", firmware: "", attrs: {} };
+  const view = interfaceView([cpu, psu], undefined);
+  assert.deepEqual(view.groups.map((group) => [group.group, group.ports.map((port) => port.name), Boolean(group.fromParts)]), [
+    ["cpu", ["P0"], true],
+    ["memory", [], false],
+    ["pcie", [], false],
+    ["drive", [], false],
+    ["net", [], false],
+    ["psu", ["PSU1"], false],
   ]);
-  assert.equal(found.get(gpu), "SXM1_GPU0");
-  assert.equal(found.get(nic), "SXM1_GPU0");
-  assert.equal(found.get(disk), "NVME3");
-  assert.equal(found.get(old), "NVME2");
-  assert.equal(found.has(loose), false);
+  assert.deepEqual(view.parts.get(view.groups[0].ports[0]), [cpu]);
+  assert.deepEqual(view.loose, []);
+});
+
+test("CPU sockets and memory slots include the empty ones", () => {
+  const output = `
+===PXEINV dmidecode===
+Handle 0x0040, DMI type 4, 48 bytes
+Processor Information
+\tSocket Designation: P0
+\tManufacturer: Advanced Micro Devices, Inc.
+\tVersion: AMD EPYC 9555 64-Core Processor
+\tStatus: Populated, Enabled
+\tUpgrade: Socket SP5
+\tCore Count: 64
+
+Handle 0x0041, DMI type 4, 48 bytes
+Processor Information
+\tSocket Designation: P1
+\tVersion: Not Specified
+\tStatus: Unpopulated
+\tUpgrade: Socket SP5
+
+Handle 0x0050, DMI type 17, 92 bytes
+Memory Device
+\tSize: 128 GB
+\tForm Factor: DIMM
+\tLocator: DIMM_P0_A0
+\tType: DDR5
+\tPart Number: M321RAJA0MB2-CCPWC
+\tSerial Number: DIMMA0
+
+Handle 0x0051, DMI type 17, 92 bytes
+Memory Device
+\tSize: No Module Installed
+\tForm Factor: DIMM
+\tLocator: DIMM_P0_A1
+\tType: Unknown
+
+===PXEINV end===
+`;
+  const parsed = parseOsInventory(output);
+  assert.deepEqual(
+    parsed.ports.filter((port) => port.group === "cpu" || port.group === "memory").map((port) => [port.group, port.name, port.type, port.used, port.device]),
+    [
+      ["cpu", "P0", "Socket SP5", true, "AMD EPYC 9555 64-Core Processor"],
+      ["cpu", "P1", "Socket SP5", false, ""],
+      ["memory", "DIMM_P0_A0", "DDR5 DIMM", true, "M321RAJA0MB2-CCPWC 128 GB"],
+      ["memory", "DIMM_P0_A1", "DIMM", false, ""],
+    ],
+  );
+  assert.equal(portSummary(parsed.ports, "memory"), "内存槽 2 个：占用 1，空闲 1");
 });

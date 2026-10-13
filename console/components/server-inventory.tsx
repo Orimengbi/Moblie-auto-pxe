@@ -5,17 +5,16 @@ import { useRouter } from "next/navigation";
 import Button from "@mui/material/Button";
 import Checkbox from "@mui/material/Checkbox";
 import FormControlLabel from "@mui/material/FormControlLabel";
-import Link from "@mui/material/Link";
 import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import { DataGrid, type GridColDef, type GridEventListener } from "@mui/x-data-grid";
-import { ATTR_LABEL, KIND_LABEL, KIND_ORDER, SOURCE_LABEL } from "@/lib/inventory";
+import { KIND_LABEL, KIND_ORDER, SOURCE_LABEL } from "@/lib/inventory";
 import type { Baseline, BaselineIssue, HwComponent, HwKind, InventoryMeta, InventorySnapshot, InventorySource, RemoteTask } from "@/lib/types";
 import { formatTime } from "@/lib/time";
 import { useCan } from "@/components/role-context";
-import { PortSections } from "@/components/server-ports";
-import { partLocations, portSummary } from "@/lib/ports";
+import { attrText, InterfaceSections } from "@/components/server-ports";
+import { interfaceView } from "@/lib/ports";
 
 const MONO = "var(--font-geist-mono), monospace";
 
@@ -60,7 +59,7 @@ export function useGridColumnWidths(storageKey: string) {
 }
 
 /** 每类部件一张表，列都一样，列宽按类别各记各的。 */
-type PartRow = HwComponent & { id: number; location: string };
+type PartRow = HwComponent & { id: number };
 
 const PART_COLUMNS: GridColDef<PartRow>[] = [
   { field: "slot", headerName: "槽位", width: 130 },
@@ -75,30 +74,19 @@ function when(at: string): string {
   return formatTime(at);
 }
 
-function attrText(item: HwComponent): string {
-  return Object.entries(item.attrs)
-    .map(([key, value]) => `${ATTR_LABEL[key] || key} ${value}`)
-    .join(" · ");
-}
-
-function kindHeading(kind: HwComponent["kind"], items: HwComponent[], all: HwComponent[]): string {
+function kindHeading(kind: HwComponent["kind"], items: HwComponent[]): string {
   if (kind === "memory") {
     const total = items.reduce((sum, item) => sum + (Number(item.attrs.sizeGB) || 0), 0);
-    const slots = all.find((item) => item.kind === "system")?.attrs.memorySlots;
-    return `内存 ${items.length} 条，共 ${Math.round(total)} GB${slots ? `，${slots} 个槽` : ""}`;
+    return `内存 ${items.length} 条，共 ${Math.round(total)} GB`;
   }
   return `${KIND_LABEL[kind]}（${items.length}）`;
 }
 
-/** 「插在」列：GPU、网卡、盘插在哪个 PCIe 槽或盘位，来自同一次采集的接口数据。 */
-const LOCATION_COLUMN: GridColDef<PartRow> = { field: "location", headerName: "插在", width: 130, valueGetter: (value) => value || "—" };
-
-/** 一类部件的表格。列宽按类别记，比如 GPU 表把序列号拉宽不影响内存表。 */
-function PartTable({ kind, items, locations }: { kind: HwKind; items: HwComponent[]; locations: Map<HwComponent, string> }) {
+/** 一类部件的表格（整机、主板、固件，和没对上接口的部件）。列宽按类别记，比如固件表把版本拉宽不影响别的表。 */
+function PartTable({ kind, items }: { kind: HwKind; items: HwComponent[] }) {
   const { apply, onColumnWidthChange } = useGridColumnWidths(`pxe-inventory-columns:${kind}`);
-  const located = items.some((item) => locations.has(item));
-  const columns = useMemo(() => apply(located ? [PART_COLUMNS[0], LOCATION_COLUMN, ...PART_COLUMNS.slice(1)] : PART_COLUMNS), [apply, located]);
-  const rows = useMemo(() => items.map((item, index) => ({ ...item, id: index, location: locations.get(item) || "" })), [items, locations]);
+  const columns = useMemo(() => apply(PART_COLUMNS), [apply]);
+  const rows = useMemo(() => items.map((item, index) => ({ ...item, id: index })), [items]);
   return (
     <DataGrid
       rows={rows}
@@ -112,10 +100,35 @@ function PartTable({ kind, items, locations }: { kind: HwKind; items: HwComponen
         fontSize: 12,
         // 型号、属性可能很长，换行显示而不是截断。
         "& .MuiDataGrid-cell": { py: 0.75, whiteSpace: "normal", wordBreak: "break-word", lineHeight: 1.5 },
-        "& .MuiDataGrid-cell[data-field=slot], & .MuiDataGrid-cell[data-field=location], & .MuiDataGrid-cell[data-field=sn], & .MuiDataGrid-cell[data-field=firmware]": { fontFamily: MONO },
+        "& .MuiDataGrid-cell[data-field=slot], & .MuiDataGrid-cell[data-field=sn], & .MuiDataGrid-cell[data-field=firmware]": { fontFamily: MONO },
         "& .MuiDataGrid-cell[data-field=attrs]": { color: "text.secondary" },
       }}
     />
+  );
+}
+
+/** 按类别分表列一组部件，没有部件就不显示。 */
+function PartGroups({ title, caption, items }: { title: string; caption?: string; items: HwComponent[] }) {
+  if (!items.length) return null;
+  return (
+    <Stack component="section" spacing={1}>
+      <Typography variant="h4">{title}</Typography>
+      {caption ? (
+        <Typography variant="caption" color="text.secondary">
+          {caption}
+        </Typography>
+      ) : null}
+      {KIND_ORDER.map((kind) => {
+        const list = items.filter((item) => item.kind === kind);
+        if (!list.length) return null;
+        return (
+          <Stack key={kind} component="section" spacing={0.5}>
+            <Typography variant="subtitle2">{kindHeading(kind, list)}</Typography>
+            <PartTable kind={kind} items={list} />
+          </Stack>
+        );
+      })}
+    </Stack>
   );
 }
 
@@ -194,7 +207,7 @@ export function ServerInventory({ projectId, row }: { projectId?: string; row: {
   }
 
   const snapshot = view?.snapshot || null;
-  const locations = useMemo(() => (snapshot?.ports ? partLocations(snapshot.components, snapshot.ports) : new Map<HwComponent, string>()), [snapshot]);
+  const parts = useMemo(() => (snapshot ? interfaceView(snapshot.components, snapshot.ports) : null), [snapshot]);
   const source: InventorySource = snapshot?.source || "os";
   const history = (view?.history || []).filter((item) => item.source === source);
   const hasSource = (value: InventorySource) => (view?.history || []).some((item) => item.source === value);
@@ -230,7 +243,7 @@ export function ServerInventory({ projectId, row }: { projectId?: string; row: {
       <Stack spacing={0.5}>
         <Typography variant="h3">硬件配置</Typography>
         <Typography variant="caption" color="text.secondary">
-          部件和接口（盘位、PCIe 插槽、网口占用）来自同一次采集。系统内是 SSH 进系统读的，BMC 是从 Redfish 读的。和上一次采集比出的变化在「记录」里（可只看硬件变更）。
+          按接口列（CPU 插座、内存槽、PCIe 插槽、盘位、网口），每个接口下面是插着的部件，都来自同一次采集。系统内是 SSH 进系统读的，BMC 是从 Redfish 读的。和上一次采集比出的变化在「记录」里（可只看硬件变更）。
         </Typography>
       </Stack>
 
@@ -336,28 +349,17 @@ export function ServerInventory({ projectId, row }: { projectId?: string; row: {
             </Stack>
           ) : null}
 
-          {snapshot.ports ? (
-            <Typography variant="body2" color="text.secondary">
-              {(["drive", "pcie", "net"] as const).map((group) => portSummary(snapshot.ports!, group)).join("；")}。
-              <Link href="#hw-ports" underline="hover" onClick={(event) => { event.preventDefault(); document.getElementById("hw-ports")?.scrollIntoView({ behavior: "smooth" }); }}>
-                看接口
-              </Link>
-            </Typography>
+          {parts ? (
+            <>
+              <PartGroups title="整机" items={parts.machine} />
+              <InterfaceSections key={snapshot.id} snapshot={snapshot} view={parts} />
+              <PartGroups
+                title="没对上接口的部件"
+                caption="该插在接口上，但按 PCI 地址、槽位名没找到是哪个接口的。BMC 的 GPU、网卡编号和插槽对不上，会都在这里。"
+                items={parts.loose}
+              />
+            </>
           ) : null}
-
-          <Typography variant="h4">部件</Typography>
-          {KIND_ORDER.map((kind) => {
-            const items = snapshot.components.filter((item) => item.kind === kind);
-            if (!items.length) return null;
-            return (
-              <Stack key={kind} component="section" spacing={0.5}>
-                <Typography variant="subtitle2">{kindHeading(kind, items, snapshot.components)}</Typography>
-                <PartTable kind={kind} items={items} locations={locations} />
-              </Stack>
-            );
-          })}
-
-          <PortSections key={snapshot.id} snapshot={snapshot} />
         </Stack>
       ) : null}
     </Stack>
