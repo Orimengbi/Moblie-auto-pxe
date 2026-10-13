@@ -1156,7 +1156,8 @@ function flashPercent(value: unknown): number | null {
 export async function updateProgress(session: Pick<BmcSession, "request">): Promise<{ status: string; percent: number | null }> {
   const update = await rfGet(session, "/redfish/v1/UpdateService");
   const info = ((update.Oem as { AMIUpdateService?: { UpdateInformation?: Record<string, unknown> } } | undefined)?.AMIUpdateService?.UpdateInformation || {}) as Record<string, unknown>;
-  return { status: str(info.UpdateStatus), percent: flashPercent(info.FlashPercentage) };
+  // 等待时 AMI 每次在后面加 "(timestamp: 1791862612)"，去掉。
+  return { status: str(info.UpdateStatus).replace(/\s*\(timestamp:\s*\d+\)\s*$/i, ""), percent: flashPercent(info.FlashPercentage) };
 }
 
 /** 读 BMC 的任务（固件升级、虚拟介质等异步操作）。 */

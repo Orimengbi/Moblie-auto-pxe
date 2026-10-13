@@ -24,7 +24,7 @@ function fakeSession(log: string[], options: { prepareStatus?: string } = {}): B
     request: async (method, target, body, _headers, opts) => {
       log.push(`${method} ${target}${opts?.timeoutMs ? ` timeout=${opts.timeoutMs}` : ""}`);
       if (target === "/redfish/v1/UpdateService")
-        return { status: 200, body: { MultipartHttpPushUri: "/redfish/v1/UpdateService/upload", MaxImageSizeBytes: 1e9, Oem: { AMIUpdateService: { UpdateInformation: { FlashPercentage: "40% done.", UpdateStatus: "Flashing" } } } }, headers: {} };
+        return { status: 200, body: { MultipartHttpPushUri: "/redfish/v1/UpdateService/upload", MaxImageSizeBytes: 1e9, Oem: { AMIUpdateService: { UpdateInformation: { FlashPercentage: "40% done.", UpdateStatus: "Flashing (timestamp: 1791862612)" } } } }, headers: {} };
       if (target.endsWith("PrepareFreeMemory")) return { status: 200, body: { Status: options.prepareStatus || "Success", Resolution: "Power cycle the system" }, headers: {} };
       if (target === "/redfish/v1/UpdateService/upload") {
         assert.ok(body instanceof UploadBody);
