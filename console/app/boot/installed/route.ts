@@ -1,9 +1,7 @@
-import { markServerInstalled } from "@/lib/store";
+import { clientIp, reportInstalled } from "@/lib/boot";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
-  const sn = new URL(request.url).searchParams.get("sn") || "";
-  await markServerInstalled(sn);
-  return new Response("ok\n", { headers: { "content-type": "text/plain; charset=utf-8" } });
+  return reportInstalled(new URL(request.url).searchParams.get("sn") || "", clientIp(request));
 }

@@ -1,4 +1,4 @@
-import { assertIpv4, bootOrigin, normalizeMac, sameSubnet } from "./net.ts";
+import { assertIpv4, bootOrigin, normalizeMac, normalizeSn, sameSubnet } from "./net.ts";
 import { renderAnswer, renderIpxeMenu } from "./render.ts";
 import {
   getImage,
@@ -10,6 +10,8 @@ import {
   customizationForMac,
   installServerIp,
   listProjects,
+  listServers,
+  markServerInstalled,
   profilesForProject,
   touchMachine,
 } from "./store.ts";
@@ -93,6 +95,45 @@ export function answerDenied(profile: Profile, mac: string, clientIp: string): s
   const active = activeProject();
   if (machine.profileId !== profile.id && profile.projectId !== active?.id) return `配置不属于当前启用的批次，也不是 ${mac} 绑定的`;
   return null;
+}
+
+/**
+ * 装完系统时安装脚本调 /boot/installed?sn= 报「装好了」，会把这台标成已安装、解除装机绑定。/boot/ 不要登录，
+ * 所以和应答文件一样只认正在装机的机器：请求来自装机网段，这个序列号的机器最近 PXE 启动过（绑过装机网卡）。
+ * 序列号对不上任何机器时本来就什么都不改，照常回 ok。
+ */
+export async function reportInstalled(snRaw: string, clientIp: string): Promise<Response> {
+  const ok = () => new Response("ok\n", { headers: { "content-type": "text/plain; charset=utf-8" } });
+  let sn = "";
+  try {
+    sn = normalizeSn(snRaw);
+  } catch {
+    return ok();
+  }
+  const active = activeProject();
+  const rows = listServers().filter((item) => item.sn === sn && (!active || item.projectId === active.id));
+  if (!sn || !rows.length) return ok();
+  let denied = "";
+  let ip = "";
+  try {
+    ip = assertIpv4(clientIp, "来源地址");
+  } catch {
+    denied = `认不出来源地址「${clientIp || "空"}」`;
+  }
+  if (!denied && !installSubnets().some((item) => { try { return sameSubnet(ip, item.address, item.netmask); } catch { return false; } })) denied = `${ip} 不在装机网段`;
+  if (!denied) {
+    const booted = rows.some((row) => {
+      const machine = row.bootMac ? getMachine(row.bootMac) : null;
+      return Boolean(machine?.lastSeen) && Date.now() - Date.parse(machine!.lastSeen!) <= ANSWER_WINDOW_MS;
+    });
+    if (!booted) denied = `${sn} 最近没有 PXE 启动过`;
+  }
+  if (denied) {
+    console.warn(`[boot] 拒绝标记已安装：${denied}`);
+    return new Response("这台机器现在不能报告装好\n", { status: 403 });
+  }
+  await markServerInstalled(sn);
+  return ok();
 }
 
 export function answerFile(profileId: string, macRaw: string, filename: string, clientIp = ""): Response {

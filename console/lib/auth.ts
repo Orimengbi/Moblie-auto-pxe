@@ -252,12 +252,21 @@ export function readSession(token: string): Identity | null {
   return withKeyLimit({ user, method: payload.m, credentialId: payload.k });
 }
 
-export function sessionCookie(value: string): string {
-  return `${SESSION_COOKIE}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_SECONDS}`;
+/**
+ * 这次请求是不是 HTTPS（直接是，或者前面的 TLS 代理用 X-Forwarded-Proto 说是）。
+ * 是才给 Cookie 加 Secure：现在控制台走的是纯 HTTP，加了浏览器就不存，登录不上。
+ * 有人伪造这个头只会让他自己的 Cookie 带上 Secure，没有别的影响。
+ */
+export function secureRequest(request: Request): boolean {
+  return new URL(request.url).protocol === "https:" || request.headers.get("x-forwarded-proto")?.split(",")[0].trim().toLowerCase() === "https";
 }
 
-export function clearedSessionCookie(): string {
-  return `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
+export function sessionCookie(value: string, secure = false): string {
+  return `${SESSION_COOKIE}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_SECONDS}${secure ? "; Secure" : ""}`;
+}
+
+export function clearedSessionCookie(secure = false): string {
+  return `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure ? "; Secure" : ""}`;
 }
 
 function cookieValue(header: string | null, name: string): string {

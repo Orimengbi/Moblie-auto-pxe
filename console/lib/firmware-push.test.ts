@@ -144,6 +144,21 @@ test("a BMC push only counts as done after the BMC is back and reports the packa
   assert.match((await settle(gone.id)).error, /BMC 报刷写完成，但等了 10 分钟 BMC 还没回来/);
 });
 
+test("a second push to the same machine is refused while the first is still opening the BMC session", async () => {
+  const file = path.join(temp, "race.ima");
+  fs.writeFileSync(file, Buffer.alloc(1024, 1));
+  const input = { packageId: "p", fileName: "bmc.zip", kind: "BMC", version: "1", image: "race.ima", file, targets: [], oem: {}, prepareHmc: false };
+  // 没有 BMC 地址：开会话要 await 才失败，正好卡在检查和开始之间。
+  const asset = assets.createAsset({ sn: "push-race-1", vendor: "Giga Computing", model: "G894-ZD3-AAX7-000" }, "t");
+  const first = startPush(asset.id, input, "admin");
+  await assert.rejects(startPush(asset.id, input, "admin", { session: fakeSession([]), sleep: async () => {} }), /正在推固件/);
+  await assert.rejects(first, /BMC 地址/);
+  // 第一个失败后放开了，可以再推。
+  const again = await startPush(asset.id, input, "admin", { session: fakeSession([]), sleep: async () => {}, waitBack: async () => ({ ok: true, message: "" }), readFirmware: async () => [] });
+  assert.equal(again.assetId, asset.id);
+  await settle(asset.id);
+});
+
 test("a BIOS push says it takes effect after a host power cycle", async () => {
   const file = path.join(temp, "bios.rbu");
   fs.writeFileSync(file, Buffer.alloc(64 * 1024, 1));

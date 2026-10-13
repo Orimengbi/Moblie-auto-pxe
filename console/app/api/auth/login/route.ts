@@ -10,6 +10,7 @@ import {
   publicUser,
   recordLoginFailure,
   sameOrigin,
+  secureRequest,
   sessionCookie,
   verifyAccessKey,
   type Identity,
@@ -48,7 +49,7 @@ export async function POST(request: Request) {
     }
     clearLoginFailures(address);
     auditRequest(request, identity, { action: "登录", targetType: "user", targetId: identity.user.id, targetLabel: identity.user.username, detail: body.method });
-    return Response.json(publicUser(identity.user), { headers: { "set-cookie": sessionCookie(createSession(identity)) } });
+    return Response.json(publicUser(identity.user), { headers: { "set-cookie": sessionCookie(createSession(identity), secureRequest(request)) } });
   } catch (error) {
     return jsonError(error);
   }
