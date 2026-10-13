@@ -916,6 +916,23 @@ test("power and boot device go to the BMC with the account it accepts now", asyn
   assert.match((await controlAsset(row.assetId, { power: "on" }, exec)).message, /已经是开机/);
   assert.ok(!calls.includes("admin chassis power on"));
 
+  // BMC 过一会儿才报开机：等到报出来再返回，不把旧状态记下来。
+  await controlAsset(row.assetId, { power: "off" }, exec);
+  let lag = 0;
+  const slow = async (host: string, user: string, password: string, args: string[]) => {
+    const result = await exec(host, user, password, args);
+    if (args.join(" ") === "chassis power on") lag = 2;
+    if (args.join(" ") === "chassis power status" && lag > 0) {
+      lag--;
+      return { ...result, stdout: "Chassis Power is off\n" };
+    }
+    return result;
+  };
+  const waited: number[] = [];
+  assert.equal((await controlAsset(row.assetId, { power: "on" }, slow, async (ms) => void waited.push(ms))).power, "on");
+  assert.deepEqual(waited, [3000, 3000]);
+  assert.equal(await assetPowerState(row.assetId, exec), "on");
+
   await assert.rejects(controlAsset(row.assetId, { power: "explode" as never }, exec), /不支持的电源操作/);
   await assert.rejects(controlAsset(row.assetId, {}, exec), /没有要执行的操作/);
   const noLease = rows.find((item) => item.sn === "SN-NOLEASE")!;
