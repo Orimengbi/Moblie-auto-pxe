@@ -160,6 +160,11 @@ export interface FirmwarePushJob {
   taskPath: string;
   taskState: string;
   percent: number | null;
+  /** BMC 自己报的升级阶段和百分比（AMI：Flashing / Power soft reset…，"40% done."）；任务里没有百分比时看这个。 */
+  bmcStatus?: string;
+  bmcPercent?: number | null;
+  /** 进到刷写的时间，页面显示刷了多久。 */
+  flashAt?: string;
   messages: string[];
   error: string;
 }
