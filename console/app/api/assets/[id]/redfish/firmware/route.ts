@@ -1,8 +1,9 @@
 import { audited, jsonError, readJson } from "@/lib/api";
 import { addEvent, getAsset } from "@/lib/assets";
 import { requirePermission } from "@/lib/auth";
-import { assetSession, firmwareInventory, loadSnapshot, pushUpdate, readTask, saveSnapshot, simpleUpdate, type FirmwareItem, type FirmwareUpdateInput } from "@/lib/bmc-redfish";
+import { assetSession, firmwareInventory, loadSnapshot, readTask, saveSnapshot, simpleUpdate, type FirmwareItem, type FirmwareUpdateInput } from "@/lib/bmc-redfish";
 import { choiceImage, choicesForAsset } from "@/lib/firmware-lib";
+import { getPush, startPush } from "@/lib/firmware-push";
 import { FIRMWARE_KIND_LABEL } from "@/lib/firmware-types";
 import { getMonitorState } from "@/lib/monitor";
 
@@ -19,6 +20,10 @@ export async function GET(request: Request, context: Context) {
     const { id } = await context.params;
     const params = new URL(request.url).searchParams;
     const task = params.get("task");
+    if (params.get("push") === "1") {
+      if (!getAsset(id)) throw new Error("资产不存在");
+      return Response.json({ job: getPush(id) });
+    }
     if (params.get("library") === "1") {
       const asset = getAsset(id);
       if (!asset) throw new Error("资产不存在");
@@ -62,13 +67,19 @@ export async function POST(request: Request, context: Context) {
       const { pkg, file } = choiceImage(body.packageId, String(body.image || ""));
       const targets = Array.isArray(body.targets) ? body.targets.map(String).filter(Boolean) : [];
       const oem = body.oem && typeof body.oem === "object" && !Array.isArray(body.oem) ? body.oem : {};
-      const { asset, session } = await assetSession(id);
+      const asset = getAsset(id);
+      if (!asset) throw new Error("资产不存在");
       const detail = `${FIRMWARE_KIND_LABEL[pkg.kind]} ${pkg.version}（${pkg.fileName} / ${body.image}），Targets ${JSON.stringify(targets)}，Oem ${JSON.stringify(oem)}`;
-      const task = await audited(request, { action: "BMC 固件升级", targetType: "asset", targetId: id, targetLabel: `${asset.tag} ${asset.sn}`, detail }, () =>
-        pushUpdate(session, { file, fileName: String(body.image).split("/").pop() || pkg.fileName, targets, oem, prepareHmc: Boolean(body.prepareHmc) }),
+      // 后台跑：腾内存、上传、等 BMC 刷完都在控制台里做，页面按 ?push=1 看进度。
+      const job = await audited(request, { action: "BMC 固件升级", targetType: "asset", targetId: id, targetLabel: `${asset.tag} ${asset.sn}`, detail: `开始推送 ${detail}` }, () =>
+        startPush(
+          id,
+          { packageId: pkg.id, fileName: pkg.fileName, kind: FIRMWARE_KIND_LABEL[pkg.kind], version: pkg.version, image: String(body.image), file, targets, oem, prepareHmc: Boolean(body.prepareHmc) },
+          identity.user.username,
+        ),
       );
       addEvent(id, "bmc", `从固件库推送升级：${detail}`, identity.user.username);
-      return Response.json({ message: "镜像已传给 BMC，正在刷写", task });
+      return Response.json({ message: "已开始，控制台在后台推送", job });
     }
     const { asset, session } = await assetSession(id);
     const detail = `${body.component || "自动识别"} ${body.imageUri}`;

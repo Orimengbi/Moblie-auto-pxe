@@ -136,3 +136,30 @@ export interface FirmwareChoice {
   oem: Record<string, unknown>;
   prepareHmc: boolean;
 }
+
+/** 从固件库推给 BMC 的一次刷写，控制台后台跑，页面看进度。 */
+export interface FirmwarePushJob {
+  assetId: string;
+  packageId: string;
+  fileName: string;
+  kind: string;
+  version: string;
+  image: string;
+  targets: string[];
+  oem: Record<string, unknown>;
+  user: string;
+  startedAt: string;
+  updatedAt: string;
+  finishedAt: string;
+  /** prepare 腾内存，upload 上传，verify 传完等 BMC 校验，flash BMC 在刷，done 完成，failed 失败。 */
+  stage: "prepare" | "upload" | "verify" | "flash" | "done" | "failed";
+  /** 上传了多少字节、一共多少。 */
+  sent: number;
+  total: number;
+  /** BMC 的刷写任务。 */
+  taskPath: string;
+  taskState: string;
+  percent: number | null;
+  messages: string[];
+  error: string;
+}

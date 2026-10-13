@@ -10,6 +10,7 @@ import DialogActions from "@mui/material/DialogActions";
 import DialogContent from "@mui/material/DialogContent";
 import DialogTitle from "@mui/material/DialogTitle";
 import FormControlLabel from "@mui/material/FormControlLabel";
+import LinearProgress from "@mui/material/LinearProgress";
 import MenuItem from "@mui/material/MenuItem";
 import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
@@ -19,7 +20,7 @@ import Typography from "@mui/material/Typography";
 import { ReadBar } from "@/components/server-bmc";
 import { isHgxFirmware } from "@/lib/asset-labels";
 import type { BmcOverview, FirmwareItem } from "@/lib/bmc-redfish";
-import { FIRMWARE_KIND_LABEL, type FirmwareChoice } from "@/lib/firmware-types";
+import { FIRMWARE_KIND_LABEL, type FirmwareChoice, type FirmwarePushJob } from "@/lib/firmware-types";
 import type { PowerState } from "@/lib/types";
 import { formatTime } from "@/lib/time";
 import { api } from "@/lib/client-api";
@@ -33,6 +34,77 @@ const POWER_LABEL: Record<PowerState, string> = { on: "开机", off: "关机", u
 
 function sizeLabel(bytes: number): string {
   return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.ceil(bytes / 1024)} KB`;
+}
+
+const PUSH_STEPS: { stage: FirmwarePushJob["stage"][]; label: string }[] = [
+  { stage: ["prepare"], label: "腾内存" },
+  { stage: ["upload"], label: "上传" },
+  { stage: ["verify"], label: "BMC 校验" },
+  { stage: ["flash"], label: "BMC 刷写" },
+  { stage: ["done", "failed"], label: "结束" },
+];
+
+/** 一次从固件库推送的进度：走到哪一步、上传和刷写的百分比、BMC 最近的消息。 */
+function PushProgress({ job }: { job: FirmwarePushJob }) {
+  const active = job.stage !== "done" && job.stage !== "failed";
+  const current = PUSH_STEPS.findIndex((step) => step.stage.includes(job.stage));
+  const uploadPercent = job.total ? Math.floor((job.sent / job.total) * 100) : 0;
+  const text =
+    job.stage === "prepare"
+      ? "让 BMC 腾内存（HMC 升级前要先做，可能要一两分钟）"
+      : job.stage === "upload"
+        ? `正在把镜像传给 BMC：${uploadPercent}%（${sizeLabel(job.sent)} / ${sizeLabel(job.total)}）`
+        : job.stage === "verify"
+          ? "镜像传完了，BMC 正在校验，校验完会建刷写任务"
+          : job.stage === "flash"
+            ? `BMC 正在刷写：${job.taskState || "已提交"}${job.percent !== null ? `，${job.percent}%` : ""}`
+            : job.stage === "done"
+              ? "刷写完成。点「读取」看新版本。"
+              : `没成功：${job.error}`;
+  const value = job.stage === "upload" ? uploadPercent : job.stage === "flash" ? job.percent : job.stage === "done" ? 100 : null;
+  return (
+    <Alert severity={job.stage === "failed" ? "error" : job.stage === "done" ? "success" : "info"} icon={false} sx={{ "& .MuiAlert-message": { width: "100%" } }}>
+      <Stack spacing={1}>
+        <Typography variant="subtitle2">
+          推送 {job.kind} {job.version}
+          <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 1 }}>
+            {job.user} {formatTime(job.startedAt)} 开始{job.finishedAt ? `，${formatTime(job.finishedAt)} 结束` : ""}
+          </Typography>
+        </Typography>
+        <Stack direction="row" useFlexGap spacing={0.5} sx={{ flexWrap: "wrap" }}>
+          {PUSH_STEPS.map((step, index) => (
+            <Typography
+              key={step.label}
+              variant="caption"
+              sx={{ px: 1, py: 0.25, borderRadius: 1, bgcolor: index === current ? "action.selected" : "transparent", color: index <= current ? "text.primary" : "text.disabled", fontWeight: index === current ? 600 : 400 }}
+            >
+              {index < current ? "✓ " : ""}
+              {step.label}
+            </Typography>
+          ))}
+        </Stack>
+        {active || job.stage === "done" ? <LinearProgress variant={value === null ? "indeterminate" : "determinate"} value={value ?? undefined} /> : null}
+        <Typography variant="body2">{text}</Typography>
+        {job.stage === "flash" ? (
+          <Typography variant="caption" color="text.secondary">
+            HGX 全量升级大约 30~40 分钟，期间主机会断电重启两次、BMC 偶尔连不上，进度读不到会接着等。可以关掉页面，回来再看。
+          </Typography>
+        ) : null}
+        {active && job.error ? (
+          <Typography variant="caption" color="text.secondary">
+            {job.error}
+          </Typography>
+        ) : null}
+        {job.messages.length ? (
+          <Box component="ul" sx={{ m: 0, pl: 2, fontSize: 12, color: "text.secondary" }}>
+            {job.messages.map((line, index) => (
+              <li key={index}>{line}</li>
+            ))}
+          </Box>
+        ) : null}
+      </Stack>
+    </Alert>
+  );
 }
 
 /**
@@ -61,6 +133,7 @@ export function ServerFirmware({ assetId }: { assetId: string }) {
   const [oem, setOem] = useState("");
   const [prepareHmc, setPrepareHmc] = useState(false);
   const [task, setTask] = useState<{ path: string; state: string; percent: number | null; messages: string[] } | null>(null);
+  const [push, setPush] = useState<FirmwarePushJob | null>(null);
   const choice = library?.choices.find((item) => item.id === choiceId) || null;
 
   function pick(next: FirmwareChoice | null) {
@@ -127,6 +200,22 @@ export function ServerFirmware({ assetId }: { assetId: string }) {
     void load(false);
   }, [load]);
 
+  const loadPush = useCallback(async () => {
+    const result = await api<{ job: FirmwarePushJob | null }>(`/api/assets/${assetId}/redfish/firmware?push=1`);
+    if (result.ok) setPush(result.data.job);
+  }, [assetId]);
+
+  // 推送在控制台后台跑，没结束就每 3 秒看一次。
+  useEffect(() => {
+    void loadPush();
+  }, [loadPush]);
+  const pushActive = Boolean(push && push.stage !== "done" && push.stage !== "failed");
+  useEffect(() => {
+    if (!pushActive) return;
+    const timer = window.setInterval(() => void loadPush(), 3000);
+    return () => window.clearInterval(timer);
+  }, [pushActive, loadPush]);
+
   const items = data.items;
   const hgxCount = items?.filter((item) => isHgxFirmware(item.id)).length || 0;
   const shownItems = items?.filter((item) => scope === "all" || (scope === "hgx") === isHgxFirmware(item.id)) || null;
@@ -148,8 +237,8 @@ export function ServerFirmware({ assetId }: { assetId: string }) {
     const text = `把 ${choice.fileName} 里的\n${image}\n推给这台 BMC 刷写 ${FIRMWARE_KIND_LABEL[choice.kind]} ${choice.version}？${warnings.length ? `\n\n注意：\n${warnings.join("\n")}` : ""}\n\n刷写期间不要断电。`;
     if (!window.confirm(text)) return;
     setBusy(true);
-    setMessage("正在把镜像传给 BMC，大文件要几分钟…");
-    const result = await api<{ message?: string; task?: string }>(`/api/assets/${assetId}/redfish/firmware`, "POST", {
+    setMessage("");
+    const result = await api<{ message?: string; job?: FirmwarePushJob }>(`/api/assets/${assetId}/redfish/firmware`, "POST", {
       packageId: choice.id,
       image,
       targets: targets.split(/\s*\n\s*/).filter(Boolean),
@@ -163,10 +252,8 @@ export function ServerFirmware({ assetId }: { assetId: string }) {
       return;
     }
     setError("");
-    setMessage(result.data.message || "已提交");
     setOpen(false);
-    if (result.data.task) setTask({ path: result.data.task, state: "", percent: null, messages: [] });
-    await loadUpdate(true);
+    if (result.data.job) setPush(result.data.job);
   }
 
   async function submit() {
@@ -201,6 +288,7 @@ export function ServerFirmware({ assetId }: { assetId: string }) {
           {message}
         </Typography>
       ) : null}
+      {push ? <PushProgress job={push} /> : null}
       {task ? (
         <Typography variant="body2" sx={{ color: /Exception|Killed|Cancelled/i.test(task.state) ? "error.main" : "text.primary" }}>
           BMC 刷写任务：{task.state || "已提交"}
@@ -218,7 +306,7 @@ export function ServerFirmware({ assetId }: { assetId: string }) {
                 : "这台 BMC 不支持从网址升级"}
           </Typography>
           {update && canFlash ? (
-            <Button size="small" variant="outlined" disabled={busy} onClick={() => void openDialog()}>
+            <Button size="small" variant="outlined" disabled={busy || pushActive} onClick={() => void openDialog()}>
               升级
             </Button>
           ) : null}
