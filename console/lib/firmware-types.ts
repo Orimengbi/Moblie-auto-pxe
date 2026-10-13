@@ -167,4 +167,6 @@ export interface FirmwarePushJob {
   flashAt?: string;
   messages: string[];
   error: string;
+  /** 右上角「任务」里对应的那条（固件升级）。 */
+  taskId?: string;
 }

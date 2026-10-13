@@ -8,7 +8,8 @@ import test from "node:test";
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pxe-firmware-push-test-"));
 process.env.PXE_DATA_DIR = temp;
 
-const { startPush, getPush } = await import("./firmware-push.ts");
+const { startPush, getPush, pushSummary } = await import("./firmware-push.ts");
+const { getTask } = await import("./store.ts");
 const assets = await import("./assets.ts");
 const { UploadBody } = await import("./redfish.ts");
 import type { BmcSession } from "./bmc-redfish.ts";
@@ -79,6 +80,26 @@ test("a push runs in the background: prepare, upload with progress, then follows
   // 腾内存放宽超时；读不到一次进度不算失败。
   assert.ok(log.includes("POST /redfish/v1/UpdateService/Action/Oem/Gbt/HMCUpdate.PrepareFreeMemory timeout=300000"));
   assert.ok(assets.listEvents(asset.id).some((event) => /刷写完成/.test(event.text)));
+  // 右上角「任务」里也有一条，进度同步过去。
+  const task = getTask(job.taskId!)!;
+  assert.equal(task.kind, "firmware-push");
+  assert.equal(task.name, "固件升级 HGX 1.1");
+  assert.equal(task.status, "done");
+  assert.equal(task.targets[0].sn, "PUSH-1");
+  assert.equal(task.targets[0].status, "ok");
+  assert.match(task.targets[0].output, /阶段：刷写完成/);
+  // 控制台重启后没人跟了：任务显示没执行完。
+  globalThis.pxeBootId = "after-restart";
+  fs.writeFileSync(path.join(temp, "tasks", `${job.taskId}.json`), JSON.stringify({ ...task, status: "running", targets: [{ ...task.targets[0], status: "running" }] }));
+  assert.equal(getTask(job.taskId!)!.targets[0].status, "failed");
+});
+
+test("the task output says where the push is", () => {
+  const base = { assetId: "a", packageId: "p", fileName: "f.fwpkg", kind: "HGX", version: "1.1", image: "f", targets: [], oem: {}, user: "u", startedAt: "", updatedAt: "", finishedAt: "", taskPath: "", taskState: "", percent: null, messages: [], error: "" };
+  assert.match(pushSummary({ ...base, stage: "upload", sent: 50 * 1024 * 1024, total: 100 * 1024 * 1024 }), /上传镜像 50%（50\/100 MB）/);
+  const flash = pushSummary({ ...base, stage: "flash", sent: 0, total: 0, bmcPercent: 40, bmcStatus: "Flashing", flashAt: new Date(Date.now() - 12 * 60_000).toISOString(), messages: ["Task started"] });
+  assert.match(flash, /BMC 在刷写（40%，Flashing，已刷 12 分钟）/);
+  assert.match(flash, /BMC：Task started/);
 });
 
 test("a failed prepare says which step failed", async () => {
