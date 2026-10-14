@@ -4,7 +4,7 @@ import { assetDropdowns, assetsToRows, EXPORT_COLUMNS, type SheetField } from "@
 import { applyDisplaySettings } from "@/lib/display-settings";
 import { listAssets, listCustomers } from "@/lib/assets";
 import { loadSnapshot, type FirmwareItem } from "@/lib/bmc-redfish";
-import { getMonitorState } from "@/lib/monitor";
+import { getMonitorState, healthByAsset } from "@/lib/monitor";
 import { listDatacenters, listRacks, listSites } from "@/lib/racks";
 import { listSnmpProfiles } from "@/lib/snmp";
 import { latestInventory } from "@/lib/store";
@@ -61,10 +61,12 @@ export async function POST(request: Request) {
     const sites = listSites();
     const profiles = listSnmpProfiles();
     const datacenters = listDatacenters();
+    // 健康和资产列表一致：BMC 读到的叠上没恢复的告警。
+    const healths = sheets.includes("health") ? healthByAsset() : new Map();
     const pages = buildExportSheets(assets, sheets, {
       inventory: (id) => ({ os: latestInventory(id, "os"), bmc: latestInventory(id, "bmc") }),
       firmware: (id) => loadSnapshot<FirmwareItem[]>(id, "firmware"),
-      monitor: (id) => getMonitorState(id),
+      monitor: (id) => ({ ...getMonitorState(id), health: healths.get(id) || null }),
       assetRows: (list) => assetsToRows(list, customers, racks, sites, profiles, datacenters, fields),
       time: (iso) => formatTime(iso),
     }, choice);
