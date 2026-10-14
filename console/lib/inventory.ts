@@ -2,7 +2,7 @@ import type { RedfishDoc, RedfishRaw } from "./redfish.ts";
 import { OPTICS_BODY, opticsComponents, parseOptics } from "./optics.ts";
 import { parseOsPorts, PORTS_BODY } from "./ports.ts";
 import { buildTopology } from "./topology.ts";
-import type { BaselineIssue, BaselineRule, HwChange, HwComponent, HwKind, HwPort, InventorySource, Topology } from "./types.ts";
+import type { BaselineIssue, BaselineRule, HardwareSpec, HwChange, HwComponent, HwKind, HwPort, InventorySource, Topology } from "./types.ts";
 import { markedSections } from "./sections.ts";
 
 /**
@@ -796,6 +796,37 @@ export function headlineFirmware(components: HwComponent[]): { bios: string; bmc
   const images = named(/^BMC\s*Image\s*\d$/i);
   const bmcVersions = [...new Set((bmc.length ? bmc : images.length ? images : named(/^BMC/i).slice(0, 1)).map((item) => item.firmware))];
   return { bios: bios?.firmware || "", bmc: bmcVersions.join(" / ") };
+}
+
+/** 按型号数个数：「8 × H200」「2 × A，1 × B」。label 决定怎么算同一种；说不出是什么的只写「12 个」。 */
+function countBy(items: HwComponent[], label: (item: HwComponent) => string): string {
+  const counts = new Map<string, number>();
+  for (const item of items) counts.set(label(item), (counts.get(label(item)) || 0) + 1);
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([name, n]) => (name ? `${n} × ${name}` : `${n} 个`))
+    .join("，");
+}
+
+const sizeText = (gb: number) => (gb >= 1000 ? `${Math.round(gb / 100) / 10} TB` : `${Math.round(gb)} GB`);
+
+/** 资产列表上显示的配置摘要。 */
+export function hardwareSpec(components: HwComponent[]): HardwareSpec {
+  const of = (kind: HwKind) => components.filter((item) => item.kind === kind);
+  const memory = of("memory");
+  const total = memory.reduce((sum, item) => sum + (Number(item.attrs.sizeGB) || 0), 0);
+  const firmware = headlineFirmware(components);
+  return {
+    cpu: countBy(of("cpu"), (item) => item.model),
+    memory: memory.length ? `${sizeText(total)}（${countBy(memory, (item) => `${item.attrs.sizeGB ?? "?"} GB`)}）` : "",
+    gpu: countBy(of("gpu"), (item) => item.model),
+    disk: countBy(of("disk"), (item) => (item.attrs.capacityGB ? sizeText(Number(item.attrs.capacityGB)) : item.model)),
+    // 系统里读到的网卡名是 VPD 里的长串（「…Adapter Card, 200GbE / NDR200, Dual-port…」），只留第一个逗号前。
+    nic: countBy(nicCards(components).filter((item) => item.kind === "nic"), (item) => item.model.split(",")[0].trim()),
+    psu: countBy(of("psu"), (item) => (item.attrs.capacityW ? `${item.attrs.capacityW} W` : item.model)),
+    bios: firmware.bios,
+    bmc: firmware.bmc,
+  };
 }
 
 /** 任务输出里的一段摘要，每类一行。 */
