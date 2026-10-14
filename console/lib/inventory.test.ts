@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { changeDetail, checkBaseline, clean, cleanCollectKinds, COLLECT_KINDS, diffComponents, mergeCollectedKinds, generateBaseline, INVENTORY_SCRIPT, nicCards, parseDmidecode, parseOsInventory, redfishComponents, sizeToGb, summarizeComponents } from "./inventory.ts";
+import { changeDetail, checkBaseline, clean, cleanCollectKinds, COLLECT_KINDS, diffComponents, hardwareSpec, mergeCollectedKinds, generateBaseline, INVENTORY_SCRIPT, nicCards, parseDmidecode, parseOsInventory, redfishComponents, sizeToGb, summarizeComponents } from "./inventory.ts";
 import { crawlRedfish, RedfishAuthError, type RedfishDoc, type RedfishGet } from "./redfish.ts";
 import { linkBetween, linkText, parseNvlinks } from "./topology.ts";
 import type { HwComponent } from "./types.ts";
@@ -415,6 +415,17 @@ test("merges a partial collection into the previous one", () => {
   assert.deepEqual(cleanCollectKinds(["gpu", "x"]), ["gpu"]);
   assert.equal(cleanCollectKinds([]), undefined);
   assert.equal(cleanCollectKinds(COLLECT_KINDS), undefined, "全挑了就是全采");
+});
+
+test("sums up a machine's hardware for the asset list", () => {
+  const spec = hardwareSpec(parseOsInventory(OS_OUTPUT).components);
+  assert.match(spec.cpu, /^\d+ × \S/);
+  assert.match(spec.memory, /^\d+(\.\d+)? (GB|TB)（\d+ × /);
+  assert.match(spec.gpu, /^\d+ × /);
+  assert.ok(!/,/.test(spec.nic) && spec.nic, spec.nic);
+  assert.equal(hardwareSpec([]).cpu, "");
+  const psus: HwComponent[] = [1, 2].map((n) => ({ kind: "psu", slot: `PSU${n}`, model: "", vendor: "", sn: "", firmware: "", attrs: {} }));
+  assert.equal(hardwareSpec(psus).psu, "2 个", "没型号没功率的只数个数");
 });
 
 test("diffs two collections of the same machine", () => {

@@ -50,14 +50,31 @@ const LAYOUT_KEY = "pxe-asset-layout";
 
 type Layout = { order: string[]; hidden: string[] };
 
-/** 按保存的顺序排列，没记过的列（新加的）接在后面；操作列总在最后、不能藏。 */
-function arrange<T extends { field: string }>(columns: T[], layout: Layout): T[] {
+/**
+ * 默认不显示、在列设置里勾出来的列。layout.order 里没记过它（没在列设置里保存过）就按默认藏着，
+ * 保存过的以保存的为准。
+ */
+const DEFAULT_HIDDEN = new Set([
+  "type", "owner", "location", "hostname", "bmcMac", "bootMac", "osAddress", "batch", "osName",
+  "purchaseSupplier", "purchaseOrder", "purchaseDate", "purchasePrice", "warrantyVendor", "warrantyLevel", "warrantyStart",
+  "note", "createdAt", "updatedAt",
+  "hwCpu", "hwMemory", "hwGpu", "hwDisk", "hwNic", "hwPsu", "hwBios", "hwBmc",
+]);
+
+/** 实际藏起来的列：明确藏的，加上默认藏、又没在列设置里保存过的。 */
+function hiddenOf(layout: Layout): string[] {
+  return [...layout.hidden, ...[...DEFAULT_HIDDEN].filter((field) => !layout.order.includes(field) && !layout.hidden.includes(field))];
+}
+
+/** 按保存的顺序排列，没记过的列（新加的）接在后面；操作列总在最后、不能藏。all 时藏着的也列出来（列设置对话框用）。 */
+function arrange<T extends { field: string }>(columns: T[], layout: Layout, all = false): T[] {
   const rank = (field: string) => {
     const index = layout.order.indexOf(field);
     return index < 0 ? layout.order.length + columns.findIndex((column) => column.field === field) : index;
   };
   const body = columns.filter((column) => column.field !== "actions").sort((a, b) => rank(a.field) - rank(b.field));
-  return [...body.filter((column) => !layout.hidden.includes(column.field)), ...columns.filter((column) => column.field === "actions")];
+  const hidden = all ? [] : hiddenOf(layout);
+  return [...body.filter((column) => !hidden.includes(column.field)), ...columns.filter((column) => column.field === "actions")];
 }
 /** 表头三点菜单里的列操作，由列表组件挂上去：藏这一列、打开列设置（排顺序、选显示哪些列）。 */
 const columnActions: { hide: (field: string) => void; arrange: () => void } = { hide: () => {}, arrange: () => {} };
@@ -117,7 +134,7 @@ function hardwareText(row: AssetRow): string {
 }
 
 function searchText(row: AssetRow): string {
-  return [row.tag, row.sn, row.vendor, row.model, row.customerName, row.owner, row.place, row.location, row.bmcIp, row.host, row.hostname, row.purchaseOrder, row.note].join(" ");
+  return [row.tag, row.sn, row.vendor, row.model, row.customerName, row.owner, row.place, row.location, row.bmcIp, row.mgmtIp, row.bmcMac, row.bootMac, row.host, row.hostname, row.purchaseOrder, row.note, ...Object.values(row.inventory.spec || {})].join(" ");
 }
 
 function matches(row: AssetRow, filters: Filters): boolean {
@@ -183,6 +200,50 @@ function Dash() {
 }
 
 const tagCompare = (a: string, b: string) => a.localeCompare(b, "zh-CN", { numeric: true });
+
+/** 一格普通文字的列。mono 用等宽字（地址、MAC、单号）。 */
+function textColumn(field: string, headerName: string, value: (row: AssetRow) => string, width = 130, mono = false): GridColDef<AssetRow> {
+  return {
+    field,
+    headerName,
+    width,
+    valueGetter: (_value, row) => value(row),
+    renderCell: ({ value: text }) => (text ? <Box sx={{ fontSize: 12, fontFamily: mono ? MONO : undefined, whiteSpace: "normal", wordBreak: "break-word" }}>{text}</Box> : <Dash />),
+  };
+}
+
+const spec = (row: AssetRow, key: keyof NonNullable<AssetRow["inventory"]["spec"]>) => row.inventory.spec?.[key] || "";
+
+/** 默认藏着的列（见 DEFAULT_HIDDEN），在表头三点菜单的「列设置」里勾出来。硬件几列取最近一次采集，系统内优先。 */
+const EXTRA_COLUMNS: GridColDef<AssetRow>[] = [
+  textColumn("type", "类型", (row) => ASSET_TYPES[row.type], 90),
+  textColumn("owner", "负责人", (row) => row.owner, 100),
+  textColumn("location", "位置备注", (row) => row.location, 140),
+  textColumn("hostname", "主机名", (row) => row.hostname, 140, true),
+  textColumn("osAddress", "系统地址（资产里填的）", (row) => row.osAddress, 130, true),
+  textColumn("bmcMac", "BMC MAC", (row) => row.bmcMac, 150, true),
+  textColumn("bootMac", "装机网卡 MAC", (row) => row.bootMac, 150, true),
+  textColumn("batch", "装机批次", (row) => row.batch?.name || "", 140),
+  textColumn("osName", "装的系统", (row) => row.batch?.osName || "", 140),
+  textColumn("purchaseSupplier", "供应商", (row) => row.purchaseSupplier, 130),
+  textColumn("purchaseOrder", "采购单号", (row) => row.purchaseOrder, 130, true),
+  textColumn("purchaseDate", "采购日期", (row) => row.purchaseDate, 110),
+  textColumn("purchasePrice", "采购价格", (row) => row.purchasePrice, 100),
+  textColumn("warrantyVendor", "保修方", (row) => row.warrantyVendor, 120),
+  textColumn("warrantyLevel", "保修级别", (row) => row.warrantyLevel, 110),
+  textColumn("warrantyStart", "保修开始", (row) => row.warrantyStart, 110),
+  textColumn("note", "备注", (row) => row.note, 200),
+  textColumn("createdAt", "入库时间", (row) => (row.createdAt ? formatTime(row.createdAt) : ""), 150),
+  textColumn("updatedAt", "最后修改", (row) => (row.updatedAt ? formatTime(row.updatedAt) : ""), 150),
+  textColumn("hwCpu", "CPU", (row) => spec(row, "cpu"), 200),
+  textColumn("hwMemory", "内存", (row) => spec(row, "memory"), 180),
+  textColumn("hwGpu", "GPU", (row) => spec(row, "gpu"), 200),
+  textColumn("hwDisk", "硬盘", (row) => spec(row, "disk"), 160),
+  textColumn("hwNic", "网卡", (row) => spec(row, "nic"), 220),
+  textColumn("hwPsu", "电源模块", (row) => spec(row, "psu"), 130),
+  textColumn("hwBios", "BIOS 版本", (row) => spec(row, "bios"), 120, true),
+  textColumn("hwBmc", "BMC 版本", (row) => spec(row, "bmc"), 120, true),
+];
 
 /** 资产列表：筛选、勾选，批量操作和导出都在对话框里再定范围（选中的、筛出来的、全部）；点一行打开侧边栏。 */
 export function AssetList({
@@ -440,6 +501,7 @@ export function AssetList({
           </Box>
         ),
       },
+      ...EXTRA_COLUMNS,
       {
         field: "actions",
         headerName: "",
@@ -468,14 +530,14 @@ export function AssetList({
   }, [widths, canConsole, canPower]);
   const shownColumns = useMemo(() => arrange(columns, layout), [columns, layout]);
   /** 设置对话框里列的名字和当前顺序（含藏起来的）。 */
-  const arrangeable = useMemo(() => arrange(columns, { order: (arranging || layout).order, hidden: [] }).filter((column) => column.field !== "actions"), [columns, arranging, layout]);
+  const arrangeable = useMemo(() => arrange(columns, { order: (arranging || layout).order, hidden: [] }, true).filter((column) => column.field !== "actions"), [columns, arranging, layout]);
 
   // 表头三点菜单里点的。最后一列不让藏，不然表就空了。
   useEffect(() => {
     columnActions.hide = (field) => {
       if (shownColumns.filter((column) => column.field !== "actions").length > 1) saveLayout({ ...layout, hidden: [...layout.hidden, field] });
     };
-    columnActions.arrange = () => setArranging({ order: arrangeable.map((column) => column.field), hidden: layout.hidden });
+    columnActions.arrange = () => setArranging({ order: arrangeable.map((column) => column.field), hidden: hiddenOf(layout) });
   });
 
   return (

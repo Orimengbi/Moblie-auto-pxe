@@ -641,9 +641,23 @@ export interface InventoryMeta {
 }
 
 /** 服务器列表里「硬件」一列：每个来源最近一次的时间和变化数，以及按基准检查出的问题数。 */
+/** 资产列表上的硬件配置摘要，每项一句话，比如「2 × Intel Xeon 8480+」。没采到的是空字符串。 */
+export interface HardwareSpec {
+  cpu: string;
+  memory: string;
+  gpu: string;
+  disk: string;
+  nic: string;
+  psu: string;
+  bios: string;
+  bmc: string;
+}
+
 export interface InventoryStatus {
   os?: { at: string; changes: number | null };
   bmc?: { at: string; changes: number | null };
+  /** 最近一次采集的配置摘要，系统内采到的优先，没有的项用 BMC 的。都没采过时没有这一项。 */
+  spec?: HardwareSpec;
   /** 没有基准，或者基准那个来源还没采集过时是 null。 */
   issues: number | null;
 }

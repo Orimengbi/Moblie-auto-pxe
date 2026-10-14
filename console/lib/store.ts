@@ -6,7 +6,7 @@ import { parseLeases, renderBootIpxe, renderDnsmasq } from "./dnsmasq.ts";
 import { assetBmcAccounts, deleteAsset, findAssetBySn, getAsset, syncAssetFromRow } from "./assets.ts";
 import { refreshBootScript } from "./disk-image.ts";
 import { recordHardwareChanges } from "./parts.ts";
-import { checkBaseline, diffComponents, generateBaseline, KIND_LABEL, mergeCollectedKinds, nicCards } from "./inventory.ts";
+import { checkBaseline, diffComponents, generateBaseline, hardwareSpec, KIND_LABEL, mergeCollectedKinds, nicCards } from "./inventory.ts";
 import {
   BOOT_DEVICES,
   POWER_ACTIONS,
@@ -61,6 +61,7 @@ import {
   type BuiltinDiag,
   type HwKind,
   type InventoryMeta,
+  type HardwareSpec,
   type InventorySnapshot,
   type InventorySource,
   type InventoryStatus,
@@ -2098,6 +2099,7 @@ interface SnapshotSummary {
   at: string;
   changes: number | null;
   issues: Map<string, number>;
+  spec: HardwareSpec;
 }
 
 const summaries = new Map<string, SnapshotSummary>();
@@ -2109,7 +2111,7 @@ function snapshotSummary(serverId: string, id: string, baseline: Baseline | null
   if (!summary) {
     snapshot = getInventory(serverId, id);
     if (!snapshot) return null;
-    summary = { at: snapshot.at, changes: snapshot.changes ? snapshot.changes.length : null, issues: new Map() };
+    summary = { at: snapshot.at, changes: snapshot.changes ? snapshot.changes.length : null, issues: new Map(), spec: hardwareSpec(snapshot.components) };
     // 只留最近用到的一批，不让缓存无限长。
     if (summaries.size > 5000) summaries.delete(summaries.keys().next().value!);
     summaries.set(key, summary);
@@ -2134,6 +2136,9 @@ export function inventoryStatus(serverId: string, baseline: Baseline | null): In
     if (!summary) continue;
     status[source] = { at: summary.at, changes: summary.changes };
     if (baseline?.source === source) status.issues = summary.issues.get(`${baseline.projectId}@${baseline.updatedAt}`) ?? null;
+    // 先看系统内，系统内没有的项用 BMC 的补。
+    const spec = summary.spec;
+    status.spec = status.spec ? (Object.fromEntries(Object.entries(status.spec).map(([key, value]) => [key, value || spec[key as keyof HardwareSpec]])) as unknown as HardwareSpec) : { ...spec };
   }
   return status;
 }
