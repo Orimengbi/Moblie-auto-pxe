@@ -64,12 +64,35 @@ function powerDisabled(action: PowerAction, states: PowerState[]): boolean {
 /** 一台或多台机器的电源和引导设备。多台时每台单独发请求，同时最多 4 台。 */
 /** targets 的 id 是资产 id。 */
 export function ServerPowerDialog({ targets, onClose }: { targets: Target[]; onClose: () => void }) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <Dialog open={targets.length > 0} onClose={() => !busy && onClose()}>
+      <DialogTitle>电源、引导和 BMC · {targets.length === 1 ? targets[0].sn : `${targets.length} 台机器`}</DialogTitle>
+      <DialogContent>{targets.length ? <ServerPowerPanel targets={targets} onBusy={setBusy} /> : null}</DialogContent>
+      <DialogActions>
+        <Button disabled={busy} onClick={onClose}>
+          关闭
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+/** 一次现读开关机状态最多读这么多台，再多就用列表里监控读到的，免得一打开就连几百台 BMC。 */
+const LIVE_READ_LIMIT = 50;
+
+/** 电源、BMC、引导设备三块，单独的对话框和资产页的批量操作框共用。onBusy 告诉外面正在执行，别让人关窗口。 */
+export function ServerPowerPanel({ targets, onBusy }: { targets: Target[]; onBusy?: (busy: boolean) => void }) {
   const router = useRouter();
   const [boot, setBoot] = useState<BootDevice>("pxe");
   const [persistent, setPersistent] = useState(false);
   const [legacy, setLegacy] = useState(false);
   const [restart, setRestart] = useState(true);
-  const [pending, setPending] = useState(false);
+  const [pending, setPendingState] = useState(false);
+  const setPending = (value: boolean) => {
+    setPendingState(value);
+    onBusy?.(value);
+  };
   const canEdit = useCan("bmc.settings");
   const [clockOffset, setClockOffset] = useState("+08:00");
   const [ntpMode, setNtpMode] = useState<"keep" | "on" | "off">("keep");
@@ -93,8 +116,8 @@ export function ServerPowerDialog({ targets, onClose }: { targets: Target[]; onC
     if (!targets.length) return;
     let cancelled = false;
     setPowers(Object.fromEntries(targets.map((target) => [target.id, target.power || "unknown"])));
-    setReading(true);
-    const queue = targets.filter((target) => target.bmcIp);
+    const queue = targets.length > LIVE_READ_LIMIT ? [] : targets.filter((target) => target.bmcIp);
+    setReading(queue.length > 0);
     void Promise.all(
       Array.from({ length: Math.min(4, queue.length) }, async () => {
         for (let target = queue.shift(); target && !cancelled; target = queue.shift()) {
@@ -211,9 +234,7 @@ export function ServerPowerDialog({ targets, onClose }: { targets: Target[]; onC
   ];
 
   return (
-    <Dialog open={targets.length > 0} onClose={() => !pending && onClose()}>
-      <DialogTitle>电源、引导和 BMC · {names}</DialogTitle>
-      <DialogContent>
+    <>
         <DialogContentText variant="body2" sx={{ mb: 2 }}>
           电源和引导通过 IPMI 操作，用 BMC 当前的账号登录。
           {targets.some((item) => !item.bmcIp) ? " 有机器还没有 IPMI 地址，会跳过并报错。" : ""}
@@ -227,6 +248,7 @@ export function ServerPowerDialog({ targets, onClose }: { targets: Target[]; onC
             ) : (
               <Typography variant="body2" color="text.secondary">
                 {powerCounts.map(([state, count]) => `${POWER_LABEL[state]} ${count} 台`).join("，")}
+                {targets.length > LIVE_READ_LIMIT ? "（监控上次读到的）" : ""}
               </Typography>
             )}
             {reading ? (
@@ -333,12 +355,6 @@ export function ServerPowerDialog({ targets, onClose }: { targets: Target[]; onC
             ))}
           </Stack>
         ) : null}
-      </DialogContent>
-      <DialogActions>
-        <Button disabled={pending} onClick={onClose}>
-          关闭
-        </Button>
-      </DialogActions>
-    </Dialog>
+    </>
   );
 }
