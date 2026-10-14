@@ -27,18 +27,19 @@ import VisibilityOffOutlined from "@mui/icons-material/VisibilityOffOutlined";
 import { AssetEditDialog } from "@/components/asset-edit-dialog";
 import { AssetImportDialog } from "@/components/asset-import-dialog";
 import { AssetExportDialog } from "@/components/asset-export-dialog";
+import { AssetBatchDialog, type HandOff } from "@/components/asset-batch-dialog";
 import { SortableList } from "@/components/sortable-list";
 import { StatusChip } from "@/components/mui/status-chip";
 import { FONT_SANS, gridText } from "@/components/mui/theme";
 import { InventoryCollectDialog, type CollectTarget } from "@/components/inventory-collect-dialog";
-import { HOST_SOURCE, ProjectTaskRunner } from "@/components/project-task-runner";
+import { HOST_SOURCE } from "@/components/project-task-runner";
 import { RemoteConsole } from "@/components/remote-console";
 import { ServerPowerDialog } from "@/components/server-power-dialog";
 import { BmcLogsBatchDialog, BmcUserBatchDialog } from "@/components/bmc-batch-dialogs";
 import { ServerSidebar, type Tab as SidebarTab } from "@/components/server-sidebar";
 import type { AssetRow } from "@/lib/asset-view";
 import { ASSET_STATUS, ASSET_STATUS_TONE, ASSET_TYPES, HEALTH_LABEL, HEALTH_TONE, WARRANTY_LABEL } from "@/lib/asset-labels";
-import type { AssetHealth, AssetStatus, PowerState, Customer, Datacenter, RemoteFile, Site } from "@/lib/types";
+import type { AssetHealth, PowerState, Customer, Datacenter, RemoteFile, Site } from "@/lib/types";
 import { SiteOptions } from "@/components/site-options";
 import { matchesSearch, pasteAsList, searchTerms } from "@/lib/search";
 import { formatTime } from "@/lib/time";
@@ -185,7 +186,7 @@ function Dash() {
 
 const tagCompare = (a: string, b: string) => a.localeCompare(b, "zh-CN", { numeric: true });
 
-/** 资产列表：筛选、勾选后批量改状态或归属、电源、采集硬件配置、批量任务；点一行打开侧边栏。 */
+/** 资产列表：筛选、勾选，批量操作和导出都在对话框里再定范围（选中的、筛出来的、全部）；点一行打开侧边栏。 */
 export function AssetList({
   rows,
   customers,
@@ -206,14 +207,12 @@ export function AssetList({
   const [filters, setFilters] = useState<Filters>(EMPTY);
   const [picked, setPicked] = useState<string[]>([]);
   const [exporting, setExporting] = useState(false);
+  const [batching, setBatching] = useState(false);
   const [sideId, setSideId] = useState<string | null>(null);
   const [sideTab, setSideTab] = useState<SidebarTab>("overview");
   const canConsole = useCan("console");
   const canPower = useCan("power");
   const canEdit = useCan("assets.edit");
-  const canCollect = useCan("inventory");
-  const canLogs = useCan("logs.collect");
-  const canBmcUsers = useCan("bmc.users");
   const [creating, setCreating] = useState(false);
   const [importing, setImporting] = useState(false);
   // 从右上角任务列表点开的后台导入。
@@ -223,10 +222,6 @@ export function AssetList({
   const [logTargets, setLogTargets] = useState<AssetRow[]>([]);
   const [userTargets, setUserTargets] = useState<AssetRow[]>([]);
   const [consoleRow, setConsoleRow] = useState<AssetRow | null>(null);
-  const [bulkStatus, setBulkStatus] = useState("");
-  const [bulkCustomer, setBulkCustomer] = useState("");
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
   const [widths, setWidths] = useState<Record<string, number>>({});
   const [layout, setLayout] = useState<Layout>({ order: [], hidden: [] });
   const [arranging, setArranging] = useState<Layout | null>(null);
@@ -315,34 +310,22 @@ export function AssetList({
     return terms.filter((term) => !texts.some((text) => text.includes(term)));
   }, [terms, shown]);
   const sideRow = rows.find((row) => row.id === sideId) || null;
-  const pickedRows = rows.filter((row) => picked.includes(row.id));
-  const installed = rows.filter((row) => row.host).map((row) => row.id);
+  const shownIds = useMemo(() => shown.map((row) => row.id), [shown]);
+  const unpickedShown = shownIds.filter((id) => !picked.includes(id)).length;
 
   // 表格只管当前显示的行；被筛掉但之前勾过的照样留着，和以前一样。
   const selection = useMemo<GridRowSelectionModel>(() => ({ type: "include", ids: new Set(picked) }), [picked]);
   function onSelection(model: GridRowSelectionModel) {
-    const shownIds = shown.map((row) => row.id);
     const inGrid = model.type === "include" ? shownIds.filter((id) => model.ids.has(id)) : shownIds.filter((id) => !model.ids.has(id));
     setPicked((list) => [...list.filter((id) => !shownIds.includes(id)), ...inGrid]);
   }
 
-  async function bulkUpdate(body: Record<string, unknown>, label: string) {
-    if (!pickedRows.length) return;
-    if (!window.confirm(`把选中的 ${pickedRows.length} 台${label}？`)) return;
-    setError("");
-    setMessage("");
-    let failed = 0;
-    for (const row of pickedRows) {
-      const response = await fetch(`/api/assets/${row.id}`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-      }).catch(() => null);
-      if (!response?.ok) failed++;
-    }
-    if (failed) setError(`${failed} 台没改成功`);
-    else setMessage(`已${label}`);
-    router.refresh();
+  /** 批量操作对话框里选了电源、采集、日志、BMC 用户，交给原来的对话框。 */
+  function handOff(action: HandOff, targets: AssetRow[]) {
+    if (action === "power") setPowerTargets(targets);
+    else if (action === "collect") setCollectTargets(targets.map((row) => ({ id: row.id, sn: row.sn, type: row.type, bmcIp: row.bmcIp })));
+    else if (action === "logs") setLogTargets(targets);
+    else setUserTargets(targets);
   }
 
   const columns = useMemo<GridColDef<AssetRow>[]>(() => {
@@ -575,6 +558,9 @@ export function AssetList({
         />
         {filtering ? <Button onClick={() => setFilters(EMPTY)}>清除筛选</Button> : null}
         <Stack direction="row" useFlexGap spacing={1} sx={{ ml: "auto", flexWrap: "wrap" }}>
+          <Button variant="outlined" onClick={() => setBatching(true)}>
+            批量操作
+          </Button>
           <Button variant="outlined" onClick={() => setExporting(true)}>
             导出 Excel
           </Button>
@@ -601,78 +587,19 @@ export function AssetList({
           共 {rows.length} 台{filtering ? `，筛选后 ${shown.length} 台` : ""}
           {picked.length ? `，选中 ${picked.length} 台` : ""}。
         </Typography>
+        {filtering && unpickedShown ? (
+          <Button onClick={() => setPicked((list) => [...list, ...shownIds.filter((id) => !list.includes(id))])}>{`选中筛选出的 ${shown.length} 台`}</Button>
+        ) : null}
+        {!filtering && unpickedShown ? <Button onClick={() => setPicked(shownIds)}>{`全选 ${rows.length} 台`}</Button> : null}
         {picked.length ? (
           <>
-{canEdit ? (
-              <>
-                            <TextField select slotProps={NATIVE} value={bulkStatus} onChange={(event) => setBulkStatus(event.target.value)}>
-                  <option value="">改状态为…</option>
-                  {Object.entries(ASSET_STATUS).map(([value, label]) => (
-                    <option key={value} value={value}>
-                      {label}
-                    </option>
-                  ))}
-                </TextField>
-                <Button variant="outlined" disabled={!bulkStatus} onClick={() => void bulkUpdate({ status: bulkStatus }, `改成「${ASSET_STATUS[bulkStatus as AssetStatus]}」`)}>
-                  改状态
-                </Button>
-                <TextField select slotProps={NATIVE} value={bulkCustomer} onChange={(event) => setBulkCustomer(event.target.value)}>
-                  <option value="">改归属为…</option>
-                  <option value="none">无（自有）</option>
-                  {customers.map((customer) => (
-                    <option key={customer.id} value={customer.id}>
-                      {customer.code} · {customer.name}
-                    </option>
-                  ))}
-                </TextField>
-                <Button
-                  variant="outlined"
-                  disabled={!bulkCustomer}
-                  onClick={() =>
-                    void bulkUpdate(
-                      { customerId: bulkCustomer === "none" ? null : bulkCustomer },
-                      `归属改成「${bulkCustomer === "none" ? "无" : customers.find((item) => item.id === bulkCustomer)?.name}」`,
-                    )
-                  }
-                >
-                  改归属
-                </Button>
-              </>
-            ) : null}
-            {canPower ? (
-              <Button variant="outlined" onClick={() => setPowerTargets(pickedRows.filter((row) => row.bmcIp))}>
-                电源和引导
-              </Button>
-            ) : null}
-            {canCollect ? (
-              <Button variant="outlined" onClick={() => setCollectTargets(pickedRows.map((row) => ({ id: row.id, sn: row.sn, type: row.type, bmcIp: row.bmcIp })))}>
-                采集硬件配置
-              </Button>
-            ) : null}
-            {canLogs ? (
-              <Button variant="outlined" onClick={() => setLogTargets(pickedRows.filter((row) => row.type === "server"))}>
-                收集日志
-              </Button>
-            ) : null}
-            {canBmcUsers ? (
-              <Button variant="outlined" onClick={() => setUserTargets(pickedRows.filter((row) => row.type === "server"))}>
-                BMC 用户
-              </Button>
-            ) : null}
+            <Button variant="contained" onClick={() => setBatching(true)}>
+              批量操作
+            </Button>
             <Button onClick={() => setPicked([])}>取消选择</Button>
           </>
         ) : null}
       </Stack>
-      {message ? (
-        <Typography variant="body2" sx={{ color: "text.secondary" }}>
-          {message}
-        </Typography>
-      ) : null}
-      {error ? (
-        <Typography variant="body2" color="error">
-          {error}
-        </Typography>
-      ) : null}
 
       {rows.length === 0 ? (
         <Alert severity="info">还没有资产。点「资产入库」一台台录，用「Excel 导入」批量导入，或者在装机批次里上传服务器表，表里的机器会自动入库。</Alert>
@@ -780,7 +707,18 @@ export function AssetList({
         }}
         onDone={() => router.refresh()}
       />
-      <AssetExportDialog open={exporting} picked={picked} shown={shown.map((row) => row.id)} total={rows.length} onClose={() => setExporting(false)} />
+      <AssetExportDialog open={exporting} picked={picked} shown={shownIds} total={rows.length} onClose={() => setExporting(false)} />
+      <AssetBatchDialog
+        open={batching}
+        rows={rows}
+        picked={picked}
+        shown={shownIds}
+        customers={customers}
+        files={files}
+        onHandOff={handOff}
+        onClose={() => setBatching(false)}
+        onDone={() => router.refresh()}
+      />
       <ServerPowerDialog targets={powerTargets.map((row) => ({ id: row.id, sn: row.sn, bmcIp: row.bmcIp, power: row.power?.state }))} onClose={() => setPowerTargets([])} />
       <InventoryCollectDialog targets={collectTargets} onClose={() => setCollectTargets([])} />
       <BmcLogsBatchDialog targets={logTargets} onClose={() => setLogTargets([])} />
@@ -792,13 +730,6 @@ export function AssetList({
         onClose={() => setSideId(null)}
         onChanged={() => router.refresh()}
       />
-      <Stack spacing={1.5} sx={{ borderTop: 1, borderColor: "divider", pt: 2 }}>
-        <Typography variant="h3">批量任务</Typography>
-        <Typography variant="body2" sx={{ color: "text.secondary" }}>
-          在上面的列表里勾选机器。控制台用自己的 SSH 密钥登录系统地址执行，装机时会写入这把公钥；不是这里装的机器要自己把公钥放进 root 的 authorized_keys；控制台到不了的网段可以在「设置 → SSH 跳板机」里配成经跳板机登录。
-        </Typography>
-        <ProjectTaskRunner picked={picked} installed={installed} onPick={setPicked} files={files} revoke={false} />
-      </Stack>
     </Stack>
   );
 }

@@ -102,6 +102,7 @@ export function ProjectTaskRunner({
   files,
   tasks,
   revoke: canRevoke = true,
+  inDialog = false,
 }: {
   /** 从装机批次页发起时带上，任务记在这个批次下。 */
   projectId?: string;
@@ -116,6 +117,8 @@ export function ProjectTaskRunner({
   tasks?: RemoteTask[];
   /** 显示交付清理（撤公钥）。资产页不放。 */
   revoke?: boolean;
+  /** 放在资产页的批量操作对话框里：机器在对话框里选好了，不用提「在上面的列表里勾选」。 */
+  inDialog?: boolean;
 }) {
   const router = useRouter();
   const [fileIds, setFileIds] = useState<string[]>([]);
@@ -216,7 +219,7 @@ export function ProjectTaskRunner({
       {canEdit ? (
         <Stack component="form" onSubmit={run} spacing={2}>
           <Typography variant="body2" sx={{ color: "text.secondary" }}>
-            在上面的列表里勾选机器，用 SSH 以 root 执行同一段脚本。装机时已经把小主机的公钥写给 root。上传的文件先推到目标机，脚本里用{" "}
+            {inDialog ? "" : "在上面的列表里勾选机器，"}用 SSH 以 root 执行同一段脚本。装机时已经把小主机的公钥写给 root。上传的文件先推到目标机，脚本里用{" "}
             <Box component="code" sx={{ fontFamily: MONO }}>
               $PXE_FILES
             </Box>{" "}
@@ -308,7 +311,7 @@ export function ProjectTaskRunner({
               sx={{ width: 128 }}
             />
             <Button type="submit" variant="contained" disabled={pending || !picked.length}>
-              {pending ? "正在创建" : picked.length ? `对选中的 ${picked.length} 台执行` : "先在列表里勾选机器"}
+              {pending ? "正在创建" : picked.length ? `对${inDialog ? "这" : "选中的"} ${picked.length} 台执行` : inDialog ? "没有能执行的机器" : "先在列表里勾选机器"}
             </Button>
           </Stack>
           {error ? (
