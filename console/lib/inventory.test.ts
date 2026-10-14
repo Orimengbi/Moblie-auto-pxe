@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { changeDetail, checkBaseline, clean, diffComponents, generateBaseline, INVENTORY_SCRIPT, nicCards, parseDmidecode, parseOsInventory, redfishComponents, sizeToGb, summarizeComponents } from "./inventory.ts";
+import { changeDetail, checkBaseline, clean, cleanCollectKinds, COLLECT_KINDS, diffComponents, mergeCollectedKinds, generateBaseline, INVENTORY_SCRIPT, nicCards, parseDmidecode, parseOsInventory, redfishComponents, sizeToGb, summarizeComponents } from "./inventory.ts";
 import { crawlRedfish, RedfishAuthError, type RedfishDoc, type RedfishGet } from "./redfish.ts";
 import { linkBetween, linkText, parseNvlinks } from "./topology.ts";
 import type { HwComponent } from "./types.ts";
@@ -382,6 +382,39 @@ test("walks Redfish across pages and maps it to components", async () => {
   });
   assert.equal(flaky.memory.length, 0);
   assert.match(flaky.errors.join(), /Memory：超时/);
+});
+
+test("reads only what the picked part kinds need from Redfish", async () => {
+  const asked: string[] = [];
+  const get: RedfishGet = async (p) => {
+    asked.push(p);
+    return REDFISH[p] ?? null;
+  };
+  const raw = await crawlRedfish(get, { kinds: ["gpu"] });
+  const components = redfishComponents(raw);
+  assert.equal(find(components, "gpu", "GPU_0").attrs.memoryMiB, 275040, "只采 GPU 也要读显存");
+  assert.equal(raw.chassis.length, 0, "只采 GPU 不走机箱");
+  assert.equal(raw.drives.length + raw.firmware.length + raw.powerSupplies.length, 0);
+  assert.ok(!asked.some((p) => /Chassis|UpdateService|Storage/.test(p)), asked.join());
+  const psu = await crawlRedfish(fakeRedfish, { kinds: ["psu"] });
+  assert.equal(redfishComponents(psu).filter((c) => c.kind === "psu").length, 1);
+  assert.equal(psu.networkAdapters.length + psu.pcieSlots.length + psu.processors.length, 0);
+});
+
+test("merges a partial collection into the previous one", () => {
+  const before = parseOsInventory(OS_OUTPUT).components;
+  const fresh = structuredClone(before).filter((c) => c.kind === "gpu" || c.kind === "system" || c.kind === "board");
+  find(fresh, "gpu", "0000:06:00.0").firmware = "NEW";
+  const merged = mergeCollectedKinds(before, fresh, ["gpu"]);
+  assert.equal(merged.length, before.length, "没采的类别原样留着");
+  const changes = diffComponents(before, merged);
+  assert.deepEqual(changes.map((c) => [c.type, c.kind]), [["changed", "gpu"]]);
+  // 这次一块 GPU 都没读到，就是 GPU 全没了；别的类别不受影响。
+  const gone = diffComponents(before, mergeCollectedKinds(before, fresh.filter((c) => c.kind !== "gpu"), ["gpu"]));
+  assert.ok(gone.length && gone.every((c) => c.type === "removed" && c.kind === "gpu"), JSON.stringify(gone));
+  assert.deepEqual(cleanCollectKinds(["gpu", "x"]), ["gpu"]);
+  assert.equal(cleanCollectKinds([]), undefined);
+  assert.equal(cleanCollectKinds(COLLECT_KINDS), undefined, "全挑了就是全采");
 });
 
 test("diffs two collections of the same machine", () => {

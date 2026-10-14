@@ -6,7 +6,7 @@ import { parseLeases, renderBootIpxe, renderDnsmasq } from "./dnsmasq.ts";
 import { assetBmcAccounts, deleteAsset, findAssetBySn, getAsset, syncAssetFromRow } from "./assets.ts";
 import { refreshBootScript } from "./disk-image.ts";
 import { recordHardwareChanges } from "./parts.ts";
-import { checkBaseline, diffComponents, generateBaseline, KIND_LABEL, nicCards } from "./inventory.ts";
+import { checkBaseline, diffComponents, generateBaseline, KIND_LABEL, mergeCollectedKinds, nicCards } from "./inventory.ts";
 import {
   BOOT_DEVICES,
   POWER_ACTIONS,
@@ -2144,14 +2144,17 @@ export function latestInventory(serverId: string, source: InventorySource): Inve
 }
 
 /** 存一次采集，和同来源的上一次比出变化，旧的只留最近 30 次。 */
+/** 存一次采集。input.kinds 有值时只采了这几类，其余类别（和盘位插槽，BMC 那边没读）从上一次带过来。 */
 export async function saveInventory(input: Omit<InventorySnapshot, "id" | "changes">): Promise<InventorySnapshot> {
   return withLock(() => {
     const previous = latestInventory(input.serverId, input.source);
     const stamp = input.at.replace(/[-:.]/g, "");
+    const partial: Partial<InventorySnapshot> = input.kinds?.length && previous ? { components: mergeCollectedKinds(previous.components, input.components, input.kinds), ...(input.source === "bmc" && previous.ports ? { ports: previous.ports } : {}) } : {};
     const snapshot: InventorySnapshot = {
       ...input,
+      ...partial,
       id: `${stamp}-${input.source}-${crypto.randomUUID().slice(0, 6)}`,
-      ...(previous ? { changes: diffComponents(previous.components, input.components) } : {}),
+      ...(previous ? { changes: diffComponents(previous.components, partial.components || input.components) } : {}),
     };
     writeJson(path.join(inventoryDir(input.serverId), `${snapshot.id}.json`), snapshot);
     if (snapshot.changes?.length) {

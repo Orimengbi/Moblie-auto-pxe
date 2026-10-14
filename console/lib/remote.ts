@@ -3,7 +3,7 @@ import { runProcess } from "./process.ts";
 import fs from "node:fs";
 import path from "node:path";
 import { parseLeases, type Lease } from "./dnsmasq.ts";
-import { describeChange, INVENTORY_SCRIPT, parseOsInventory, redfishComponents, summarizeComponents } from "./inventory.ts";
+import { cleanCollectKinds, describeChange, INVENTORY_SCRIPT, KIND_LABEL, parseOsInventory, redfishComponents, summarizeComponents } from "./inventory.ts";
 import { portSummary, redfishPorts } from "./ports.ts";
 import { listLocalIpv4, sameSubnet } from "./net.ts";
 import { sshKeyPath, taskPath } from "./paths.ts";
@@ -20,7 +20,7 @@ import { addEvent, assetBmcAccounts, getAsset } from "./assets.ts";
 import { BMC_SETTING_LABEL } from "./asset-labels.ts";
 import { changeClock, collectSettings, openSession, validOffset, type ClockChange } from "./bmc-redfish.ts";
 import { filePayloadPath, getFile, getProject, getTask, listMachines, listNicPlans, readLeasesText, saveInventory, saveOptics, writeTask } from "./store.ts";
-import type { Asset, BmcResetVia, BmcSettingKind, HwChange, HwPort, InventorySource, OpticsReading, Machine, NicPlan, RemoteTask, ServerRow, TaskHostSource, TaskKind, TaskTarget, TaskTargetStatus } from "./types.ts";
+import type { Asset, BmcResetVia, BmcSettingKind, HwChange, HwComponent, HwKind, HwPort, InventorySource, OpticsReading, Machine, NicPlan, RemoteTask, ServerRow, TaskHostSource, TaskKind, TaskTarget, TaskTargetStatus } from "./types.ts";
 import { shq } from "./shq.ts";
 
 const OUTPUT_LIMIT = 16000;
@@ -92,6 +92,8 @@ export interface TaskInput {
   sources?: InventorySource[];
   /** 采集硬件时顺带读 BMC 设置、BIOS 设置，默认不读。 */
   settings?: BmcSettingKind[];
+  /** 采集硬件只采这几类部件（见 COLLECT_KINDS），不给或全给就是全采。 */
+  kinds?: HwKind[];
   /** 重启 BMC 任务走带外还是带内，默认带外。 */
   bmcReset?: BmcResetVia;
   /** 设 BMC 时区和 NTP 任务要改成什么。 */
@@ -147,8 +149,9 @@ export function createTask(input: TaskInput, context: HostContext = hostContext(
   const sources = kind === "inventory" ? (["os", "bmc"] as const).filter((source) => !input.sources || input.sources.includes(source)) : [];
   const settings = kind === "inventory" ? (["overview", "bios", "firmware"] as const).filter((item) => input.settings?.includes(item)) : [];
   if (kind === "inventory" && !sources.length && !settings.length) throw new Error("至少选一种采集方式");
+  const partKinds = kind === "inventory" && sources.length ? cleanCollectKinds(input.kinds) : undefined;
   const settingsName = settings.map((item) => BMC_SETTING_LABEL[item]).join("、");
-  const inventoryName = sources.length ? `采集硬件配置${settings.length ? `、${settingsName}` : ""}` : `读取 ${settingsName}`;
+  const inventoryName = sources.length ? `采集硬件配置${partKinds ? `（${partKinds.map((item) => KIND_LABEL[item]).join("、")}）` : ""}${settings.length ? `、${settingsName}` : ""}` : `读取 ${settingsName}`;
   const defaultName =
     kind === "revoke" ? "交付清理：撤掉控制台公钥" : kind === "inventory" ? inventoryName : kind === "bmc-reset" ? `重启 BMC（${via === "inband" ? "带内" : "带外"}）` : kind === "bmc-clock" ? clockName(clock!) : kind === "bmc-logs" ? `收集 BMC 日志（${describeLogKinds(logKinds!)}）`.slice(0, 80) : kind === "bmc-user" ? describeUserChange(userChange!).slice(0, 80) : script.trim().split("\n")[0].slice(0, 80);
   const name = (input.name || "").trim().slice(0, 80) || defaultName;
@@ -206,6 +209,7 @@ export function createTask(input: TaskInput, context: HostContext = hostContext(
     targets,
     ...(kind === "inventory" ? { inventorySources: [...sources] } : {}),
     ...(settings.length ? { inventorySettings: [...settings] } : {}),
+    ...(partKinds ? { inventoryKinds: partKinds } : {}),
     ...(kind === "bmc-reset" ? { bmcReset: via } : {}),
     ...(clock ? { bmcClock: clock } : {}),
     ...(userChange ? { bmcUser: userChange } : {}),
@@ -448,13 +452,17 @@ function portLines(ports: HwPort[]): string[] {
 }
 
 export async function collectInventory(
-  task: Pick<RemoteTask, "projectId" | "timeoutSec" | "inventorySources" | "inventorySettings">,
+  task: Pick<RemoteTask, "projectId" | "timeoutSec" | "inventorySources" | "inventorySettings" | "inventoryKinds">,
   target: Pick<TaskTarget, "serverId" | "host" | "sn">,
   exec: Exec,
   redfish: RedfishFactory = redfishGetter,
 ): Promise<{ status: TaskTargetStatus; exitCode: number | null; output: string }> {
   const deadline = Date.now() + task.timeoutSec * 1000;
   const sources = task.inventorySources || ["os", "bmc"];
+  const kinds = task.inventoryKinds?.length ? task.inventoryKinds : undefined;
+  // 只采几类时：结果里只留这几类（加整机、主板），存的时候其余类别从上一次带过来；任务输出也只列这几类。
+  const pick = (components: HwComponent[]) => (kinds ? components.filter((item) => kinds.includes(item.kind) || item.kind === "system" || item.kind === "board") : components);
+  const only = kinds ? { kinds: [...kinds] } : {};
   const row = getAsset(target.serverId);
   const lines: string[] = [];
   let ok = 0;
@@ -475,6 +483,7 @@ export async function collectInventory(
       } else {
         reached = true;
         const parsed = parseOsInventory(ran.output);
+        const components = pick(parsed.components);
         const saved = await saveInventory({
           serverId: target.serverId,
           projectId: task.projectId,
@@ -482,13 +491,14 @@ export async function collectInventory(
           source: "os",
           at: new Date().toISOString(),
           host: target.host,
-          components: parsed.components,
+          components,
+          ...only,
           warnings: parsed.warnings,
           ...(parsed.topology ? { topology: parsed.topology } : {}),
           ports: parsed.ports,
         });
         ok++;
-        lines.push(`系统内（${target.host}）：`, ...summarizeComponents(parsed.components).map((line) => `  ${line}`), ...portLines(parsed.ports), ...changeLines(saved.changes), ...parsed.warnings.map((line) => `  提示：${line}`));
+        lines.push(`系统内（${target.host}）：`, ...summarizeComponents(components).map((line) => `  ${line}`), ...portLines(parsed.ports), ...changeLines(saved.changes), ...parsed.warnings.map((line) => `  提示：${line}`));
       }
     }
   }
@@ -505,10 +515,11 @@ export async function collectInventory(
       let failure = "";
       for (const account of accounts) {
         try {
-          const raw = await withDeadline(crawlRedfish(redfish(row.bmcIp, account.user, account.password)), deadline, "读 Redfish ");
+          const raw = await withDeadline(crawlRedfish(redfish(row.bmcIp, account.user, account.password), { kinds }), deadline, "读 Redfish ");
           reached = true;
-          const components = redfishComponents(raw);
-          const ports = redfishPorts(raw);
+          const components = pick(redfishComponents(raw));
+          // 只采几类时没读插槽，盘位插槽沿用上一次的（saveInventory 里换）。
+          const ports = kinds ? [] : redfishPorts(raw);
           const warnings = raw.errors.length ? [`有 ${raw.errors.length} 个 Redfish 路径没读到，例如 ${raw.errors[0]}`] : [];
           const saved = await saveInventory({
             serverId: target.serverId,
@@ -520,10 +531,11 @@ export async function collectInventory(
             components,
             warnings,
             ports,
+            ...only,
           });
           ok++;
           done = true;
-          lines.push(`BMC（${row.bmcIp}）：`, ...summarizeComponents(components).map((line) => `  ${line}`), ...portLines(ports), ...changeLines(saved.changes), ...warnings.map((line) => `  提示：${line}`));
+          lines.push(`BMC（${row.bmcIp}）：`, ...summarizeComponents(components).map((line) => `  ${line}`), ...(kinds ? [] : portLines(ports)), ...changeLines(saved.changes), ...warnings.map((line) => `  提示：${line}`));
           break;
         } catch (error) {
           failure = error instanceof Error ? error.message : "读取失败";

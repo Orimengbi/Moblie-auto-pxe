@@ -16,7 +16,8 @@ import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import { BMC_SETTING_LABEL } from "@/lib/asset-labels";
 import { api } from "@/lib/client-api";
-import type { BmcSettingKind, InventorySource } from "@/lib/types";
+import { COLLECT_KIND_ONLY, COLLECT_KINDS, KIND_LABEL, SOURCE_LABEL } from "@/lib/inventory";
+import type { BmcSettingKind, HwKind, InventorySource } from "@/lib/types";
 
 export interface CollectTarget {
   /** 资产 id。 */
@@ -75,6 +76,7 @@ export function InventoryCollectPanel({
 }) {
   const [sources, setSources] = useState<InventorySource[]>(preset?.sources || ["os", "bmc"]);
   const [settings, setSettings] = useState<BmcSettingKind[]>(preset?.settings || ["overview", "bios"]);
+  const [kinds, setKinds] = useState<HwKind[]>(COLLECT_KINDS);
   const [concurrency, setConcurrency] = useState(8);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
@@ -91,6 +93,7 @@ export function InventoryCollectPanel({
       kind: "inventory",
       sources,
       settings,
+      ...(kinds.length < COLLECT_KINDS.length ? { kinds } : {}),
       assetIds: servers.map((target) => target.id),
       ...(projectId ? { projectId } : {}),
       concurrency,
@@ -103,7 +106,10 @@ export function InventoryCollectPanel({
     window.dispatchEvent(new Event("pxe:import-jobs"));
   }
 
-  const title = sources.length ? `采集 ${servers.length} 台的硬件配置` : `读取 ${servers.length} 台的${settings.map((item) => BMC_SETTING_LABEL[item]).join("、") || "设置"}`;
+  const partial = kinds.length < COLLECT_KINDS.length;
+  // 挑的类别只有另一边读得到，比如只勾了系统内却只要电源。
+  const unreadable = sources.length ? kinds.filter((kind) => COLLECT_KIND_ONLY[kind] && !sources.includes(COLLECT_KIND_ONLY[kind]!)) : [];
+  const title = sources.length ? `采集 ${servers.length} 台的${partial && kinds.length ? kinds.map((kind) => KIND_LABEL[kind]).join("、") : "硬件配置"}` : `读取 ${servers.length} 台的${settings.map((item) => BMC_SETTING_LABEL[item]).join("、") || "设置"}`;
   useEffect(() => onTitle?.(title), [title, onTitle]);
 
   return taskId ? (
@@ -124,7 +130,48 @@ export function InventoryCollectPanel({
                 />
               ))}
             </Stack>
-            <Stack direction="row" spacing={2} sx={{ mt: "0 !important" }}>
+            {sources.length ? (
+              <Box>
+                <Stack direction="row" spacing={0.5} sx={{ alignItems: "center" }}>
+                  <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                    部件
+                  </Typography>
+                  <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                    {partial ? `${kinds.length}/${COLLECT_KINDS.length}` : "全部"}
+                  </Typography>
+                  <Button size="small" onClick={() => setKinds(COLLECT_KINDS)}>
+                    全选
+                  </Button>
+                  <Button size="small" onClick={() => setKinds([])}>
+                    清空
+                  </Button>
+                </Stack>
+                <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr 1fr", sm: "repeat(4, 1fr)" } }}>
+                  {COLLECT_KINDS.map((kind) => (
+                    <FormControlLabel
+                      key={kind}
+                      sx={{ mr: 0 }}
+                      control={<Checkbox size="small" checked={kinds.includes(kind)} onChange={() => setKinds((list) => (list.includes(kind) ? list.filter((item) => item !== kind) : COLLECT_KINDS.filter((item) => item === kind || list.includes(item))))} />}
+                      label={
+                        <Typography variant="body2">
+                          {KIND_LABEL[kind]}
+                          {COLLECT_KIND_ONLY[kind] ? (
+                            <Box component="span" sx={{ color: "text.secondary" }}>{`（仅${SOURCE_LABEL[COLLECT_KIND_ONLY[kind]!]}）`}</Box>
+                          ) : null}
+                        </Typography>
+                      }
+                    />
+                  ))}
+                </Box>
+                <Typography variant="caption" sx={{ color: "text.secondary", display: "block" }}>
+                  {partial
+                    ? "只采勾上的类别，没勾的保留上次采集的结果；BMC 只读这几类要的 Redfish 资源，比全采快。整机、主板信息每次都会顺带更新。"
+                    : "全采。只想更新某几类（比如换了 GPU、加了硬盘）时，只勾那几类。"}
+                  {unreadable.length ? ` ${unreadable.map((kind) => KIND_LABEL[kind]).join("、")}在没勾的那一边才读得到，这次读不到。` : ""}
+                </Typography>
+              </Box>
+            ) : null}
+            <Stack direction="row" spacing={2}>
               {(["overview", "bios", "firmware"] as const).map((value) => (
                 <FormControlLabel
                   key={value}
@@ -153,7 +200,7 @@ export function InventoryCollectPanel({
               </Typography>
             ) : null}
             <Box>
-              <Button variant="contained" disabled={pending || (!sources.length && !settings.length) || !servers.length} onClick={() => void start()}>
+              <Button variant="contained" disabled={pending || (!sources.length && !settings.length) || (sources.length > 0 && !kinds.length) || !servers.length} onClick={() => void start()}>
                 {pending ? "正在发起" : sources.length ? `开始采集 ${servers.length} 台` : `开始读取 ${servers.length} 台`}
               </Button>
             </Box>
