@@ -49,6 +49,8 @@ test("root paths in BMC pages and headers are moved under the server's prefix", 
   const shim = kvm.shimScript({ prefix, csrf: "c1", user: "ops", privilege: 4, extendedpriv: 3, features: ["CD_SERVER_APP", "KVM_SESSION_RECONNECT"] });
   assert.match(shim, /"CD_SERVER_APP_FLAG":true,"HOST_CURSOR_ENABLED_FLAG":false,"KVM_SESS_RECON_FLG":true/);
   assert.match(shim, /window\.kvm_access = 1;/);
+  // 同一标签页里刷新过查看器后，H5Viewer 留下的 reloaded=1 会让后面每次打开都停在「请重新启动」。
+  assert.match(shim, /sessionStorage\.removeItem\("reloaded"\)/);
   assert.doesNotThrow(() => new Function(shim), "shim 是合法的 JavaScript");
 });
 
