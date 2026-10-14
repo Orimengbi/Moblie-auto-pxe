@@ -1787,11 +1787,21 @@ export async function controlAsset(
   // 命令发完 BMC 要过几秒才报新状态（HGX 机器开机要十几秒），马上读会读到旧的。每 3 秒读一次，最多等 30 秒。
   // 软关机要等系统自己关，30 秒常常不够，页面会接着读。
   const expected: PowerState | null = !action ? null : action === "off" || action === "soft" ? "off" : "on";
+  // 这次又点了电源操作：之前那次的后台跟踪作废。
+  following.delete(assetId);
   let state = await powerStatus(asset.bmcIp, account.user, account.password, exec).catch(() => "unknown" as const);
   for (let tries = 0; expected && state !== expected && tries < 10; tries++) {
     await sleep(3_000);
     state = await powerStatus(asset.bmcIp, account.user, account.password, exec).catch(() => "unknown" as const);
   }
+  await savePower(assetId, state);
+  // 30 秒还没变过来（多是软关机，要等系统自己关完），后台接着读，不管页面上的对话框开没开。
+  if (expected && state !== expected) void followPower(assetId, asset.bmcIp, account, expected, exec, sleep);
+  return { power: state, message: `${asset.sn}：${done.join("，")}` };
+}
+
+/** 开关机状态记进监控，也写回装机批次里的这台。 */
+async function savePower(assetId: string, state: PowerState): Promise<void> {
   recordPower(assetId, state);
   await withLock(() => {
     for (const current of serversOfAsset(assetId)) {
@@ -1799,7 +1809,37 @@ export async function controlAsset(
       writeServer({ ...current, power: state, ipmiLink: "up", updatedAt: new Date().toISOString() });
     }
   });
-  return { power: state, message: `${asset.sn}：${done.join("，")}` };
+}
+
+/** 每台只跟最近一次操作：又点了别的电源操作，旧的跟踪就停。 */
+const following = new Map<string, symbol>();
+
+/** 每 10 秒读一次，读到预期的状态（或者 5 分钟到了）为止，读到变化就记下，资产列表会自己拉到。 */
+async function followPower(
+  assetId: string,
+  host: string,
+  account: { user: string; password: string },
+  expected: PowerState,
+  exec: IpmiExec,
+  sleep: (ms: number) => Promise<void>,
+): Promise<void> {
+  const token = Symbol(assetId);
+  following.set(assetId, token);
+  let last: PowerState | null = null;
+  try {
+    for (let round = 0; round < 30 && following.get(assetId) === token; round++) {
+      await sleep(10_000);
+      if (following.get(assetId) !== token) return;
+      const state = await powerStatus(host, account.user, account.password, exec).catch(() => "unknown" as const);
+      if (state !== last && state !== "unknown") await savePower(assetId, state);
+      last = state;
+      if (state === expected) return;
+    }
+  } catch (error) {
+    console.error(`[power] 跟踪 ${host} 的开关机状态失败：${error instanceof Error ? error.message : error}`);
+  } finally {
+    if (following.get(assetId) === token) following.delete(assetId);
+  }
 }
 
 /** 现读一台机器的开关机状态（IPMI chassis power status），顺带记进监控和装机批次。电源对话框打开时用。 */

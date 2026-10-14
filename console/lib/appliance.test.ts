@@ -941,6 +941,21 @@ test("power and boot device go to the BMC with the account it accepts now", asyn
   assert.deepEqual(waited, [3000, 3000]);
   assert.equal(await assetPowerState(row.assetId, exec), "on");
 
+  // 软关机：系统过了 30 秒还没关完，接口先回「开机」；后台接着读，关了就记下「关机」，不靠页面上的对话框。
+  let shutting = 0;
+  const softExec = async (host: string, user: string, password: string, args: string[]) => {
+    if (args.join(" ") === "chassis power soft") shutting = 14;
+    if (args.join(" ") === "chassis power status" && shutting > 0 && --shutting === 0) on = false;
+    return exec(host, user, password, args);
+  };
+  const ticks: number[] = [];
+  const instant = async (ms: number) => void ticks.push(ms);
+  assert.equal((await controlAsset(row.assetId, { power: "soft" }, softExec, instant)).power, "on");
+  for (let i = 0; i < 50 && listServers().find((item) => item.id === row.id)?.power !== "off"; i++) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(listServers().find((item) => item.id === row.id)?.power, "off", "后台跟到关机");
+  assert.ok(ticks.includes(10_000), "30 秒之后每 10 秒读一次");
+  await controlAsset(row.assetId, { power: "on" }, exec);
+
   await assert.rejects(controlAsset(row.assetId, { power: "explode" as never }, exec), /不支持的电源操作/);
   await assert.rejects(controlAsset(row.assetId, {}, exec), /没有要执行的操作/);
   const noLease = rows.find((item) => item.sn === "SN-NOLEASE")!;

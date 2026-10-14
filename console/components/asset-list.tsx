@@ -251,7 +251,7 @@ const EXTRA_COLUMNS: GridColDef<AssetRow>[] = [
 
 /** 资产列表：筛选、勾选，批量操作和导出都在对话框里再定范围（选中的、筛出来的、全部）；点一行打开侧边栏。 */
 export function AssetList({
-  rows,
+  rows: initialRows,
   customers,
   sites,
   datacenters,
@@ -267,6 +267,32 @@ export function AssetList({
 }) {
   const router = useRouter();
   const search = useSearchParams();
+  // 开关机状态每 20 秒拉一次（页面在后台时不拉）；比页面加载时新的就换上，不用整页刷新。
+  const [livePower, setLivePower] = useState<Record<string, AssetRow["power"]>>({});
+  useEffect(() => {
+    let stopped = false;
+    async function pull() {
+      if (document.hidden) return;
+      const response = await fetch("/api/assets/power").catch(() => null);
+      const data = response?.ok ? ((await response.json().catch(() => null)) as Record<string, AssetRow["power"]> | null) : null;
+      if (data && !stopped) setLivePower(data);
+    }
+    const timer = setInterval(() => void pull(), 20_000);
+    document.addEventListener("visibilitychange", pull);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", pull);
+    };
+  }, []);
+  const rows = useMemo(
+    () =>
+      initialRows.map((row) => {
+        const live = livePower[row.id];
+        return live && live.at > (row.power?.at || "") ? { ...row, power: live } : row;
+      }),
+    [initialRows, livePower],
+  );
   const [filters, setFilters] = useState<Filters>(EMPTY);
   const [picked, setPicked] = useState<string[]>([]);
   const [exporting, setExporting] = useState(false);
