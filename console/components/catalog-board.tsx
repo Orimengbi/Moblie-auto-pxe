@@ -14,7 +14,8 @@ import Grid from "@mui/material/Grid";
 import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
-import { DataGrid, type GridColDef } from "@mui/x-data-grid";
+import { type GridColDef } from "@mui/x-data-grid";
+import { ScrollGrid } from "@/components/mui/scroll-grid";
 import { CATALOG_CATEGORIES, CATALOG_FIELDS, specText } from "@/lib/catalog-schema";
 import type { CatalogCategory, CatalogEntry } from "@/lib/types";
 import type { HeightSync } from "@/lib/catalog";
@@ -160,10 +161,9 @@ export function CatalogBoard({ entries, admin }: { entries: CatalogEntry[]; admi
         </Alert>
       ) : null}
       <Box sx={{ width: "100%", minWidth: 0 }}>
-        <DataGrid
+        <ScrollGrid
           rows={shown}
           columns={columns}
-          autoHeight
           getRowHeight={() => "auto"}
           initialState={{ pagination: { paginationModel: { pageSize: 100 } } }}
           pageSizeOptions={[25, 50, 100]}

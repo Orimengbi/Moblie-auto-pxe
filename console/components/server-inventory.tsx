@@ -8,7 +8,8 @@ import FormControlLabel from "@mui/material/FormControlLabel";
 import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
-import { DataGrid, type GridColDef, type GridEventListener } from "@mui/x-data-grid";
+import { type GridColDef, type GridEventListener } from "@mui/x-data-grid";
+import { ScrollGrid } from "@/components/mui/scroll-grid";
 import { KIND_LABEL, KIND_ORDER, SOURCE_LABEL } from "@/lib/inventory";
 import type { Baseline, BaselineIssue, HwComponent, HwKind, InventoryMeta, InventorySnapshot, InventorySource, RemoteTask } from "@/lib/types";
 import { formatTime } from "@/lib/time";
@@ -88,11 +89,10 @@ function PartTable({ kind, items }: { kind: HwKind; items: HwComponent[] }) {
   const columns = useMemo(() => apply(PART_COLUMNS), [apply]);
   const rows = useMemo(() => items.map((item, index) => ({ ...item, id: index })), [items]);
   return (
-    <DataGrid
+    <ScrollGrid
       rows={rows}
       columns={columns}
       onColumnWidthChange={onColumnWidthChange}
-      autoHeight
       hideFooter
       disableColumnMenu
       getRowHeight={() => "auto"}

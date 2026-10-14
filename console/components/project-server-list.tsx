@@ -9,17 +9,8 @@ import Button from "@mui/material/Button";
 import Divider from "@mui/material/Divider";
 import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
-import {
-  DataGrid,
-  gridFilteredTopLevelRowCountSelector,
-  useGridApiRef,
-  type GridColDef,
-  type GridFilterItem,
-  type GridFilterModel,
-  type GridRowSelectionModel,
-  type GridSortCellParams,
-  type GridSortModel,
-} from "@mui/x-data-grid";
+import { gridFilteredTopLevelRowCountSelector, useGridApiRef, type GridColDef, type GridFilterItem, type GridFilterModel, type GridRowSelectionModel, type GridSortCellParams, type GridSortModel } from "@mui/x-data-grid";
+import { ScrollGrid } from "@/components/mui/scroll-grid";
 import { StatusChip } from "@/components/mui/status-chip";
 import { HOST_SOURCE, ProjectTaskRunner } from "@/components/project-task-runner";
 import { ServerEditDialog } from "@/components/server-edit-dialog";
@@ -596,11 +587,10 @@ export function ProjectServerList({
           </Typography>
         ) : (
           <Box sx={{ width: "100%", minWidth: 0 }}>
-            <DataGrid
+            <ScrollGrid
               apiRef={apiRef}
               rows={rows}
               columns={columns}
-              autoHeight
               getRowHeight={() => "auto"}
               checkboxSelection
               disableRowSelectionOnClick

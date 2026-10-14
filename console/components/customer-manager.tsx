@@ -12,7 +12,8 @@ import MuiLink from "@mui/material/Link";
 import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
-import { DataGrid, type GridColDef } from "@mui/x-data-grid";
+import { type GridColDef } from "@mui/x-data-grid";
+import { ScrollGrid } from "@/components/mui/scroll-grid";
 import type { Customer } from "@/lib/types";
 import { useCan } from "@/components/role-context";
 
@@ -130,10 +131,9 @@ export function CustomerManager({ customers, counts }: { customers: Customer[]; 
         </Typography>
       ) : (
         <Box sx={{ width: "100%", minWidth: 0 }}>
-          <DataGrid
+          <ScrollGrid
             rows={customers}
             columns={columns}
-            autoHeight
             getRowHeight={() => "auto"}
             initialState={{ pagination: { paginationModel: { pageSize: 100 } } }}
             pageSizeOptions={[25, 50, 100]}

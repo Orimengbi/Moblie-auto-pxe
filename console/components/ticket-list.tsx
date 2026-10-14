@@ -10,7 +10,8 @@ import FormControlLabel from "@mui/material/FormControlLabel";
 import MuiLink from "@mui/material/Link";
 import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
-import { DataGrid, type GridColDef } from "@mui/x-data-grid";
+import { type GridColDef } from "@mui/x-data-grid";
+import { ScrollGrid } from "@/components/mui/scroll-grid";
 import { StatusChip } from "@/components/mui/status-chip";
 import { TicketCreateDialog } from "@/components/ticket-create-dialog";
 import { OPEN_TICKET_STATUS, priorityTone, TICKET_KINDS, TICKET_PRIORITY, TICKET_STATUS, TICKET_STATUS_TONE } from "@/lib/asset-labels";
@@ -127,10 +128,9 @@ export function TicketList({ tickets, me }: { tickets: TicketRow[]; me: string }
         ) : null}
       </Stack>
       <Box sx={{ width: "100%", minWidth: 0 }}>
-        <DataGrid
+        <ScrollGrid
           rows={shown}
           columns={COLUMNS}
-          autoHeight
           onRowClick={({ row }) => router.push(`/tickets/${row.id}`)}
           initialState={{ pagination: { paginationModel: { pageSize: 100 } } }}
           pageSizeOptions={[25, 50, 100]}

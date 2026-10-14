@@ -15,7 +15,8 @@ import Grid from "@mui/material/Grid";
 import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
-import { DataGrid, type GridColDef } from "@mui/x-data-grid";
+import { type GridColDef } from "@mui/x-data-grid";
+import { ScrollGrid } from "@/components/mui/scroll-grid";
 import { StatusChip } from "@/components/mui/status-chip";
 import { PART_KINDS, PART_SOURCE, PART_STATUS, partStatusTone } from "@/lib/asset-labels";
 import { matchesSearch, pasteAsList, searchTerms } from "@/lib/search";
@@ -313,10 +314,9 @@ export function PartsBoard({
       ) : null}
 
       <Box sx={{ width: "100%", minWidth: 0 }}>
-        <DataGrid
+        <ScrollGrid
           rows={shown}
           columns={columns}
-          autoHeight
           getRowHeight={() => "auto"}
           initialState={{ pagination: { paginationModel: { pageSize: 100 } } }}
           pageSizeOptions={[25, 50, 100]}
