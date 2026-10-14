@@ -17,7 +17,8 @@ import Paper from "@mui/material/Paper";
 import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
-import { DataGrid, type GridColDef } from "@mui/x-data-grid";
+import { type GridColDef } from "@mui/x-data-grid";
+import { ScrollGrid } from "@/components/mui/scroll-grid";
 import { StatusChip } from "@/components/mui/status-chip";
 import { formatBytes, useUploads } from "@/components/upload-provider";
 import type { Tone } from "@/lib/asset-labels";
@@ -309,10 +310,9 @@ export function FirmwareLibrary({ packages, admin }: { packages: FirmwarePackage
         </Alert>
       ) : null}
       <Box sx={{ width: "100%", minWidth: 0 }}>
-        <DataGrid
+        <ScrollGrid
           rows={shown}
           columns={columns}
-          autoHeight
           getRowHeight={() => "auto"}
           onRowClick={({ row }) => setOpen(row.id)}
           initialState={{ pagination: { paginationModel: { pageSize: 100 } } }}

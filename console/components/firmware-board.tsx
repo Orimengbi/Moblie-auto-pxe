@@ -18,7 +18,8 @@ import TextField from "@mui/material/TextField";
 import ToggleButton from "@mui/material/ToggleButton";
 import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
 import Typography from "@mui/material/Typography";
-import { DataGrid, type GridColDef } from "@mui/x-data-grid";
+import { type GridColDef } from "@mui/x-data-grid";
+import { ScrollGrid } from "@/components/mui/scroll-grid";
 import { InventoryCollectDialog, type CollectTarget } from "@/components/inventory-collect-dialog";
 import { StatusChip } from "@/components/mui/status-chip";
 import type { FleetComponent, FleetMachine, FleetModel } from "@/lib/firmware-fleet";
@@ -162,10 +163,9 @@ export function FirmwareBoard({ models }: { models: FleetModel[] }) {
             每个部件第一个版本是大多数机器用的，橙色的是少数派。点版本看是哪几台。
           </Typography>
           <Box sx={{ width: "100%", minWidth: 0 }}>
-            <DataGrid
+            <ScrollGrid
               rows={rows}
               columns={columns}
-              autoHeight
               getRowHeight={() => "auto"}
               initialState={{ pagination: { paginationModel: { pageSize: 100 } } }}
               pageSizeOptions={[25, 50, 100]}

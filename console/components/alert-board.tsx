@@ -9,7 +9,8 @@ import MuiLink from "@mui/material/Link";
 import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
-import { DataGrid, type GridColDef } from "@mui/x-data-grid";
+import { type GridColDef } from "@mui/x-data-grid";
+import { ScrollGrid } from "@/components/mui/scroll-grid";
 import { StatusChip } from "@/components/mui/status-chip";
 import { ALERT_SEVERITY, ALERT_SEVERITY_TONE, ALERT_SOURCE, ALERT_STATUS } from "@/lib/asset-labels";
 import { matchesSearch, pasteAsList, searchTerms } from "@/lib/search";
@@ -202,10 +203,9 @@ export function AlertBoard({ alerts, summary }: { alerts: AlertRow[]; summary: s
         </Typography>
       ) : null}
       <Box sx={{ width: "100%", minWidth: 0 }}>
-        <DataGrid
+        <ScrollGrid
           rows={shown}
           columns={columns}
-          autoHeight
           getRowHeight={() => "auto"}
           // 已恢复的变淡，一眼分出还要处理的
           getRowClassName={({ row }) => (row.status === "resolved" ? "alert-resolved" : "")}

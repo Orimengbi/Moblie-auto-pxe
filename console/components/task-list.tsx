@@ -9,7 +9,8 @@ import MuiLink from "@mui/material/Link";
 import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
-import { DataGrid, type GridColDef, type GridPaginationModel, type GridRowSelectionModel } from "@mui/x-data-grid";
+import { type GridColDef, type GridPaginationModel, type GridRowSelectionModel } from "@mui/x-data-grid";
+import { ScrollGrid } from "@/components/mui/scroll-grid";
 import { StatusChip } from "@/components/mui/status-chip";
 import { gridText } from "@/components/mui/theme";
 import { TASK_KIND_LABEL } from "@/lib/asset-labels";
@@ -210,11 +211,10 @@ export function TaskList() {
         </Typography>
       ) : null}
       <Box sx={{ width: "100%", minWidth: 0 }}>
-        <DataGrid
+        <ScrollGrid
           rows={shown}
           columns={COLUMNS}
           loading={tasks === null}
-          autoHeight
           getRowHeight={() => "auto"}
           checkboxSelection
           disableRowSelectionOnClick

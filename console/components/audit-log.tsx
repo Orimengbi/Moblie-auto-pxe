@@ -7,7 +7,8 @@ import MuiLink from "@mui/material/Link";
 import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
-import { DataGrid, type GridColDef, type GridPaginationModel } from "@mui/x-data-grid";
+import { type GridColDef, type GridPaginationModel } from "@mui/x-data-grid";
+import { ScrollGrid } from "@/components/mui/scroll-grid";
 import type { AuditEntry } from "@/lib/types";
 import { formatTime } from "@/lib/time";
 import { gridText } from "@/components/mui/theme";
@@ -118,10 +119,9 @@ export function AuditLog() {
         </Typography>
       ) : null}
       <Box sx={{ width: "100%", minWidth: 0 }}>
-        <DataGrid
+        <ScrollGrid
           rows={entries}
           columns={COLUMNS}
-          autoHeight
           getRowHeight={() => "auto"}
           paginationModel={page}
           onPaginationModelChange={setPage}

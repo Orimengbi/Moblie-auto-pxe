@@ -18,7 +18,7 @@ import TextField from "@mui/material/TextField";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import ClearOutlined from "@mui/icons-material/ClearOutlined";
-import { DataGrid, GridColumnMenu, type GridColDef, type GridColumnMenuItemProps, type GridColumnMenuProps, type GridRowProps, type GridRowSelectionModel } from "@mui/x-data-grid";
+import { GridColumnMenu, type GridColDef, type GridColumnMenuItemProps, type GridColumnMenuProps, type GridRowProps, type GridRowSelectionModel } from "@mui/x-data-grid";
 import ListItemIcon from "@mui/material/ListItemIcon";
 import ListItemText from "@mui/material/ListItemText";
 import MenuItem from "@mui/material/MenuItem";
@@ -29,6 +29,7 @@ import { AssetImportDialog } from "@/components/asset-import-dialog";
 import { AssetExportDialog } from "@/components/asset-export-dialog";
 import { AssetBatchDialog } from "@/components/asset-batch-dialog";
 import { SortableList } from "@/components/sortable-list";
+import { ScrollGrid } from "@/components/mui/scroll-grid";
 import { StatusChip } from "@/components/mui/status-chip";
 import { FONT_SANS, gridText } from "@/components/mui/theme";
 import { HOST_SOURCE } from "@/components/project-task-runner";
@@ -657,7 +658,7 @@ export function AssetList({
         <Alert severity="info">还没有资产。点「资产入库」一台台录，用「Excel 导入」批量导入，或者在装机批次里上传服务器表，表里的机器会自动入库。</Alert>
       ) : (
         <Box sx={{ width: "100%", minWidth: 0 }}>
-          <DataGrid
+          <ScrollGrid
             rows={shown}
             columns={shownColumns}
             checkboxSelection
@@ -674,7 +675,6 @@ export function AssetList({
             slotProps={{ row: { "data-server-row": "" } as Partial<GridRowProps> }}
             slots={{ columnMenu: AssetColumnMenu }}
             localeText={gridText({ noRowsLabel: "没有符合筛选条件的资产。" })}
-            autoHeight
             pageSizeOptions={[25, 50, 100]}
             initialState={{ pagination: { paginationModel: { pageSize: 100 } } }}
             sx={{
