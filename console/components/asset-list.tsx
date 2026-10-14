@@ -27,15 +27,13 @@ import VisibilityOffOutlined from "@mui/icons-material/VisibilityOffOutlined";
 import { AssetEditDialog } from "@/components/asset-edit-dialog";
 import { AssetImportDialog } from "@/components/asset-import-dialog";
 import { AssetExportDialog } from "@/components/asset-export-dialog";
-import { AssetBatchDialog, type HandOff } from "@/components/asset-batch-dialog";
+import { AssetBatchDialog } from "@/components/asset-batch-dialog";
 import { SortableList } from "@/components/sortable-list";
 import { StatusChip } from "@/components/mui/status-chip";
 import { FONT_SANS, gridText } from "@/components/mui/theme";
-import { InventoryCollectDialog, type CollectTarget } from "@/components/inventory-collect-dialog";
 import { HOST_SOURCE } from "@/components/project-task-runner";
 import { RemoteConsole } from "@/components/remote-console";
 import { ServerPowerDialog } from "@/components/server-power-dialog";
-import { BmcLogsBatchDialog, BmcUserBatchDialog } from "@/components/bmc-batch-dialogs";
 import { ServerSidebar, type Tab as SidebarTab } from "@/components/server-sidebar";
 import type { AssetRow } from "@/lib/asset-view";
 import { ASSET_STATUS, ASSET_STATUS_TONE, ASSET_TYPES, HEALTH_LABEL, HEALTH_TONE, WARRANTY_LABEL } from "@/lib/asset-labels";
@@ -218,9 +216,6 @@ export function AssetList({
   // 从右上角任务列表点开的后台导入。
   const [importJob, setImportJob] = useState<string | null>(null);
   const [powerTargets, setPowerTargets] = useState<AssetRow[]>([]);
-  const [collectTargets, setCollectTargets] = useState<CollectTarget[]>([]);
-  const [logTargets, setLogTargets] = useState<AssetRow[]>([]);
-  const [userTargets, setUserTargets] = useState<AssetRow[]>([]);
   const [consoleRow, setConsoleRow] = useState<AssetRow | null>(null);
   const [widths, setWidths] = useState<Record<string, number>>({});
   const [layout, setLayout] = useState<Layout>({ order: [], hidden: [] });
@@ -318,14 +313,6 @@ export function AssetList({
   function onSelection(model: GridRowSelectionModel) {
     const inGrid = model.type === "include" ? shownIds.filter((id) => model.ids.has(id)) : shownIds.filter((id) => !model.ids.has(id));
     setPicked((list) => [...list.filter((id) => !shownIds.includes(id)), ...inGrid]);
-  }
-
-  /** 批量操作对话框里选了电源、采集、日志、BMC 用户，交给原来的对话框。 */
-  function handOff(action: HandOff, targets: AssetRow[]) {
-    if (action === "power") setPowerTargets(targets);
-    else if (action === "collect") setCollectTargets(targets.map((row) => ({ id: row.id, sn: row.sn, type: row.type, bmcIp: row.bmcIp })));
-    else if (action === "logs") setLogTargets(targets);
-    else setUserTargets(targets);
   }
 
   const columns = useMemo<GridColDef<AssetRow>[]>(() => {
@@ -715,14 +702,10 @@ export function AssetList({
         shown={shownIds}
         customers={customers}
         files={files}
-        onHandOff={handOff}
         onClose={() => setBatching(false)}
         onDone={() => router.refresh()}
       />
       <ServerPowerDialog targets={powerTargets.map((row) => ({ id: row.id, sn: row.sn, bmcIp: row.bmcIp, power: row.power?.state }))} onClose={() => setPowerTargets([])} />
-      <InventoryCollectDialog targets={collectTargets} onClose={() => setCollectTargets([])} />
-      <BmcLogsBatchDialog targets={logTargets} onClose={() => setLogTargets([])} />
-      <BmcUserBatchDialog targets={userTargets} onClose={() => setUserTargets([])} />
       {consoleRow ? <RemoteConsole row={consoleRow} port={bmcPort} onClose={() => setConsoleRow(null)} /> : null}
       <ServerSidebar
         row={sideRow ? { id: sideRow.id, sn: sideRow.sn, tag: sideRow.tag, type: sideRow.type, description: [sideRow.tag, ASSET_STATUS[sideRow.status], sideRow.place, sideRow.customerName, [sideRow.vendor, sideRow.model].filter(Boolean).join(" ")].filter(Boolean).join(" · ") } : null}

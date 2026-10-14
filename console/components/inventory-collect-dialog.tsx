@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Checkbox from "@mui/material/Checkbox";
 import Dialog from "@mui/material/Dialog";
@@ -43,26 +44,41 @@ export function InventoryCollectDialog({
   /** 打开时默认勾哪些；固件版本页只勾「固件版本」。 */
   preset?: { sources: InventorySource[]; settings: BmcSettingKind[] };
 }) {
-  const open = targets.length > 0;
-  // preset 是调用方每次渲染新建的对象，按内容比较，只在打开时套用。
-  const presetKey = preset ? JSON.stringify(preset) : "";
+  const servers = targets.filter((target) => !target.type || target.type === "server");
+  const [title, setTitle] = useState("");
+  return (
+    <Dialog open={targets.length > 0} onClose={onClose} maxWidth="sm" fullWidth>
+      <DialogTitle>{title || `采集 ${servers.length} 台的硬件配置`}</DialogTitle>
+      <DialogContent>{targets.length ? <InventoryCollectPanel targets={targets} projectId={projectId} preset={preset} onLeave={onClose} onTitle={setTitle} /> : null}</DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>关闭</Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+/** 采集的选项和「开始采集」按钮，单独的对话框和资产页的批量操作框共用。发起后原地显示任务链接。 */
+export function InventoryCollectPanel({
+  targets,
+  projectId,
+  preset,
+  onLeave,
+  onTitle,
+}: {
+  targets: CollectTarget[];
+  projectId?: string;
+  preset?: { sources: InventorySource[]; settings: BmcSettingKind[] };
+  /** 点了「打开任务页」，外面的框该关了。 */
+  onLeave: () => void;
+  /** 只读设置、不采硬件时，对话框标题跟着变。 */
+  onTitle?: (title: string) => void;
+}) {
   const [sources, setSources] = useState<InventorySource[]>(preset?.sources || ["os", "bmc"]);
   const [settings, setSettings] = useState<BmcSettingKind[]>(preset?.settings || ["overview", "bios"]);
   const [concurrency, setConcurrency] = useState(8);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [taskId, setTaskId] = useState("");
-
-  useEffect(() => {
-    if (!open) return;
-    setError("");
-    setTaskId("");
-    if (presetKey) {
-      const chosen = JSON.parse(presetKey) as { sources: InventorySource[]; settings: BmcSettingKind[] };
-      setSources(chosen.sources);
-      setSettings(chosen.settings);
-    }
-  }, [open, presetKey]);
 
   const servers = targets.filter((target) => !target.type || target.type === "server");
   const skipped = targets.length - servers.length;
@@ -87,14 +103,13 @@ export function InventoryCollectDialog({
     window.dispatchEvent(new Event("pxe:import-jobs"));
   }
 
-  return (
-    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle>{sources.length ? `采集 ${servers.length} 台的硬件配置` : `读取 ${servers.length} 台的${settings.map((item) => BMC_SETTING_LABEL[item]).join("、") || "设置"}`}</DialogTitle>
-      <DialogContent>
-        {taskId ? (
+  const title = sources.length ? `采集 ${servers.length} 台的硬件配置` : `读取 ${servers.length} 台的${settings.map((item) => BMC_SETTING_LABEL[item]).join("、") || "设置"}`;
+  useEffect(() => onTitle?.(title), [title, onTitle]);
+
+  return taskId ? (
           <Stack spacing={1}>
             <Typography variant="body2">已经开始采集，可以关掉这个窗口去干别的。进度在右上角「任务」里，每台的结果在任务页。</Typography>
-            <MuiLink component={Link} href={`/tasks/${taskId}`} onClick={onClose}>
+            <MuiLink component={Link} href={`/tasks/${taskId}`} onClick={onLeave}>
               打开任务页
             </MuiLink>
           </Stack>
@@ -129,7 +144,7 @@ export function InventoryCollectDialog({
             />
             <Typography variant="caption" sx={{ color: "text.secondary" }}>
               BMC 采集每台要一两分钟（BMC 一次只处理一个请求），多台同时跑互不影响。系统内采集要能用控制台的密钥 SSH 登录。BMC 设置是引导、定位灯、虚拟介质这些概况，BIOS 设置是全部设置项，固件版本是 BMC、BIOS、CPLD 和 HGX 底板（GPU、NVSwitch、HMC 等）的版本，每台多十几秒。读完在侧边栏 BMC、BIOS 页和「固件版本」页能看到，BIOS 和固件和上次读的比有变化会列在任务结果里。
-              {skipped ? ` 选中的里有 ${skipped} 台不是服务器，跳过。` : ""}
+              {skipped ? ` 其中 ${skipped} 台不是服务器，跳过。` : ""}
               {noBmc && (sources.includes("bmc") || settings.length) ? ` 有 ${noBmc} 台没有 BMC 地址，只能采系统内的。` : ""}
             </Typography>
             {error ? (
@@ -137,17 +152,11 @@ export function InventoryCollectDialog({
                 {error}
               </Typography>
             ) : null}
+            <Box>
+              <Button variant="contained" disabled={pending || (!sources.length && !settings.length) || !servers.length} onClick={() => void start()}>
+                {pending ? "正在发起" : sources.length ? `开始采集 ${servers.length} 台` : `开始读取 ${servers.length} 台`}
+              </Button>
+            </Box>
           </Stack>
-        )}
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={onClose}>{taskId ? "关闭" : "取消"}</Button>
-        {taskId ? null : (
-          <Button variant="contained" disabled={pending || (!sources.length && !settings.length) || !servers.length} onClick={() => void start()}>
-            {pending ? "正在发起" : "开始采集"}
-          </Button>
-        )}
-      </DialogActions>
-    </Dialog>
-  );
+        );
 }
