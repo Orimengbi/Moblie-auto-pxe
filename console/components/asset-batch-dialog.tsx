@@ -237,7 +237,7 @@ export function AssetBatchDialog({
           </Box>
         ) : null}
         <Typography variant="caption" sx={{ color: "text.secondary" }}>
-          勾上的项每台都改成一样的值，没勾的不动。机柜、U 位、IP 每台不同，到单台里改，或者用 Excel 导入。
+          勾上的项每台都改成一样的值，没勾的不动。机柜、U 位、IP 每台不同，到单台里改，或者用「Excel → 导入」。
         </Typography>
       </Stack>
     ),
