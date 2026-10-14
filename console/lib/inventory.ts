@@ -26,6 +26,28 @@ export const KIND_LABEL: Record<HwKind, string> = {
 
 export const KIND_ORDER: HwKind[] = ["system", "board", "cpu", "memory", "gpu", "disk", "nic", "transceiver", "psu", "fan", "firmware"];
 
+/** 采集硬件时能单独挑的部件类别。整机、主板每次都顺带更新（读起来不花时间）。 */
+export const COLLECT_KINDS: HwKind[] = ["cpu", "memory", "gpu", "disk", "nic", "transceiver", "psu", "firmware"];
+/** 只有一边读得到的类别：光模块只在系统里读，电源只经 BMC 读。 */
+export const COLLECT_KIND_ONLY: Partial<Record<HwKind, InventorySource>> = { transceiver: "os", psu: "bmc" };
+
+/** 挑的类别整理一下：去掉不认识的；一类没挑或全挑了就当全采（返回 undefined）。 */
+export function cleanCollectKinds(input: unknown): HwKind[] | undefined {
+  if (!Array.isArray(input)) return undefined;
+  const kinds = COLLECT_KINDS.filter((kind) => input.includes(kind));
+  return kinds.length && kinds.length < COLLECT_KINDS.length ? kinds : undefined;
+}
+
+/**
+ * 只采了几类时，把这次读到的这几类（加整机、主板）换进上一次的结果里，没采的类别照旧。
+ * 这样「和上次比的变化」只会出在采了的类别上，没采的不会被当成拆掉了。
+ */
+export function mergeCollectedKinds(previous: HwComponent[], fresh: HwComponent[], kinds: readonly HwKind[]): HwComponent[] {
+  const replaced = new Set<HwKind>([...kinds, "system", "board"]);
+  const merged = [...previous.filter((item) => !replaced.has(item.kind)), ...fresh.filter((item) => replaced.has(item.kind))];
+  return KIND_ORDER.flatMap((kind) => merged.filter((item) => item.kind === kind));
+}
+
 export const SOURCE_LABEL: Record<InventorySource, string> = {
   os: "系统内",
   bmc: "BMC",

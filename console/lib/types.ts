@@ -373,6 +373,8 @@ export interface RemoteTask {
   inventorySources?: InventorySource[];
   /** 采集硬件任务顺带读的 BMC 设置（overview）和 BIOS 设置，存成侧边栏 BMC、BIOS 页的「上次读到的」。 */
   inventorySettings?: BmcSettingKind[];
+  /** 采集硬件只采这几类部件；没有就是全采。 */
+  inventoryKinds?: HwKind[];
   /** 重启 BMC 任务走带外还是带内。 */
   bmcReset?: BmcResetVia;
   /** 设 BMC 时区和 NTP 任务要改成什么，给了哪项改哪项。 */
@@ -446,6 +448,8 @@ export interface InventorySnapshot {
   ports?: HwPort[];
   /** 网络设备的端口，只有 snmp 来源有。 */
   netPorts?: NetPort[];
+  /** 这次只采了这几类部件，其余类别是从上一次带过来的。全采的没有这一项。 */
+  kinds?: HwKind[];
   /** 网络设备的系统信息，只有 snmp 来源有。 */
   system?: NetSystem;
 }

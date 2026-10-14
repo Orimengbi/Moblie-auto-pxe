@@ -290,8 +290,28 @@ async function eachLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
 }
 
-/** 按 Redfish 的链接走一遍：Systems、Chassis、Managers 和固件清单。 */
-export async function crawlRedfish(get: RedfishGet, options: { expand?: boolean } = {}): Promise<RedfishRaw> {
+/**
+ * 只采某几类部件时要读哪些 Redfish 资源。Systems 总会读（整机信息、找下面的链接）。
+ * GPU 在 Processors 里，显存在 Memory 里；网卡要走机箱；电源在机箱下；部件固件在 UpdateService 和 Managers。
+ */
+export function redfishPlan(kinds?: readonly string[]) {
+  const all = !kinds;
+  const has = (...list: string[]) => all || list.some((kind) => kinds!.includes(kind));
+  return {
+    processors: has("cpu", "gpu"),
+    memory: has("memory", "gpu"),
+    drives: has("disk"),
+    nics: has("nic"),
+    power: has("psu"),
+    firmware: has("firmware"),
+    // 插槽、PCIe 设备只用来算盘位插槽占用，只采几类时不读。
+    slots: all,
+  };
+}
+
+/** 按 Redfish 的链接走一遍：Systems、Chassis、Managers 和固件清单。给了 kinds 就只读这几类部件要的。 */
+export async function crawlRedfish(get: RedfishGet, options: { expand?: boolean; kinds?: readonly string[] } = {}): Promise<RedfishRaw> {
+  const plan = redfishPlan(options.kinds);
   // 默认用 $expand：在 G894 上结果一样，请求数 546 → 320，整体 134 → 126 秒（BMC 一次只处理一个请求，省的是来回）。
   const many = (path: string, errors: string[]) => collection(get, path, errors, options.expand ?? true);
   const errors: string[] = [];
@@ -315,8 +335,9 @@ export async function crawlRedfish(get: RedfishGet, options: { expand?: boolean 
 
   raw.systems = await many(link(root, "Systems") || "/redfish/v1/Systems", errors);
   for (const system of raw.systems) {
-    raw.processors.push(...(await many(link(system, "Processors"), errors)));
-    raw.memory.push(...(await many(link(system, "Memory"), errors)));
+    if (plan.processors) raw.processors.push(...(await many(link(system, "Processors"), errors)));
+    if (plan.memory) raw.memory.push(...(await many(link(system, "Memory"), errors)));
+    if (!plan.drives) continue;
     for (const storage of await many(link(system, "Storage"), errors)) {
       const drives = Array.isArray(storage.Drives) ? storage.Drives : [];
       const paths = drives.map((item) => (item as { "@odata.id"?: string })?.["@odata.id"]).filter((id): id is string => typeof id === "string");
@@ -324,13 +345,14 @@ export async function crawlRedfish(get: RedfishGet, options: { expand?: boolean 
     }
   }
 
-  raw.chassis = await many(link(root, "Chassis") || "/redfish/v1/Chassis", errors);
+  if (plan.nics || plan.power || plan.slots) raw.chassis = await many(link(root, "Chassis") || "/redfish/v1/Chassis", errors);
   // 带 GPU 底板的机器有上百个机箱，几个一起读。
   await eachLimit(raw.chassis, 4, async (chassis) => {
-    raw.pcieDevices.push(...(await many(link(chassis, "PCIeDevices"), errors)));
-    raw.networkAdapters.push(...(await many(link(chassis, "NetworkAdapters"), errors)));
-    const slots = await optional(get, link(chassis, "PCIeSlots"), errors);
+    if (plan.slots) raw.pcieDevices.push(...(await many(link(chassis, "PCIeDevices"), errors)));
+    if (plan.nics) raw.networkAdapters.push(...(await many(link(chassis, "NetworkAdapters"), errors)));
+    const slots = plan.slots ? await optional(get, link(chassis, "PCIeSlots"), errors) : null;
     if (slots) raw.pcieSlots.push(slots);
+    if (!plan.power) return;
     // 新的 BMC 用 PowerSubsystem/PowerSupplies，旧的把电源列在 Power 里。
     const subsystem = link(chassis, "PowerSubsystem");
     const fromSubsystem = subsystem ? await many(link(await optional(get, subsystem, errors), "PowerSupplies"), errors) : [];
@@ -350,9 +372,11 @@ export async function crawlRedfish(get: RedfishGet, options: { expand?: boolean 
     for (const port of await many(ports, errors)) raw.networkPorts.push({ ...port, _adapter: name });
   });
 
-  raw.managers = await many(link(root, "Managers") || "/redfish/v1/Managers", errors);
-  const update = await optional(get, link(root, "UpdateService"), errors);
-  raw.firmware = await many(link(update, "FirmwareInventory"), errors);
+  if (plan.firmware) {
+    raw.managers = await many(link(root, "Managers") || "/redfish/v1/Managers", errors);
+    const update = await optional(get, link(root, "UpdateService"), errors);
+    raw.firmware = await many(link(update, "FirmwareInventory"), errors);
+  }
 
   // 同一个部件可能从不同的链接读到两次（比如 PCIe 设备挂在两个机箱下），按 @odata.id 去重。
   for (const key of ["processors", "memory", "drives", "pcieDevices", "networkAdapters", "pcieSlots", "networkPorts", "firmware"] as const) {

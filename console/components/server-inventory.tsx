@@ -314,6 +314,7 @@ export function ServerInventory({ projectId, row }: { projectId?: string; row: {
               <Typography component="span" variant="inherit" sx={{ fontFamily: MONO }}>
                 {snapshot.host}
               </Typography>
+              {snapshot.kinds?.length ? `。这次只采了${snapshot.kinds.map((kind) => KIND_LABEL[kind]).join("、")}，其余类别是之前采的` : ""}
             </>,
           )}
 
