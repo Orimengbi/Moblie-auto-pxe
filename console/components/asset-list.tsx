@@ -21,7 +21,12 @@ import ClearOutlined from "@mui/icons-material/ClearOutlined";
 import { GridColumnMenu, type GridColDef, type GridColumnMenuItemProps, type GridColumnMenuProps, type GridRowProps, type GridRowSelectionModel } from "@mui/x-data-grid";
 import ListItemIcon from "@mui/material/ListItemIcon";
 import ListItemText from "@mui/material/ListItemText";
+import Menu from "@mui/material/Menu";
 import MenuItem from "@mui/material/MenuItem";
+import ArrowDropDownOutlined from "@mui/icons-material/ArrowDropDownOutlined";
+import DescriptionOutlined from "@mui/icons-material/DescriptionOutlined";
+import FileDownloadOutlined from "@mui/icons-material/FileDownloadOutlined";
+import FileUploadOutlined from "@mui/icons-material/FileUploadOutlined";
 import ViewColumnOutlined from "@mui/icons-material/ViewColumnOutlined";
 import VisibilityOffOutlined from "@mui/icons-material/VisibilityOffOutlined";
 import { AssetEditDialog } from "@/components/asset-edit-dialog";
@@ -297,6 +302,7 @@ export function AssetList({
   const [picked, setPicked] = useState<string[]>([]);
   const [exporting, setExporting] = useState(false);
   const [batching, setBatching] = useState(false);
+  const [excelMenu, setExcelMenu] = useState<HTMLElement | null>(null);
   const [sideId, setSideId] = useState<string | null>(null);
   const [sideTab, setSideTab] = useState<SidebarTab>("overview");
   const canConsole = useCan("console");
@@ -640,14 +646,43 @@ export function AssetList({
           <Button variant="outlined" onClick={() => setBatching(true)}>
             批量操作
           </Button>
-          <Button variant="outlined" onClick={() => setExporting(true)}>
-            导出 Excel
+          <Button variant="outlined" endIcon={<ArrowDropDownOutlined />} onClick={(event) => setExcelMenu(event.currentTarget)} aria-haspopup="menu">
+            Excel
           </Button>
-          {canEdit ? (
-            <Button variant="outlined" onClick={() => setImporting(true)}>
-              Excel 导入
-            </Button>
-          ) : null}
+          <Menu anchorEl={excelMenu} open={Boolean(excelMenu)} onClose={() => setExcelMenu(null)} anchorOrigin={{ vertical: "bottom", horizontal: "right" }} transformOrigin={{ vertical: "top", horizontal: "right" }}>
+            <MenuItem
+              onClick={() => {
+                setExcelMenu(null);
+                setExporting(true);
+              }}
+            >
+              <ListItemIcon>
+                <FileDownloadOutlined fontSize="small" />
+              </ListItemIcon>
+              <ListItemText primary="导出…" secondary="选机器、选表和列" />
+            </MenuItem>
+            {canEdit ? (
+              <MenuItem
+                onClick={() => {
+                  setExcelMenu(null);
+                  setImporting(true);
+                }}
+              >
+                <ListItemIcon>
+                  <FileUploadOutlined fontSize="small" />
+                </ListItemIcon>
+                <ListItemText primary="导入…" secondary="按序列号新增或更新资产" />
+              </MenuItem>
+            ) : null}
+            {canEdit ? (
+              <MenuItem component="a" href="/api/assets/template" onClick={() => setExcelMenu(null)}>
+                <ListItemIcon>
+                  <DescriptionOutlined fontSize="small" />
+                </ListItemIcon>
+                <ListItemText primary="下载导入模板" />
+              </MenuItem>
+            ) : null}
+          </Menu>
           {canEdit ? (
             <Button variant="contained" onClick={() => setCreating(true)}>
               资产入库
@@ -681,7 +716,7 @@ export function AssetList({
       </Stack>
 
       {rows.length === 0 ? (
-        <Alert severity="info">还没有资产。点「资产入库」一台台录，用「Excel 导入」批量导入，或者在装机批次里上传服务器表，表里的机器会自动入库。</Alert>
+        <Alert severity="info">还没有资产。点「资产入库」一台台录，用「Excel → 导入」批量导入，或者在装机批次里上传服务器表，表里的机器会自动入库。</Alert>
       ) : (
         <Box sx={{ width: "100%", minWidth: 0 }}>
           <ScrollGrid
