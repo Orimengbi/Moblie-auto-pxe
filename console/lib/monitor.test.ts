@@ -306,3 +306,28 @@ test("an unreachable BMC is retried every minute, others keep the configured int
   assert.equal(monitor.bmcIntervalFor({ bmcOk: false, bmcFailures: 3 }, settings), 1);
   assert.equal(monitor.bmcIntervalFor({ bmcOk: false, bmcFailures: 3 }, { ...settings, bmcIntervalMin: 1 }), 1);
 });
+
+test("asset health counts open alerts even when the BMC says OK", () => {
+  const asset = assets.createAsset({ sn: "mon-health", status: "active" }, "alice");
+  const ok = { at: "2026-10-14T00:00:00.000Z", overall: "ok" as const, problems: [], redfishError: "" };
+  monitor.saveMonitorState({ ...monitor.getMonitorState(asset.id), health: ok });
+  assert.equal(monitor.healthByAsset().get(asset.id)?.overall, "ok");
+
+  alerts.applyFindings(asset.id, [{ key: "gpu:missing", source: "gpu", severity: "critical", title: "GPU 少了 1 块", detail: "7/8" }], ["gpu"]);
+  let health = monitor.healthByAsset().get(asset.id)!;
+  assert.equal(health.overall, "critical", "BMC 说正常，告警是严重，就是严重");
+  assert.deepEqual(health.problems.map((item) => [item.source, item.name]), [["alert", "GPU 少了 1 块"]]);
+
+  // 确认了还没处理完，照样算；恢复了就不算。
+  const open = alerts.listAlerts({ assetId: asset.id }).find((alert) => alert.status === "active")!;
+  alerts.ackAlert(open.id, "alice");
+  health = monitor.healthByAsset().get(asset.id)!;
+  assert.equal(health.overall, "critical");
+  assert.match(health.problems[0].detail, /已确认/);
+  alerts.applyFindings(asset.id, [], ["gpu"]);
+  assert.equal(monitor.healthByAsset().get(asset.id)?.overall, "ok");
+
+  // BMC 没读过、只有告警的也有健康状态；BMC 连不上的不会被一条警告压下去。
+  assert.equal(monitor.withAlerts(null, [{ severity: "warning", title: "x", source: "sel", count: 2, status: "active", lastAt: "2026-10-14T01:00:00.000Z" }])?.overall, "warning");
+  assert.equal(monitor.withAlerts({ ...ok, overall: "unreachable" }, [{ severity: "warning", title: "x", source: "sel", count: 1, status: "active", lastAt: "" }])?.overall, "unreachable");
+});

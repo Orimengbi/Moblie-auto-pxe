@@ -1076,15 +1076,19 @@ export interface DiskHealth {
 
 export type HealthLevel = "ok" | "warning" | "critical" | "unreachable";
 
-/** 一项不健康的：Redfish 上 Status 不是 OK 的整机、机箱、电源、风扇，或 IPMI 传感器越限。 */
+/** 一项不健康的：Redfish 上 Status 不是 OK 的整机、机箱、电源、风扇，IPMI 传感器越限，或者还没处理完的告警。 */
 export interface HealthProblem {
   name: string;
   severity: AlertSeverity;
   detail: string;
-  source: "redfish" | "sensor";
+  source: "redfish" | "sensor" | "alert";
 }
 
-/** 资产列表「健康」一列：和 BMC 网页同一个来源（Redfish Status），再加上 IPMI 传感器。 */
+/**
+ * 资产列表「健康」一列：BMC 自己报的（Redfish Status、IPMI 传感器），再叠上这台还没恢复的告警，取最严重的。
+ * BMC 常常报 OK 而实际有问题（GPU 掉卡、Xid、硬盘、SEL 事件），只看 BMC 会和告警页对不上。
+ * 存在 monitor_state 里的只有 BMC 那部分，告警是读的时候叠上去的（healthByAsset）。
+ */
 export interface AssetHealth {
   at: string;
   overall: HealthLevel;

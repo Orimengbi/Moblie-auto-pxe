@@ -150,12 +150,15 @@ function matches(row: AssetRow, filters: Filters): boolean {
   return matchesSearch(searchText(row), searchTerms(filters.q));
 }
 
-/** 「健康」一格：颜色同 BMC 网页，鼠标停上去列出哪几项不正常、什么时候查的。 */
+/** 「健康」一格：BMC 报的加上没恢复的告警，取最严重的；鼠标停上去分开列 BMC 报的和告警。 */
 function HealthCell({ health }: { health: AssetHealth | null }) {
   if (!health) return <Dash />;
+  const fromBmc = health.problems.filter((item) => item.source !== "alert");
+  const alerts = health.problems.filter((item) => item.source === "alert");
   const lines = [
-    ...health.problems.map((item) => `${item.name}：${item.detail}`),
+    ...(fromBmc.length ? ["BMC 报的：", ...fromBmc.map((item) => `  ${item.name}：${item.detail}`)] : []),
     ...(health.redfishError ? [`Redfish 没读到：${health.redfishError}`] : []),
+    ...(alerts.length ? [`没恢复的告警 ${alerts.length} 条：`, ...alerts.slice(0, 8).map((item) => `  ${item.name}（${item.detail}）`), ...(alerts.length > 8 ? [`  还有 ${alerts.length - 8} 条，到告警页看`] : [])] : []),
     `检查于 ${formatTime(health.at)}`,
   ];
   return (

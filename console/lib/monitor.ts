@@ -7,7 +7,8 @@ import { defaultIpmiExec, firstWorkingAccount, ipmiFailure, parsePowerStatus, ty
 import { dataDir } from "./paths.ts";
 import { markedSections } from "./sections.ts";
 import { assetHealthProblems } from "./bmc-redfish.ts";
-import type { Asset, AssetHealth, AssetStatus, DiskHealth, GpuHealth, HealthLevel, HealthProblem, MonitorSettings, MonitorState, PowerState, SelEntry, SensorReading } from "./types.ts";
+import { ALERT_SOURCE } from "./asset-labels.ts";
+import type { Alert, Asset, AssetHealth, AssetStatus, DiskHealth, GpuHealth, HealthLevel, HealthProblem, MonitorSettings, MonitorState, PowerState, SelEntry, SensorReading } from "./types.ts";
 
 /**
  * 监控：用 ipmitool 读 BMC 的传感器（sdr elist）和事件日志（sel elist），SSH 进系统查 GPU（nvidia-smi、Xid）和硬盘健康。
@@ -280,12 +281,49 @@ export function recordPower(assetId: string, power: PowerState): void {
   saveState(state);
 }
 
-/** 资产列表用：每台最近一次的健康状态，一次查完。 */
+/** 叠到健康状态上的一条告警。 */
+export type OpenAlert = Pick<Alert, "severity" | "title" | "source" | "count" | "status" | "lastAt">;
+
+/**
+ * BMC 读到的健康状态叠上还没恢复的告警（已确认但没处理完的也算），等级取最严重的。
+ * 没有告警就原样返回；BMC 没读过但有告警，就按告警算。
+ */
+export function withAlerts(health: AssetHealth | null, alerts: OpenAlert[]): AssetHealth | null {
+  if (!alerts.length) return health;
+  const problems: HealthProblem[] = alerts.map((alert) => ({
+    name: alert.title,
+    severity: alert.severity,
+    detail: [`${ALERT_SOURCE[alert.source] || alert.source}告警`, alert.count > 1 ? `${alert.count} 次` : "", alert.status === "acked" ? "已确认，还没处理完" : ""].filter(Boolean).join("，"),
+    source: "alert",
+  }));
+  const worst = overallHealth(problems);
+  const base = health?.overall || "ok";
+  return {
+    at: health?.at || alerts.map((alert) => alert.lastAt).sort().at(-1) || "",
+    overall: SEVERITY_RANK[worst] > SEVERITY_RANK[base] ? worst : base,
+    problems: [...(health?.problems || []), ...problems],
+    redfishError: health?.redfishError || "",
+  };
+}
+
+/** 资产列表、导出用：每台的健康状态（BMC 读到的 + 没恢复的告警），一次查完。 */
 export function healthByAsset(): Map<string, AssetHealth> {
   const out = new Map<string, AssetHealth>();
   for (const row of db().prepare("SELECT asset_id, health FROM monitor_state").all()) {
     const health = parseJson<AssetHealth | null>(row.health, null);
     if (health) out.set(String(row.asset_id), health);
+  }
+  const open = new Map<string, OpenAlert[]>();
+  const rows = db().prepare("SELECT asset_id, severity, title, source, count, status, last_at FROM alerts WHERE status != 'resolved' ORDER BY CASE severity WHEN 'critical' THEN 0 ELSE 1 END, last_at DESC").all();
+  for (const row of rows) {
+    const id = String(row.asset_id);
+    const list = open.get(id) || [];
+    list.push({ severity: row.severity as OpenAlert["severity"], title: String(row.title), source: row.source as OpenAlert["source"], count: Number(row.count), status: row.status as OpenAlert["status"], lastAt: String(row.last_at) });
+    open.set(id, list);
+  }
+  for (const [id, alerts] of open) {
+    const merged = withAlerts(out.get(id) || null, alerts);
+    if (merged) out.set(id, merged);
   }
   return out;
 }
