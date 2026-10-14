@@ -23,8 +23,8 @@ import RocketLaunchOutlined from "@mui/icons-material/RocketLaunchOutlined";
 import type { SvgIconComponent } from "@mui/icons-material";
 import { PageHeader } from "@/components/page-header";
 import { TONE_COLOR } from "@/components/mui/status-chip";
-import { ASSET_STATUS, ASSET_STATUS_TONE, WARRANTY_LABEL, type Tone, type WarrantyState } from "@/lib/asset-labels";
-import type { AssetStatus, ProjectDhcp } from "@/lib/types";
+import { ASSET_STATUS, ASSET_STATUS_TONE, HEALTH_LABEL, HEALTH_TONE, WARRANTY_LABEL, type Tone, type WarrantyState } from "@/lib/asset-labels";
+import type { AssetStatus, HealthLevel, ProjectDhcp } from "@/lib/types";
 
 export type OverviewData = {
   assetCount: number;
@@ -32,6 +32,8 @@ export type OverviewData = {
   byStatus: (readonly [AssetStatus, number])[];
   expiring: { id: string; tag: string; sn: string; warrantyEnd: string; warranty: WarrantyState }[];
   alerts: { critical: number; warning: number };
+  /** 每种健康状态几台，和资产列表「健康」一列同一个算法（BMC 加没恢复的告警）；none 是还没检查过的。 */
+  health: Record<HealthLevel | "none", number>;
   openTickets: number;
   faultyParts: number;
   firmware: { efi: boolean; bios: boolean };
@@ -43,9 +45,48 @@ export type OverviewData = {
   leases: { mac: string; ip: string }[];
 };
 
+/** 一条按比例分段的色条，下面是每段的图例和台数，点图例去资产页筛出来。 */
+function Distribution({ label, total, items }: { label: string; total: number; items: { key: string; label: string; count: number; tone: Tone; href: string; faded?: boolean }[] }) {
+  const shown = items.filter((item) => item.count);
+  return (
+    <Stack spacing={2}>
+      <Stack direction="row" role="img" aria-label={label} sx={{ height: 12, borderRadius: 6, overflow: "hidden", bgcolor: "action.hover", gap: "2px" }}>
+        {shown.map((item) => (
+          <Tooltip key={item.key} title={`${item.label} ${item.count}`}>
+            <Box sx={{ width: `${(item.count / total) * 100}%`, bgcolor: TONE_COLOR[item.tone], opacity: item.faded ? 0.5 : 1 }} />
+          </Tooltip>
+        ))}
+      </Stack>
+      <Grid container spacing={0.5}>
+        {shown.map((item) => (
+          <Grid key={item.key} size={{ xs: 6, sm: 4 }}>
+            <Stack
+              component={Link}
+              href={item.href}
+              direction="row"
+              spacing={1}
+              sx={{ alignItems: "center", px: 1, py: 0.5, borderRadius: 1, color: "inherit", textDecoration: "none", "&:hover": { bgcolor: "action.hover" } }}
+            >
+              <Box sx={{ width: 10, height: 10, borderRadius: "50%", bgcolor: TONE_COLOR[item.tone], opacity: item.faded ? 0.5 : 1, flexShrink: 0 }} />
+              <Typography variant="body2" sx={{ flex: 1, color: "text.secondary" }}>
+                {item.label}
+              </Typography>
+              <Typography variant="body2" sx={{ fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
+                {item.count}
+              </Typography>
+            </Stack>
+          </Grid>
+        ))}
+      </Grid>
+    </Stack>
+  );
+}
+
+const HEALTH_ORDER: (HealthLevel | "none")[] = ["critical", "warning", "unreachable", "ok", "none"];
+
 /** 总览页的界面部分；数据在 app/page.tsx 里算好传进来。 */
 export function Overview({ data }: { data: OverviewData }) {
-  const { assetCount, customers, byStatus, expiring, alerts, openTickets, faultyParts, firmware, active, profileCount, serverCount, readyImages, leases } = data;
+  const { assetCount, customers, byStatus, expiring, alerts, health, openTickets, faultyParts, firmware, active, profileCount, serverCount, readyImages, leases } = data;
   const state = { network: data.network };
   return (
     <Box>
@@ -64,7 +105,7 @@ export function Overview({ data }: { data: OverviewData }) {
         <Stat icon={Inventory2Outlined} label="待返修 / 已拆下的备件" value={String(faultyParts)} tone={faultyParts ? "warning" : "success"} href="/parts" />
       </Grid>
       <Grid container spacing={2} sx={{ mb: 4 }}>
-        <Grid size={{ xs: 12, lg: 7 }}>
+        <Grid size={{ xs: 12, lg: 6 }}>
           <Card sx={{ height: "100%" }}>
             <CardHeader
               title="资产状态"
@@ -76,36 +117,11 @@ export function Overview({ data }: { data: OverviewData }) {
             />
             <CardContent>
               {byStatus.length ? (
-                <Stack spacing={2}>
-                  <Stack direction="row" role="img" aria-label="资产状态分布" sx={{ height: 12, borderRadius: 6, overflow: "hidden", bgcolor: "action.hover", gap: "2px" }}>
-                    {byStatus.map(([status, count]) => (
-                      <Tooltip key={status} title={`${ASSET_STATUS[status]} ${count}`}>
-                        <Box sx={{ width: `${(count / assetCount) * 100}%`, bgcolor: TONE_COLOR[ASSET_STATUS_TONE[status]], opacity: status === "scrapped" ? 0.5 : 1 }} />
-                      </Tooltip>
-                    ))}
-                  </Stack>
-                  <Grid container spacing={0.5}>
-                    {byStatus.map(([status, count]) => (
-                      <Grid key={status} size={{ xs: 6, sm: 3 }}>
-                        <Stack
-                          component={Link}
-                          href={`/assets?status=${status}`}
-                          direction="row"
-                          spacing={1}
-                          sx={{ alignItems: "center", px: 1, py: 0.5, borderRadius: 1, color: "inherit", textDecoration: "none", "&:hover": { bgcolor: "action.hover" } }}
-                        >
-                          <Box sx={{ width: 10, height: 10, borderRadius: "50%", bgcolor: TONE_COLOR[ASSET_STATUS_TONE[status]], flexShrink: 0 }} />
-                          <Typography variant="body2" sx={{ flex: 1, color: "text.secondary" }}>
-                            {ASSET_STATUS[status]}
-                          </Typography>
-                          <Typography variant="body2" sx={{ fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
-                            {count}
-                          </Typography>
-                        </Stack>
-                      </Grid>
-                    ))}
-                  </Grid>
-                </Stack>
+                <Distribution
+                  label="资产状态分布"
+                  total={assetCount}
+                  items={byStatus.map(([status, count]) => ({ key: status, label: ASSET_STATUS[status], count, tone: ASSET_STATUS_TONE[status], href: `/assets?status=${status}`, faded: status === "scrapped" }))}
+                />
               ) : (
                 <Typography variant="body2" sx={{ color: "text.secondary" }}>
                   还没有资产。在
@@ -118,7 +134,40 @@ export function Overview({ data }: { data: OverviewData }) {
             </CardContent>
           </Card>
         </Grid>
-        <Grid size={{ xs: 12, lg: 5 }}>
+        <Grid size={{ xs: 12, lg: 6 }}>
+          <Card sx={{ height: "100%" }}>
+            <CardHeader
+              title="设备健康"
+              subheader="BMC 报的加上没恢复的告警，取最严重的"
+              action={
+                <MuiLink component={Link} href="/assets?health=bad" variant="caption" color="text.secondary" underline="hover">
+                  {`有问题的 ${health.critical + health.warning + health.unreachable} 台`}
+                </MuiLink>
+              }
+            />
+            <CardContent>
+              {assetCount ? (
+                <Distribution
+                  label="设备健康分布"
+                  total={assetCount}
+                  items={HEALTH_ORDER.map((level) => ({
+                    key: level,
+                    label: level === "none" ? "还没检查过" : HEALTH_LABEL[level],
+                    count: health[level],
+                    tone: level === "none" ? "neutral" : HEALTH_TONE[level],
+                    href: `/assets?health=${level}`,
+                    faded: level === "none",
+                  }))}
+                />
+              ) : (
+                <Typography variant="body2" sx={{ color: "text.secondary" }}>
+                  还没有资产。
+                </Typography>
+              )}
+            </CardContent>
+          </Card>
+        </Grid>
+        <Grid size={{ xs: 12 }}>
           <Card sx={{ height: "100%" }}>
             <CardHeader
               avatar={<EventOutlined fontSize="small" color="action" />}

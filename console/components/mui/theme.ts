@@ -292,7 +292,14 @@ export const theme = createTheme(
             "--DataGrid-rowBorderColor": (theme.vars || theme).palette.divider,
             ...theme.applyStyles("dark", { boxShadow: "none" }),
           }),
-          columnHeader: ({ theme }) => ({ color: (theme.vars || theme).palette.text.secondary, fontSize: "0.75rem" }),
+          columnHeader: ({ theme }) => ({
+            color: (theme.vars || theme).palette.text.secondary,
+            fontSize: "0.75rem",
+            // 最后一列的拖动条默认一半伸出表格被裁掉，竖线就画在了边里面几像素，看着和表格边对不上。
+            // 改成拖动区贴着表格右边往里，竖线不画：表格的边就是这一列的拖动手柄。
+            "&.MuiDataGrid-columnHeader--last .MuiDataGrid-columnSeparator--sideRight": { right: 0, left: "auto", width: 8, justifyContent: "flex-end" },
+            "&.MuiDataGrid-columnHeader--last .MuiDataGrid-iconSeparator": { opacity: 0 },
+          }),
           columnHeaderTitle: { fontWeight: 600 },
           row: ({ theme }) => ({
             transition: theme.transitions.create(["background-color"], { duration: 120 }),

@@ -5,8 +5,9 @@ import { parseLeases } from "@/lib/dnsmasq";
 import { listParts } from "@/lib/parts";
 import { openTicketCount } from "@/lib/tickets";
 import { alertCounts } from "@/lib/alerts";
+import { healthByAsset } from "@/lib/monitor";
 import { activeProject, getState, ipxeReady, listImages, listServers, profilesForProject, readLeasesText } from "@/lib/store";
-import type { AssetStatus } from "@/lib/types";
+import type { AssetStatus, HealthLevel } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -24,6 +25,10 @@ export default function HomePage() {
   const customers = listCustomers().length;
   const openTickets = openTicketCount();
   const alerts = alertCounts();
+  // 和资产列表「健康」一列、健康筛选同一个算法，点进去台数对得上。
+  const healths = healthByAsset();
+  const health: Record<HealthLevel | "none", number> = { ok: 0, warning: 0, critical: 0, unreachable: 0, none: 0 };
+  for (const asset of assets) health[healths.get(asset.id)?.overall || "none"]++;
   const faultyParts = listParts().filter((part) => part.status === "faulty" || part.status === "removed").length;
 
   return (
@@ -34,6 +39,7 @@ export default function HomePage() {
         byStatus,
         expiring: expiring.map((asset) => ({ id: asset.id, tag: asset.tag, sn: asset.sn, warrantyEnd: asset.warrantyEnd, warranty: warrantyState(asset) })),
         alerts,
+        health,
         openTickets,
         faultyParts,
         firmware: { efi: Boolean(firmware.efi), bios: Boolean(firmware.bios) },
