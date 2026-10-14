@@ -346,6 +346,10 @@ export function shimScript(input: { prefix: string; csrf: string; user: string; 
   try {
     var seed = { privilege_id: "${input.privilege}", username: ${JSON.stringify(input.user)}, kvm_access: "${kvm}", vmedia_access: "${vmedia}" };
     Object.keys(seed).forEach(function (k) { sessionStorage.setItem(k, seed[k]); });
+    // H5Viewer 卸载时写 reloaded=1，下次打开看到就只弹「窗口已重新加载，请重新启动」然后停住。
+    // 它本来在独立弹窗里，关窗就清了；嵌在页面里和控制台共用这个标签页的 sessionStorage，
+    // 刷新过一次查看器以后，这个标签页里再开哪台都打不开。每次打开前清掉。
+    sessionStorage.removeItem("reloaded");
   } catch (e) {}
 })();
 `;
