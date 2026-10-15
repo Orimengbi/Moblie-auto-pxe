@@ -643,8 +643,9 @@ export function AssetList({
         />
         {filtering ? <Button onClick={() => setFilters(EMPTY)}>清除筛选</Button> : null}
         <Stack direction="row" useFlexGap spacing={1} sx={{ ml: "auto", flexWrap: "wrap" }}>
-          <Button variant="outlined" onClick={() => setBatching(true)}>
-            批量操作
+          {/* 只有这一个入口；勾了机器时变成主按钮并带上台数。 */}
+          <Button variant={picked.length ? "contained" : "outlined"} onClick={() => setBatching(true)}>
+            {picked.length ? `批量操作（${picked.length} 台）` : "批量操作"}
           </Button>
           <Button variant="outlined" endIcon={<ArrowDropDownOutlined />} onClick={(event) => setExcelMenu(event.currentTarget)} aria-haspopup="menu">
             Excel
@@ -705,14 +706,7 @@ export function AssetList({
           <Button onClick={() => setPicked((list) => [...list, ...shownIds.filter((id) => !list.includes(id))])}>{`选中筛选出的 ${shown.length} 台`}</Button>
         ) : null}
         {!filtering && unpickedShown ? <Button onClick={() => setPicked(shownIds)}>{`全选 ${rows.length} 台`}</Button> : null}
-        {picked.length ? (
-          <>
-            <Button variant="contained" onClick={() => setBatching(true)}>
-              批量操作
-            </Button>
-            <Button onClick={() => setPicked([])}>取消选择</Button>
-          </>
-        ) : null}
+        {picked.length ? <Button onClick={() => setPicked([])}>取消选择</Button> : null}
       </Stack>
 
       {rows.length === 0 ? (
