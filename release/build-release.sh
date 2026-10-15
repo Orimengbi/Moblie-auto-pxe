@@ -176,7 +176,8 @@ mv -f "$OUT/$NAME.part" "$OUT/$NAME"
 
 echo "== 好了：$OUT/$NAME  $(du -h "$OUT/$NAME" | cut -f1)"
 echo "   sha256 $(sha256sum "$OUT/$NAME" | cut -d' ' -f1)"
-# 本机留着最新一版的镜像就够了。
+# 本机留着最新一版的镜像就够了。本机也装着平台时（/opt/pxe/releases），那几个版本归 pxectl 管，回滚要用，不删。
 for old in $(docker images --format '{{.Repository}}:{{.Tag}}' | grep -E '^pxe/(console|boot|dnsmasq):' | grep -v ":$VERSION\$"); do
+  [ -d "/opt/pxe/releases/${old##*:}" ] && continue
   docker image rm "$old" >/dev/null 2>&1 || true
 done
