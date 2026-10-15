@@ -173,8 +173,10 @@ mkdir -p "$OUT"
 { header "$lines"; cat "$WORK/payload.tar"; } >"$OUT/$NAME.part"
 chmod 755 "$OUT/$NAME.part"
 mv -f "$OUT/$NAME.part" "$OUT/$NAME"
+# 固定名字指向最新打的包，拷的时候不用对版本号。
+ln -sfn "$NAME" "$OUT/pxe-latest$SUFFIX.run"
 
-echo "== 好了：$OUT/$NAME  $(du -h "$OUT/$NAME" | cut -f1)"
+echo "== 好了：$OUT/$NAME  $(du -h "$OUT/$NAME" | cut -f1)（也可以用 $OUT/pxe-latest$SUFFIX.run）"
 echo "   sha256 $(sha256sum "$OUT/$NAME" | cut -d' ' -f1)"
 # 本机留着最新一版的镜像就够了。本机也装着平台时（/opt/pxe/releases），那几个版本归 pxectl 管，回滚要用，不删。
 for old in $(docker images --format '{{.Repository}}:{{.Tag}}' | grep -E '^pxe/(console|boot|dnsmasq):' | grep -v ":$VERSION\$"); do
