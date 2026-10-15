@@ -1,17 +1,11 @@
 "use client";
 
-import Box from "@mui/material/Box";
 import { DataGrid, type DataGridProps, type GridValidRowModel } from "@mui/x-data-grid";
 
 /**
- * 最高到窗口高度的表格：行少时按内容高，行多时在表格里上下滚，横向滚动条和表头一直在屏幕里。
- * 以前用 autoHeight 撑满整页，几百台机器时横向滚动条在页面最底下，没有横滚轮的鼠标得先滚到底才拖得到。
- * maxHeight 默认是窗口高度减去顶栏和上下留白；表格上面还有一大块（筛选栏等）不要紧，往下滚页面就整个露出来了。
+ * 列表页的表格：按内容撑开高度，上下只用浏览器自己的滚动条，不在表格里再套一个（用户嫌两个滚动条叠着费劲）。
+ * 每页最多 100 行，翻页在表格底下。代价是列多的表横向滚动条在表格最底下：按住 Shift 滚滚轮就能左右移。
  */
-export function ScrollGrid<R extends GridValidRowModel>({ maxHeight = "calc(100dvh - 96px)", ...props }: DataGridProps<R> & { maxHeight?: string }) {
-  return (
-    <Box sx={{ display: "flex", flexDirection: "column", maxHeight, minHeight: 0, width: "100%" }}>
-      <DataGrid {...props} />
-    </Box>
-  );
+export function ScrollGrid<R extends GridValidRowModel>(props: DataGridProps<R>) {
+  return <DataGrid autoHeight {...props} />;
 }
