@@ -17,6 +17,9 @@ export async function register() {
   refreshDiskImageBoot();
   const made = ensureServerAssets();
   if (made) console.log(`[assets] 按装机批次里的服务器补建了 ${made} 台资产`);
+  const { seedCatalogIfEmpty } = await import("./lib/catalog");
+  const seeded = seedCatalogIfEmpty();
+  if (seeded) console.log(`[catalog] 型号字典是空的，导入了 ${seeded} 个常见型号`);
   const { startMonitor } = await import("./lib/monitor-runner");
   startMonitor();
 }
