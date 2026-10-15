@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { CATALOG_CATEGORIES, CATALOG_FIELDS, modelKey } from "./catalog-schema.ts";
 import { listAssets, updateAsset } from "./assets.ts";
 import { db, transaction, type SqlValue } from "./db.ts";
@@ -334,6 +336,90 @@ export function autofillCatalog(dryRun = false): { created: string[]; updated: s
     if (!dryRun) for (const entry of touched.values()) write(entry);
   });
   return { created, updated: [...new Set(updated)] };
+}
+
+export interface SeedEntry {
+  category: CatalogCategory;
+  vendor: string;
+  model: string;
+  aliases?: string[];
+  attrs?: Record<string, string | number>;
+}
+
+export const SEED_NOTE = "预置型号";
+
+/** 随程序发的常见型号（lib/catalog-seed.json，按各厂商官网规格整理）。在 lib 目录里找，开发、测试和镜像里都一样。 */
+export function catalogSeed(): SeedEntry[] {
+  const file = path.join(process.cwd(), "lib", "catalog-seed.json");
+  if (!fs.existsSync(file)) return [];
+  return JSON.parse(fs.readFileSync(file, "utf8")) as SeedEntry[];
+}
+
+/**
+ * 导入预置的常见型号。和「按采集补全」一样不覆盖人填的：型号或别名已经在字典里的，只补空着的厂商、属性和没有的别名；
+ * 没有的新建，备注记「预置型号」。别名和别的条目冲突的跳过。dryRun 只算不写。
+ */
+export function seedCatalog(dryRun = false, seed = catalogSeed()): { created: string[]; updated: string[] } {
+  const created: string[] = [];
+  const updated: string[] = [];
+  transaction(db(), () => {
+    const index = catalogIndex();
+    const touched = new Map<string, CatalogEntry>();
+    const now = new Date().toISOString();
+    for (const item of seed) {
+      if (!Object.hasOwn(CATALOG_CATEGORIES, item.category) || !item.model?.trim()) continue;
+      const category = item.category;
+      const names = [item.model, ...(item.aliases || [])].map((name) => name.trim()).filter(Boolean);
+      let attrs: Record<string, string | number>;
+      try {
+        attrs = cleanAttrs(category, item.attrs);
+      } catch {
+        continue;
+      }
+      let entry = names.map((name) => index.get(`${category}|${modelKey(name)}`)).find(Boolean);
+      const label = `${CATALOG_CATEGORIES[category]} ${entry?.model || item.model.trim()}`;
+      if (!entry) {
+        entry = { id: crypto.randomUUID(), category, vendor: cleanText(item.vendor, 80), model: item.model.trim(), aliases: [], attrs, note: SEED_NOTE, createdAt: now, updatedAt: now };
+        index.set(`${category}|${modelKey(entry.model)}`, entry);
+        created.push(label);
+      } else {
+        let changed = false;
+        if (!entry.vendor && item.vendor) {
+          entry.vendor = cleanText(item.vendor, 80);
+          changed = true;
+        }
+        for (const [key, value] of Object.entries(attrs)) {
+          if (entry.attrs[key] === undefined || entry.attrs[key] === "") {
+            entry.attrs[key] = value;
+            changed = true;
+          }
+        }
+        if (changed && !created.includes(label)) updated.push(label);
+        if (changed) entry.updatedAt = now;
+      }
+      for (const name of names) {
+        const k = `${category}|${modelKey(name)}`;
+        const owner = index.get(k);
+        if (owner && owner !== entry) continue;
+        if (modelKey(name) !== modelKey(entry.model) && !entry.aliases.some((alias) => modelKey(alias) === modelKey(name))) {
+          entry.aliases.push(name);
+          entry.updatedAt = now;
+          if (!created.includes(label) && !updated.includes(label)) updated.push(label);
+        }
+        index.set(k, entry);
+      }
+      if (created.includes(label) || updated.includes(label)) touched.set(entry.id, entry);
+    }
+    if (!dryRun) for (const entry of touched.values()) write(entry);
+  });
+  return { created, updated: [...new Set(updated)] };
+}
+
+/** 新装的机器字典是空的：启动时自动导入一次预置型号。 */
+export function seedCatalogIfEmpty(): number {
+  const row = db().prepare("SELECT COUNT(*) AS n FROM catalog_models").get();
+  if (Number(row?.n) > 0) return 0;
+  return seedCatalog().created.length;
 }
 
 /** 硬件采集里的部件类型对应字典分类。 */

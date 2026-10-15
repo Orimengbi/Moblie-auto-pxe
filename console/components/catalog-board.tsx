@@ -33,7 +33,7 @@ export function CatalogBoard({ entries, admin }: { entries: CatalogEntry[]; admi
   const [category, setCategory] = useState<CatalogCategory | "">("");
   const [q, setQ] = useState("");
   const [editing, setEditing] = useState<CatalogEntry | "new" | null>(null);
-  const [filling, setFilling] = useState(false);
+  const [filling, setFilling] = useState<FillMode | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState<{ text: string; warn: boolean } | null>(null);
 
@@ -137,7 +137,10 @@ export function CatalogBoard({ entries, admin }: { entries: CatalogEntry[]; admi
         <TextField placeholder="搜厂商、型号、规格…" value={q} onChange={(event) => setQ(event.target.value)} sx={{ width: 260 }} />
         {admin ? (
           <Stack direction="row" spacing={1} sx={{ ml: "auto" }}>
-            <Button variant="outlined" onClick={() => setFilling(true)}>
+            <Button variant="outlined" onClick={() => setFilling("seed")}>
+              导入常见型号
+            </Button>
+            <Button variant="outlined" onClick={() => setFilling("autofill")}>
               按硬件采集补全
             </Button>
             <Button variant="contained" onClick={() => setEditing("new")}>
@@ -168,7 +171,7 @@ export function CatalogBoard({ entries, admin }: { entries: CatalogEntry[]; admi
           initialState={{ pagination: { paginationModel: { pageSize: 100 } } }}
           pageSizeOptions={[25, 50, 100]}
           hideFooter={shown.length <= 100}
-          localeText={gridText({ noRowsLabel: entries.length ? "没有符合条件的型号。" : "字典还是空的。管理员可以点「按硬件采集补全」，把采集到的型号和规格先填进来。" })}
+          localeText={gridText({ noRowsLabel: entries.length ? "没有符合条件的型号。" : "字典还是空的。管理员可以点「导入常见型号」或「按硬件采集补全」，把型号和规格先填进来。" })}
           sx={{ "& .MuiDataGrid-cell": { display: "flex", alignItems: "center", py: 0.75 } }}
         />
       </Box>
@@ -177,7 +180,7 @@ export function CatalogBoard({ entries, admin }: { entries: CatalogEntry[]; admi
           router.refresh();
         }}
       />
-      <AutofillDialog open={filling} onClose={() => setFilling(false)} onDone={() => router.refresh()} />
+      <AutofillDialog mode={filling} onClose={() => setFilling(null)} onDone={() => router.refresh()} />
     </Stack>
   );
 }
@@ -303,8 +306,27 @@ function EntryDialog({ entry, defaultCategory, onClose, onSaved }: { entry: Cata
   );
 }
 
+type FillMode = "autofill" | "seed";
+
+const FILL: Record<FillMode, { title: string; action: string; url: string; intro: string }> = {
+  autofill: {
+    title: "按硬件采集补全",
+    action: "补全",
+    url: "/api/catalog/autofill",
+    intro: "读资产表里的服务器、交换机、PDU 型号，和每台最近一次硬件采集里的部件。字典里没有的型号新建，已有的只填空着的属性。系统内和 BMC 报的名字不一样、但料号相同的，记成别名。",
+  },
+  seed: {
+    title: "导入常见型号",
+    action: "导入",
+    url: "/api/catalog/seed",
+    intro: "导入随程序附带的主流厂商常见型号（服务器、CPU、GPU、网卡、内存、硬盘、交换机、光模块、线缆、电源、PDU），规格按各厂商官网整理，备注记「预置型号」。别名里带着系统和 BMC 常报的写法，采集到的部件能直接对上。已有的型号不改人填的内容，只补空着的属性和别名。",
+  },
+};
+
 /** 先预览会新建、补属性的型号，确认后再写。 */
-function AutofillDialog({ open, onClose, onDone }: { open: boolean; onClose: () => void; onDone: () => void }) {
+function AutofillDialog({ mode, onClose, onDone }: { mode: FillMode | null; onClose: () => void; onDone: () => void }) {
+  const open = mode !== null;
+  const text = FILL[mode || "autofill"];
   const [preview, setPreview] = useState<{ created: string[]; updated: string[] } | null>(null);
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
@@ -313,15 +335,15 @@ function AutofillDialog({ open, onClose, onDone }: { open: boolean; onClose: () 
     if (!open) return;
     setPreview(null);
     setError("");
-    void api<{ created: string[]; updated: string[] }>("/api/catalog/autofill", "POST", { dryRun: true }).then((result) => {
+    void api<{ created: string[]; updated: string[] }>(text.url, "POST", { dryRun: true }).then((result) => {
       if (result.ok) setPreview(result.data);
       else setError(result.error);
     });
-  }, [open]);
+  }, [open, text.url]);
 
   async function apply() {
     setPending(true);
-    const result = await api("/api/catalog/autofill", "POST", {});
+    const result = await api(text.url, "POST", {});
     setPending(false);
     if (!result.ok) {
       setError(result.error);
@@ -334,18 +356,18 @@ function AutofillDialog({ open, onClose, onDone }: { open: boolean; onClose: () 
   const nothing = preview && !preview.created.length && !preview.updated.length;
   return (
     <Dialog open={open} onClose={onClose} slotProps={WIDE_PAPER}>
-      <DialogTitle>按硬件采集补全</DialogTitle>
+      <DialogTitle>{text.title}</DialogTitle>
       <DialogContent>
         <Stack spacing={1.5}>
           <Typography variant="body2" sx={{ color: "text.secondary" }}>
-            读资产表里的服务器、交换机、PDU 型号，和每台最近一次硬件采集里的部件。字典里没有的型号新建，已有的只填空着的属性。系统内和 BMC 报的名字不一样、但料号相同的，记成别名。
+            {text.intro}
           </Typography>
           {!preview && !error ? <Typography variant="body2">正在算…</Typography> : null}
           {nothing ? <Typography variant="body2">没有要补的。</Typography> : null}
           {preview?.created.length ? (
             <Box>
               <Typography variant="subtitle2">新建 {preview.created.length} 个</Typography>
-              <Typography variant="body2" sx={{ color: "text.secondary", whiteSpace: "pre-line" }}>
+              <Typography variant="body2" sx={{ color: "text.secondary", whiteSpace: "pre-line", maxHeight: 280, overflow: "auto" }}>
                 {preview.created.join("\n")}
               </Typography>
             </Box>
@@ -353,7 +375,7 @@ function AutofillDialog({ open, onClose, onDone }: { open: boolean; onClose: () 
           {preview?.updated.length ? (
             <Box>
               <Typography variant="subtitle2">补属性 {preview.updated.length} 个</Typography>
-              <Typography variant="body2" sx={{ color: "text.secondary", whiteSpace: "pre-line" }}>
+              <Typography variant="body2" sx={{ color: "text.secondary", whiteSpace: "pre-line", maxHeight: 200, overflow: "auto" }}>
                 {preview.updated.join("\n")}
               </Typography>
             </Box>
@@ -368,7 +390,7 @@ function AutofillDialog({ open, onClose, onDone }: { open: boolean; onClose: () 
       <DialogActions>
         <Button onClick={onClose}>取消</Button>
         <Button variant="contained" disabled={!preview || Boolean(nothing) || pending} onClick={() => void apply()}>
-          {pending ? "正在补全" : "补全"}
+          {pending ? `正在${text.action}` : text.action}
         </Button>
       </DialogActions>
     </Dialog>

@@ -37,6 +37,7 @@ const EXPECTED = [
   "POST /api/auth/login null",
   "POST /api/auth/logout null",
   "POST /api/catalog/autofill catalog",
+  "POST /api/catalog/seed catalog",
   "PATCH /api/catalog/x1 catalog",
   "DELETE /api/catalog/x1 catalog",
   "POST /api/catalog catalog",
