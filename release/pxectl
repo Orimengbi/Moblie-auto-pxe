@@ -18,7 +18,6 @@ SELF_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 if [ -z "${PXE_HOME:-}" ]; then
   if [ -f "$SELF_DIR/.env" ] && [ -f "$SELF_DIR/compose.yml" ]; then PXE_HOME=$SELF_DIR; else PXE_HOME=/opt/pxe; fi
 fi
-PROJECT=pxe
 KEEP_RELEASES=3
 HEALTH_TIMEOUT=240
 ACTOR=${SUDO_USER:-${USER:-root}}
@@ -60,7 +59,9 @@ env_set() { # 文件 键 值
   mv -f "$tmp" "$file"
 }
 
-compose() { docker compose --project-name "$PROJECT" --project-directory "$PXE_HOME" -f "$PXE_HOME/compose.yml" --env-file "$PXE_HOME/.env" "$@"; }
+# compose 项目名在 site.env 的 PROJECT_NAME（默认 pxe）；从老部署迁过来的机器沿用原来的名字，容器名不变。
+project_name() { local n; n=$(env_get "$PXE_HOME/site.env" PROJECT_NAME); printf '%s' "${n:-pxe}"; }
+compose() { docker compose --project-name "$(project_name)" --project-directory "$PXE_HOME" -f "$PXE_HOME/compose.yml" --env-file "$PXE_HOME/.env" "$@"; }
 
 # 在控制台容器里跑 scripts/ 下的命令行（备份、恢复、装机网络、重置密码）。
 cli() { compose exec -T -e NODE_NO_WARNINGS=1 console node --experimental-strip-types "$@"; }
@@ -275,7 +276,8 @@ ask() { # 提示 默认值
 valid_ip() { [[ $1 =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; }
 
 configure_site() { # 在 site.env 已有值的基础上问一遍，命令行给了的不问
-  local site="$PXE_HOME/site.env" mgmt install_if install_ip port
+  local site="$PXE_HOME/site.env" mgmt install_if install_ip port project
+  project=${OPT_PROJECT:-$(env_get "$site" PROJECT_NAME)}
   mgmt=${OPT_MGMT_IP:-$(env_get "$site" MGMT_IPS)}
   install_if=${OPT_INSTALL_IF:-$(env_get "$site" INSTALL_IF)}
   install_ip=${OPT_INSTALL_IP:-$(env_get "$site" INSTALL_IP)}
@@ -315,6 +317,7 @@ configure_site() { # 在 site.env 已有值的基础上问一遍，命令行给�
     printf 'INSTALL_IF=%s\n' "$install_if"
     printf 'INSTALL_IP=%s\n' "$install_ip"
     printf 'HTTP_PORT=%s\n' "$port"
+    printf 'PROJECT_NAME=%s\n' "${project:-pxe}"
   } >"$site"
   chmod 644 "$site"
 }
@@ -711,6 +714,7 @@ parse_common() {
       --install-if) OPT_INSTALL_IF=$2; shift 2 ;;
       --install-ip) OPT_INSTALL_IP=$2; shift 2 ;;
       --port) OPT_PORT=$2; shift 2 ;;
+      --project) OPT_PROJECT=$2; shift 2 ;;
       --yes | -y) ASSUME_YES=1; shift ;;
       --skip-backup) SKIP_BACKUP=1; shift ;;
       --force) FORCE=1; shift ;;

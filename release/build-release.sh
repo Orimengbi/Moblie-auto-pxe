@@ -87,7 +87,7 @@ printf '%s\n' "$VERSION" >"$P/VERSION"
 
 # ---- iPXE 固件：在用的那份，没有就下载 ----
 IPXE_DIR=${IPXE_DIR:-}
-for dir in "$IPXE_DIR" /opt/mobile-auto-pxe/data/tftp "$ROOT/data/tftp" "$CACHE/tftp"; do
+for dir in "$IPXE_DIR" /opt/pxe/data/tftp /opt/mobile-auto-pxe/data/tftp "$ROOT/data/tftp" "$CACHE/tftp"; do
   if [ -n "$dir" ] && [ -s "$dir/ipxe.efi" ] && [ -s "$dir/undionly.kpxe" ]; then IPXE_DIR=$dir; break; fi
 done
 if [ ! -s "${IPXE_DIR:-/nonexistent}/ipxe.efi" ]; then
