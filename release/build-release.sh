@@ -3,6 +3,7 @@
 #
 #   release/build-release.sh                 升级包 pxe-<版本>.run（约 250 MB）
 #   release/build-release.sh --with-docker   首次安装包 pxe-<版本>-full.run，多带静态版 Docker 和 compose（多约 120 MB）
+#   --publish                                打完传到 GitHub Releases（release/publish-release.sh）
 #   其他选项：--skip-tests  --allow-dirty  --out 目录（默认 /var/tmp/pxe-releases）  --version 版本号（测试升级时用）
 #
 # 版本号是「日期-提交号」，比如 2026.10.15-4d5ced0。包用发布密钥签名，正式环境只认这把密钥打的包：
@@ -16,12 +17,14 @@ OUT=/var/tmp/pxe-releases
 CACHE=/var/tmp/pxe-release-cache
 WITH_DOCKER=0
 SKIP_TESTS=0
+PUBLISH=0
 ALLOW_DIRTY=0
 VERSION_OVERRIDE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --with-docker) WITH_DOCKER=1 ;;
     --skip-tests) SKIP_TESTS=1 ;;
+    --publish) PUBLISH=1 ;;
     --allow-dirty) ALLOW_DIRTY=1 ;;
     --out) OUT=$2; shift ;;
     --version) VERSION_OVERRIDE=$2; shift ;;
@@ -183,3 +186,8 @@ for old in $(docker images --format '{{.Repository}}:{{.Tag}}' | grep -E '^pxe/(
   [ -d "/opt/pxe/releases/${old##*:}" ] && continue
   docker image rm "$old" >/dev/null 2>&1 || true
 done
+
+if [ "$PUBLISH" = 1 ]; then
+  echo "== 传到 GitHub"
+  "$ROOT/release/publish-release.sh" "$OUT/$NAME"
+fi
