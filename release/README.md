@@ -10,7 +10,7 @@ release/build-release.sh --with-docker   # 首次安装包 pxe-<版本>-full.run
 release/build-release.sh                 # 升级包 pxe-<版本>.run，约 170 MB
 ```
 
-包放在 `/var/tmp/pxe-releases/`。打包脚本会先跑单元测试，再按「日期-提交号」构建三个镜像，最后用发布密钥签名。
+包放在 `/var/tmp/pxe-releases/`。`pxe-latest-full.run` 和 `pxe-latest.run` 始终指向最新打的那个。打包脚本会先跑单元测试，再按「日期-提交号」构建三个镜像，最后用发布密钥签名。
 
 - 私钥在 `~/.config/pxe-release/release-key.pem`，不进仓库，要另外备份。私钥丢了，打出来的包正式机不认，只能在正式机上手工换 `/opt/pxe/release.pub`。
 - 公钥是 `release/release.pub`，装机时会放到正式机上。
