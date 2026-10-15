@@ -1,4 +1,6 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
+import Button from "@mui/material/Button";
 import { PageHeader } from "@/components/page-header";
 import { TaskDetail } from "@/components/task-detail";
 import { listAssets } from "@/lib/assets";
@@ -16,7 +18,15 @@ export default async function TaskPage({ params }: { params: Promise<{ id: strin
   const tags = Object.fromEntries(listAssets().filter((asset) => wanted.has(asset.id)).map((asset) => [asset.id, asset.tag]));
   return (
     <div>
-      <PageHeader title={task.name} description="每台机器的执行结果。点一行看完整输出。" />
+      <PageHeader
+        title={task.name}
+        description="每台机器的执行结果。点一行看完整输出。"
+        actions={
+          <Button component={Link} href="/tasks" variant="outlined">
+            返回任务中心
+          </Button>
+        }
+      />
       <TaskDetail initial={publicTask(task)} project={project ? { id: project.id, name: project.name } : null} tags={tags} />
     </div>
   );

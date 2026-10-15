@@ -1,6 +1,12 @@
-/** 启动时就建好 admin 和初始密码文件，不用等第一次登录；同时起远程控制台代理，更新整盘镜像的启动脚本，给老数据补建资产。 */
+/**
+ * 启动时先换进暂存好的备份（恢复要在任何地方打开数据库之前做），
+ * 再建好 admin 和初始密码文件，不用等第一次登录；同时起远程控制台代理，更新整盘镜像的启动脚本，给老数据补建资产。
+ */
 export async function register() {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
+  const { applyPendingRestore } = await import("./lib/system");
+  const restored = applyPendingRestore();
+  if (restored) console.log(`[restore] ${restored.message}`);
   const { applyDisplaySettings } = await import("./lib/display-settings");
   applyDisplaySettings();
   const { listUsers } = await import("./lib/auth");

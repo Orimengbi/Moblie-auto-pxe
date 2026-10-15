@@ -40,6 +40,7 @@ import NotificationsOutlined from "@mui/icons-material/NotificationsOutlined";
 import ReceiptLongOutlined from "@mui/icons-material/ReceiptLongOutlined";
 import RocketLaunchOutlined from "@mui/icons-material/RocketLaunchOutlined";
 import SettingsOutlined from "@mui/icons-material/SettingsOutlined";
+import SettingsBackupRestoreOutlined from "@mui/icons-material/SettingsBackupRestoreOutlined";
 import type { SvgIconComponent } from "@mui/icons-material";
 import { TaskCenter } from "@/components/task-center";
 import { RoleProvider } from "@/components/role-context";
@@ -100,6 +101,7 @@ function groups(permissions: Permission[], counts: NavCounts): { title: string; 
         ...(permissions.includes("users") ? [{ href: "/audit", label: "审计", icon: ReceiptLongOutlined }] : []),
         ...(permissions.includes("settings") ? [{ href: "/settings", label: "设置", icon: SettingsOutlined }] : []),
         ...(permissions.includes("users") ? [{ href: "/users", label: "用户", icon: ManageAccountsOutlined }] : []),
+        ...(permissions.includes("system") ? [{ href: "/system", label: "备份和升级", icon: SettingsBackupRestoreOutlined }] : []),
         { href: "/account", label: "我的账号", icon: AccountCircleOutlined },
       ],
     },
@@ -111,7 +113,7 @@ function Brand() {
     <Stack direction="row" spacing={1.25} sx={{ alignItems: "center", px: 2.25, height: 64, flexShrink: 0 }}>
       <AppIcon size={32} />
       <Box sx={{ lineHeight: 1.2 }}>
-        <Typography sx={{ fontWeight: 600, fontSize: 15, letterSpacing: "-0.01em" }}>资产运维平台</Typography>
+        <Typography sx={{ fontWeight: 600, fontSize: 15, letterSpacing: "-0.01em" }}>Union</Typography>
         <Typography variant="caption" sx={{ color: "text.secondary" }}>
           资产 · 运维 · 装机
         </Typography>
@@ -262,7 +264,7 @@ export function AppShell({ user, counts: initial, children }: { user: ShellUser;
               <IconButton edge="start" onClick={() => setMobileOpen(true)} sx={{ display: { md: "none" } }} aria-label="打开导航">
                 <MenuOutlined />
               </IconButton>
-              <Typography sx={{ display: { md: "none" }, fontWeight: 600, letterSpacing: "-0.01em" }}>资产运维平台</Typography>
+              <Typography sx={{ display: { md: "none" }, fontWeight: 600, letterSpacing: "-0.01em" }}>Union</Typography>
               <Box sx={{ flex: 1 }} />
               <TaskCenter />
               <ThemeToggle />

@@ -46,7 +46,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
           <AppIcon size={64} />
           <Box>
             <Typography variant="h1" sx={{ fontSize: { xs: "1.75rem", sm: "2rem" } }}>
-              资产运维平台
+              Union
             </Typography>
             <Typography variant="body1" sx={{ mt: 1, color: "text.secondary" }}>
               服务器从入库、上架、装机到维修，一处管完。

@@ -21,7 +21,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "资产运维平台",
+  title: "Union",
   description: "服务器资产台账、运维和 PXE 装机",
 };
 

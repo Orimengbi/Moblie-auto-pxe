@@ -32,6 +32,7 @@ export const PERMISSIONS = [
   { key: "delete", group: "系统", label: "删除", hint: "删除资产、机房、机柜、客户、备件、镜像、模板、装机批次和文件" },
   { key: "settings", group: "系统", label: "系统设置", hint: "显示、监控、SSH 跳板机、SNMP 模板、资产编号规则" },
   { key: "users", group: "系统", label: "用户、角色和审计", hint: "管理所有账号，看审计日志" },
+  { key: "system", group: "系统", label: "备份和升级", hint: "备份、恢复数据，升级控制台" },
 ] as const satisfies readonly { key: string; group: (typeof PERMISSION_GROUPS)[number]; label: string; hint: string }[];
 
 export type Permission = (typeof PERMISSIONS)[number]["key"];
@@ -116,6 +117,7 @@ const WRITES: [RegExp, Permission | null][] = [
   [/^\/api\/projects(\/.*)?$/, "install"],
   [/^\/api\/files(\/.*)?$/, "files"],
   [/^\/api\/(settings|snmp-profiles)(\/.*)?$/, "settings"],
+  [/^\/api\/system(\/.*)?$/, "system"],
 ];
 
 /**
