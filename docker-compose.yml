@@ -19,7 +19,11 @@ services:
     restart: unless-stopped
 
   console:
-    build: ./console
+    build:
+      context: ./console
+      # 部署脚本按「日期-提交号」传进来，「备份和升级」页和 /api/health 显示它。
+      args:
+        PXE_VERSION: ${PXE_VERSION:-dev}
     network_mode: host
     environment:
       PXE_DATA_DIR: /data
