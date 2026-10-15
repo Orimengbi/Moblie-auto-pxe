@@ -1,0 +1,8 @@
+[Unit]
+Description=PXE 控制台：执行网页发起的升级
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=@HOME@/pxectl apply-request
+TimeoutStartSec=45min

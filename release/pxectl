@@ -1,0 +1,778 @@
+#!/bin/bash
+# pxectl：正式环境（不通外网）的安装、升级、回滚、备份、恢复。
+#
+#   首次安装    sudo bash pxe-<版本>-full.run            （带 Docker 的安装包；装过 Docker 的机器用不带 -full 的也行）
+#   升级        sudo bash pxe-<版本>.run                 或在控制台「备份和升级」页上传后点「升级」
+#   其余        pxectl status | rollback | backup | restore | reconfigure | reset-password | logs | restart
+#
+# 装好后的目录（默认 /opt/pxe，装的时候可以用 --home 改）：
+#   site.env          这台机器自己的设置：管理口地址、装机网口、端口。升级不动它。
+#   .env              当前版本号（PXE_VERSION）、上一个版本、升级前备份。
+#   compose.yml       nginx.conf（按 site.env 生成）  pxectl  release.pub（升级包验签用的公钥）
+#   releases/<版本>/  每个版本的 compose、nginx 模板、pxectl，回滚时用；只留最近 3 个版本
+#   data/             全部数据。data/backups 是备份，data/system 是和控制台交换升级请求、进度的地方
+set -euo pipefail
+
+PXECTL_VERSION=1
+SELF_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+if [ -z "${PXE_HOME:-}" ]; then
+  if [ -f "$SELF_DIR/.env" ] && [ -f "$SELF_DIR/compose.yml" ]; then PXE_HOME=$SELF_DIR; else PXE_HOME=/opt/pxe; fi
+fi
+PROJECT=pxe
+KEEP_RELEASES=3
+HEALTH_TIMEOUT=240
+ACTOR=${SUDO_USER:-${USER:-root}}
+
+# ---------- 小工具 ----------
+
+LOG_FILE=""
+say() {
+  printf '%s\n' "$*"
+  if [ -n "$LOG_FILE" ]; then printf '%s %s\n' "$(date '+%F %T')" "$*" >>"$LOG_FILE"; fi
+}
+die() {
+  say "错误：$*" >&2
+  exit 1
+}
+need_root() { [ "$(id -u)" = 0 ] || die "要用 root 执行（sudo）"; }
+
+json_escape() {
+  local s=$1
+  s=${s//\\/\\\\}
+  s=${s//\"/\\\"}
+  s=${s//$'\n'/\\n}
+  s=${s//$'\r'/}
+  s=${s//$'\t'/ }
+  printf '%s' "$s"
+}
+
+env_get() { # 文件 键
+  [ -f "$1" ] || return 0
+  sed -n "s/^$2=//p" "$1" | tail -1 | sed "s/^['\"]//; s/['\"]\$//"
+}
+
+env_set() { # 文件 键 值
+  local file=$1 key=$2 value=$3 tmp
+  tmp=$(mktemp "$file.XXXX")
+  if [ -f "$file" ]; then grep -v "^$key=" "$file" >"$tmp" || true; fi
+  printf '%s=%s\n' "$key" "$value" >>"$tmp"
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$file"
+}
+
+compose() { docker compose --project-name "$PROJECT" --project-directory "$PXE_HOME" -f "$PXE_HOME/compose.yml" --env-file "$PXE_HOME/.env" "$@"; }
+
+# 在控制台容器里跑 scripts/ 下的命令行（备份、恢复、装机网络、重置密码）。
+cli() { compose exec -T -e NODE_NO_WARNINGS=1 console node --experimental-strip-types "$@"; }
+
+current_version() { env_get "$PXE_HOME/.env" PXE_VERSION; }
+
+http_get() { # url，打印响应体；连不上返回非 0
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsS --max-time 5 "$1"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO- -T 5 "$1"
+  else
+    local rest=${1#http://} hostport path host port
+    hostport=${rest%%/*}
+    path=/${rest#*/}
+    host=${hostport%:*}
+    port=${hostport##*:}
+    exec 3<>"/dev/tcp/$host/$port" || return 1
+    printf 'GET %s HTTP/1.0\r\nHost: %s\r\n\r\n' "$path" "$hostport" >&3
+    timeout 5 cat <&3 | sed '1,/^\r$/d'
+    exec 3<&-
+  fi
+}
+
+# 控制台直连（不经 nginx）时 /api/health 会带上「有没有任务在跑」。
+health() { http_get http://127.0.0.1:3000/api/health 2>/dev/null || true; }
+
+busy_reason() {
+  local body
+  body=$(health)
+  printf '%s' "$body" | sed -n 's/.*"busy":"\([^"]*\)".*/\1/p'
+}
+
+wait_healthy() { # 版本 [秒]
+  local want=$1 limit=${2:-$HEALTH_TIMEOUT} waited=0 body
+  while [ "$waited" -lt "$limit" ]; do
+    body=$(health)
+    if printf '%s' "$body" | grep -q '"ok":true' && printf '%s' "$body" | grep -q "\"version\":\"$want\""; then
+      local port
+      port=$(env_get "$PXE_HOME/site.env" HTTP_PORT)
+      # 再经 nginx 走一遍，确认管理口这条路也通。
+      if http_get "http://127.0.0.1:${port:-8080}/api/health" >/dev/null 2>&1; then return 0; fi
+    fi
+    sleep 3
+    waited=$((waited + 3))
+  done
+  return 1
+}
+
+# ---------- 升级进度（控制台页面读这几个文件） ----------
+
+STATUS_FROM="" STATUS_TO="" STATUS_FILE_NAME="" STATUS_BY=${STATUS_BY:-}
+status() { # 状态 步骤 [说明]
+  local dir="$PXE_HOME/data/system" tmp
+  [ -d "$dir" ] || return 0
+  tmp=$(mktemp "$dir/.status.XXXX")
+  printf '{"state":"%s","file":"%s","from":"%s","to":"%s","step":"%s","message":"%s","requestedBy":"%s","updatedAt":"%s"}\n' \
+    "$1" "$(json_escape "$STATUS_FILE_NAME")" "$(json_escape "$STATUS_FROM")" "$(json_escape "$STATUS_TO")" "$(json_escape "$2")" "$(json_escape "${3:-}")" "$(json_escape "$STATUS_BY")" "$(date -u +%FT%TZ)" >"$tmp"
+  chmod 644 "$tmp"
+  mv -f "$tmp" "$dir/update-status.json"
+  say "[$1] $2${3:+：$3}"
+}
+
+history_add() { # 版本 结果
+  local dir="$PXE_HOME/data/system"
+  mkdir -p "$dir"
+  printf '%s\t%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$1" "${STATUS_BY:-$ACTOR}" "$2" >>"$dir/history.tsv"
+  write_version_json
+}
+
+write_version_json() {
+  local dir="$PXE_HOME/data/system" tmp first=1 at version by result
+  mkdir -p "$dir"
+  tmp=$(mktemp "$dir/.version.XXXX")
+  {
+    printf '{"current":"%s","previous":"%s","history":[' "$(current_version)" "$(env_get "$PXE_HOME/.env" PXE_PREVIOUS)"
+    if [ -f "$dir/history.tsv" ]; then
+      while IFS=$'\t' read -r at version by result; do
+        [ "$first" = 1 ] || printf ','
+        first=0
+        printf '{"at":"%s","version":"%s","by":"%s","result":"%s"}' "$(json_escape "$at")" "$(json_escape "$version")" "$(json_escape "$by")" "$(json_escape "$result")"
+      done < <(tail -n 50 "$dir/history.tsv" | tac)
+    fi
+    printf ']}\n'
+  } >"$tmp"
+  chmod 644 "$tmp"
+  mv -f "$tmp" "$dir/version.json"
+}
+
+write_agent_json() {
+  local dir="$PXE_HOME/data/system"
+  mkdir -p "$dir"
+  printf '{"pxectl":"%s","home":"%s","installedAt":"%s"}\n' "$PXECTL_VERSION" "$(json_escape "$PXE_HOME")" "$(date -u +%FT%TZ)" >"$dir/agent.json"
+}
+
+# ---------- 升级包 ----------
+
+bundle_field() { # 文件 键：只从开头几行按固定格式取，不执行包里的脚本
+  head -n 40 "$1" | sed -n "s/^$2='\([A-Za-z0-9+/=._:-]*\)'\$/\1/p" | head -1
+}
+
+# 验签：用装好的 release.pub。没装 openssl 时借控制台镜像里的。
+verify_sig() { # payload.tar sig.bin pub
+  local payload=$1 sig=$2 pub=$3
+  if command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 -verify "$pub" -signature "$sig" "$payload" >/dev/null 2>&1
+  else
+    local dir image
+    dir=$(dirname "$payload")
+    image="pxe/console:$(current_version)"
+    cp "$pub" "$dir/release.pub"
+    docker run --rm --network none -v "$dir:/w:ro" --entrypoint openssl "$image" dgst -sha256 -verify /w/release.pub -signature "/w/$(basename "$sig")" "/w/$(basename "$payload")" >/dev/null 2>&1
+  fi
+}
+
+# 把 .run 拆开、校验、验签，解到一个临时目录，打印目录。
+unpack_bundle() { # 文件
+  local file=$1 lines sha sig work
+  [ -f "$file" ] || die "找不到升级包 $file"
+  lines=$(bundle_field "$file" PXE_RELEASE_LINES)
+  sha=$(bundle_field "$file" PXE_RELEASE_SHA256)
+  sig=$(bundle_field "$file" PXE_RELEASE_SIG)
+  case "$lines" in '' | *[!0-9]*) die "$(basename "$file") 不是升级包" ;; esac
+  [ -n "$sha" ] || die "$(basename "$file") 没有校验和"
+  work=$(mktemp -d /var/tmp/pxe-bundle.XXXX)
+  tail -n "+$((lines + 1))" "$file" >"$work/payload.tar"
+  [ "$(sha256sum "$work/payload.tar" | cut -d' ' -f1)" = "$sha" ] || {
+    rm -rf "$work"
+    die "升级包内容和校验和对不上（拷坏了？）"
+  }
+  check_signature "$work/payload.tar" "$sig" || {
+    rm -rf "$work"
+    die "升级包签名不对：不是用发布密钥打的包，拒绝安装"
+  }
+  mkdir "$work/p"
+  tar -xf "$work/payload.tar" -C "$work/p"
+  rm -f "$work/payload.tar"
+  printf '%s\n' "$work"
+}
+
+check_signature() { # payload.tar base64签名
+  local pub="$PXE_HOME/release.pub"
+  if [ ! -f "$pub" ]; then
+    say "还没装公钥（首次安装），不验签"
+    return 0
+  fi
+  [ -n "$2" ] || return 1
+  local sigfile
+  sigfile="$(dirname "$1")/payload.sig"
+  printf '%s' "$2" | base64 -d >"$sigfile" 2>/dev/null || return 1
+  verify_sig "$1" "$sigfile" "$pub"
+}
+
+# ---------- Docker ----------
+
+docker_ok() { command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1 && docker info >/dev/null 2>&1; }
+
+install_docker() { # 安装包目录
+  local p=$1
+  if docker_ok; then
+    say "Docker 已经装好：$(docker --version)"
+    return 0
+  fi
+  if command -v docker >/dev/null 2>&1 && ! docker info >/dev/null 2>&1; then
+    systemctl start docker 2>/dev/null || true
+    sleep 2
+    if docker_ok; then return 0; fi
+  fi
+  [ -d "$p/docker" ] || die "这台机器没有 Docker（或没有 docker compose），用带 Docker 的安装包 pxe-<版本>-full.run"
+  command -v systemctl >/dev/null 2>&1 || die "没有 systemd，装不了 Docker 服务"
+  say "安装 Docker（静态版，放在 /usr/local/bin）……"
+  tar -xzf "$p"/docker/docker-*.tgz -C /usr/local/bin --strip-components=1
+  mkdir -p /usr/local/lib/docker/cli-plugins
+  install -m 755 "$p/docker/docker-compose" /usr/local/lib/docker/cli-plugins/docker-compose
+  install -m 644 "$p/systemd/containerd.service" /etc/systemd/system/containerd.service
+  install -m 644 "$p/systemd/docker.service" /etc/systemd/system/docker.service
+  getent group docker >/dev/null 2>&1 || groupadd -r docker 2>/dev/null || true
+  mkdir -p /etc/docker
+  if [ ! -f /etc/docker/daemon.json ]; then
+    # 三个容器都用宿主机网络，不需要 Docker 改防火墙；没有 iptables 的系统也能起。
+    if command -v iptables >/dev/null 2>&1; then
+      printf '{\n  "log-driver": "json-file",\n  "log-opts": { "max-size": "20m", "max-file": "3" }\n}\n' >/etc/docker/daemon.json
+    else
+      printf '{\n  "iptables": false,\n  "ip6tables": false,\n  "log-driver": "json-file",\n  "log-opts": { "max-size": "20m", "max-file": "3" }\n}\n' >/etc/docker/daemon.json
+    fi
+  fi
+  systemctl daemon-reload
+  systemctl enable --now containerd.service docker.service
+  local i
+  for i in $(seq 1 30); do
+    if docker info >/dev/null 2>&1; then break; fi
+    sleep 1
+  done
+  docker_ok || die "Docker 没起来，看 journalctl -u docker"
+  say "Docker 装好了：$(docker --version)"
+}
+
+# ---------- 站点设置 ----------
+
+list_ipv4() { ip -o -4 addr show | awk '$2 != "lo" {print $2, $4}'; }
+
+ask() { # 提示 默认值
+  local answer
+  if [ "${ASSUME_YES:-0}" = 1 ] || [ ! -t 0 ]; then
+    printf '%s\n' "$2"
+    return
+  fi
+  read -r -p "$1 [$2]: " answer </dev/tty
+  printf '%s\n' "${answer:-$2}"
+}
+
+valid_ip() { [[ $1 =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; }
+
+configure_site() { # 在 site.env 已有值的基础上问一遍，命令行给了的不问
+  local site="$PXE_HOME/site.env" mgmt install_if install_ip port
+  mgmt=${OPT_MGMT_IP:-$(env_get "$site" MGMT_IPS)}
+  install_if=${OPT_INSTALL_IF:-$(env_get "$site" INSTALL_IF)}
+  install_ip=${OPT_INSTALL_IP:-$(env_get "$site" INSTALL_IP)}
+  port=${OPT_PORT:-$(env_get "$site" HTTP_PORT)}
+  port=${port:-8080}
+
+  say ""
+  say "这台机器的网口和地址："
+  list_ipv4 | sed 's/^/    /'
+  say ""
+  say "管理口打开控制台，装机网口给目标服务器发 DHCP、TFTP 和启动文件。两个不要接在同一个交换机上。"
+  if [ -z "$mgmt" ]; then mgmt=$(ip -o -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p'); fi
+  [ -n "${OPT_MGMT_IP:-}" ] || mgmt=$(ask "控制台监听的管理口地址（多个用逗号）" "${mgmt:-}")
+  if [ -z "$install_if" ]; then install_if=$(list_ipv4 | awk -v m="$mgmt" 'index($2, m"/") != 1 {print $1; exit}'); fi
+  [ -n "${OPT_INSTALL_IF:-}" ] || install_if=$(ask "装机网口名" "${install_if:-}")
+  if [ -z "$install_ip" ]; then install_ip=$(ip -o -4 addr show dev "$install_if" 2>/dev/null | awk '{print $4; exit}'); fi
+  [ -n "${OPT_INSTALL_IP:-}" ] || install_ip=$(ask "装机网口地址/掩码位数（要先在系统里配成静态地址）" "${install_ip:-192.168.77.1/24}")
+  [ -n "${OPT_PORT:-}" ] || port=$(ask "HTTP 端口（控制台和装机网口共用）" "$port")
+
+  local ip
+  for ip in ${mgmt//,/ }; do valid_ip "$ip" || die "管理口地址 $ip 不对"; done
+  [[ $install_ip == */* ]] || install_ip="$install_ip/24"
+  valid_ip "${install_ip%/*}" || die "装机网口地址 $install_ip 不对"
+  [[ $port =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || die "端口 $port 不对"
+  ip link show "$install_if" >/dev/null 2>&1 || say "警告：现在没有网口 $install_if，装机前要接好、配上地址"
+  if ! ip -o -4 addr show dev "$install_if" 2>/dev/null | grep -q " ${install_ip%/*}/"; then
+    say "警告：$install_if 上现在没有 ${install_ip%/*}，nginx 会起不来。先配好地址（netplan / nmcli），再执行 pxectl reconfigure"
+  fi
+  for ip in ${mgmt//,/ }; do
+    if [ "$ip" = "${install_ip%/*}" ]; then die "管理口和装机网口不能用同一个地址"; fi
+  done
+
+  mkdir -p "$PXE_HOME"
+  {
+    printf '# 这台机器自己的设置，升级不会改。改完执行 pxectl reconfigure。\n'
+    printf 'MGMT_IPS=%s\n' "$mgmt"
+    printf 'INSTALL_IF=%s\n' "$install_if"
+    printf 'INSTALL_IP=%s\n' "$install_ip"
+    printf 'HTTP_PORT=%s\n' "$port"
+  } >"$site"
+  chmod 644 "$site"
+}
+
+render_nginx() { # 模板
+  local site="$PXE_HOME/site.env" port install_ip mgmt_listen="" ip tmp
+  port=$(env_get "$site" HTTP_PORT)
+  install_ip=$(env_get "$site" INSTALL_IP)
+  for ip in $(env_get "$site" MGMT_IPS | tr ',' ' '); do mgmt_listen="${mgmt_listen}    listen $ip:$port;\n"; done
+  tmp=$(mktemp)
+  sed -e "s|@INSTALL_LISTEN@|    listen ${install_ip%/*}:$port;|" -e "s|@MGMT_LISTEN@|${mgmt_listen%\\n}|" -e "s|@PORT@|$port|g" "$1" >"$tmp"
+  # 单文件挂载：原地写（同一个 inode），容器里看得到新内容。
+  if [ -f "$PXE_HOME/nginx.conf" ]; then cat "$tmp" >"$PXE_HOME/nginx.conf"; else install -m 644 "$tmp" "$PXE_HOME/nginx.conf"; fi
+  rm -f "$tmp"
+}
+
+# 控制台里的装机网络（state.json）跟着 site.env 走：网口、地址、端口、默认地址池。
+apply_install_network() {
+  local site="$PXE_HOME/site.env"
+  cli scripts/system-cli.ts set-network \
+    --iface "$(env_get "$site" INSTALL_IF)" --ip "$(env_get "$site" INSTALL_IP)" --port "$(env_get "$site" HTTP_PORT)"
+  compose restart dnsmasq >/dev/null
+}
+
+# ---------- 装文件 ----------
+
+# 把某个版本的 compose、nginx 模板、pxectl、公钥放到安装目录。
+install_release_files() { # 版本目录
+  local r=$1 tmp
+  install -m 644 "$r/compose.yml" "$PXE_HOME/compose.yml"
+  render_nginx "$r/nginx.conf.tmpl"
+  # pxectl 可能正在执行（升级时就是），先写新文件再改名，正在跑的不受影响。
+  tmp=$(mktemp "$PXE_HOME/.pxectl.XXXX")
+  cat "$r/pxectl" >"$tmp"
+  chmod 755 "$tmp"
+  mv -f "$tmp" "$PXE_HOME/pxectl"
+  if [ ! -f "$PXE_HOME/release.pub" ] && [ -f "$r/release.pub" ]; then install -m 644 "$r/release.pub" "$PXE_HOME/release.pub"; fi
+  if command -v systemctl >/dev/null 2>&1 && [ -d /etc/systemd/system ]; then
+    sed "s|@HOME@|$PXE_HOME|g" "$r/systemd/pxe-update.path" >/etc/systemd/system/pxe-update.path
+    sed "s|@HOME@|$PXE_HOME|g" "$r/systemd/pxe-update.service" >/etc/systemd/system/pxe-update.service
+    systemctl daemon-reload
+    systemctl enable --now pxe-update.path >/dev/null 2>&1 || say "警告：pxe-update.path 没启用，网页上不能升级"
+  fi
+  ln -sf "$PXE_HOME/pxectl" /usr/local/bin/pxectl
+}
+
+# 安装包里的东西留一份在 releases/<版本>/（不含镜像），回滚用。
+keep_release() { # 安装包目录 版本
+  local r="$PXE_HOME/releases/$2"
+  rm -rf "$r"
+  mkdir -p "$r"
+  cp -r "$1/compose.yml" "$1/nginx.conf.tmpl" "$1/pxectl" "$1/systemd" "$1/VERSION" "$r/"
+  [ -f "$1/release.pub" ] && cp "$1/release.pub" "$r/"
+  touch "$r"
+}
+
+load_images() { # 安装包目录
+  local v out
+  v=$(cat "$1/VERSION")
+  say "导入镜像（约一两分钟）……"
+  out=$(docker load -i "$1/images.tar.gz" 2>&1) || true
+  printf '%s\n' "$out" | sed 's/^/    /'
+  # docker load 有时报错了还是返回 0，逐个确认镜像真的在。
+  if printf '%s' "$out" | grep -qi error; then return 1; fi
+  for image in console boot dnsmasq; do
+    docker image inspect "pxe/$image:$v" >/dev/null 2>&1 || return 1
+  done
+}
+
+prune_releases() {
+  local cur prev v kept=0
+  cur=$(current_version)
+  prev=$(env_get "$PXE_HOME/.env" PXE_PREVIOUS)
+  [ -d "$PXE_HOME/releases" ] || return 0
+  for v in $(ls -t "$PXE_HOME/releases"); do
+    if [ "$v" = "$cur" ] || [ "$v" = "$prev" ]; then continue; fi
+    kept=$((kept + 1))
+    if [ "$kept" -le $((KEEP_RELEASES - 2)) ]; then continue; fi
+    say "清掉旧版本 $v"
+    rm -rf "${PXE_HOME:?}/releases/$v"
+    docker image rm "pxe/console:$v" "pxe/boot:$v" "pxe/dnsmasq:$v" >/dev/null 2>&1 || true
+  done
+  # 升级包只留刚装的那个。
+  local keep_file=${STATUS_FILE_NAME:-} f
+  for f in "$PXE_HOME"/data/system/updates/pxe-*.run; do
+    [ -e "$f" ] || continue
+    [ "$(basename "$f")" = "$keep_file" ] || rm -f "$f"
+  done
+}
+
+print_access() {
+  local site="$PXE_HOME/site.env" port ip pw=""
+  port=$(env_get "$site" HTTP_PORT)
+  say ""
+  for ip in $(env_get "$site" MGMT_IPS | tr ',' ' '); do say "控制台：http://$ip:$port/"; done
+  local i
+  for i in $(seq 1 20); do
+    if [ -f "$PXE_HOME/data/auth/initial-admin-password" ]; then
+      pw=$(cat "$PXE_HOME/data/auth/initial-admin-password")
+      break
+    fi
+    sleep 1
+  done
+  if [ -n "$pw" ]; then
+    say "初始管理员：admin  密码：$pw"
+    say "（密码也在 $PXE_HOME/data/auth/initial-admin-password，登录后在「我的账号」改掉，再删掉这个文件）"
+  fi
+}
+
+# ---------- 安装 ----------
+
+cmd_install() { # 安装包目录
+  local p=$1 version
+  need_root
+  version=$(cat "$p/VERSION")
+  [ "$(uname -m)" = x86_64 ] || die "只支持 x86_64，这台是 $(uname -m)"
+  say "安装 Union $version 到 $PXE_HOME"
+  install_docker "$p"
+  configure_site
+  mkdir -p "$PXE_HOME/data/system" "$PXE_HOME/data/tftp" "$PXE_HOME/data/backups" "$PXE_HOME/releases"
+  chmod 700 "$PXE_HOME/data/backups"
+  cp -n "$p"/tftp/* "$PXE_HOME/data/tftp/" 2>/dev/null || true
+  env_set "$PXE_HOME/.env" PXE_VERSION "$version"
+  env_set "$PXE_HOME/.env" PXE_HOSTNAME "$(hostname)"
+  keep_release "$p" "$version"
+  install -m 644 "$p/release.pub" "$PXE_HOME/release.pub"
+  install_release_files "$p"
+  load_images "$p" || die "镜像导入失败（上面有 Docker 的报错）"
+  check_ports
+  say "启动……"
+  compose up -d --remove-orphans || die "容器没起来（上面有 Docker 的报错）"
+  wait_healthy "$version" || die "控制台没有正常起来，看 pxectl logs console"
+  apply_install_network || say "警告：没能写入装机网络设置，在控制台里检查"
+  write_agent_json
+  history_add "$version" "安装"
+  say ""
+  say "装好了，版本 $version。"
+  print_access
+}
+
+check_ports() {
+  command -v ss >/dev/null 2>&1 || return 0
+  local port busy
+  port=$(env_get "$PXE_HOME/site.env" HTTP_PORT)
+  busy=$(ss -Hlntup 2>/dev/null | awk -v p=":$port" '$5 ~ p"$" || $5 ~ /:(3000|3001|67|69)$/ {print $5, $7}' | grep -v -e docker -e nginx -e node -e dnsmasq || true)
+  if [ -n "$busy" ]; then
+    say "警告：这些端口已经被别的程序占了，服务可能起不来："
+    printf '%s\n' "$busy" | sed 's/^/    /'
+  fi
+}
+
+# ---------- 升级 ----------
+
+UPGRADE_BACKUP=""
+SKIP_BACKUP=0
+FORCE=0
+
+cmd_upgrade_dir() { # 安装包目录
+  local p=$1 new old
+  need_root
+  new=$(cat "$p/VERSION")
+  old=$(current_version)
+  [ -n "$old" ] || die "$PXE_HOME 里没有装好的版本，先安装"
+  STATUS_FROM=$old
+  STATUS_TO=$new
+  local prev_before backup_before
+  prev_before=$(env_get "$PXE_HOME/.env" PXE_PREVIOUS)
+  backup_before=$(env_get "$PXE_HOME/.env" PXE_UPGRADE_BACKUP)
+  if [ "$new" = "$old" ] && [ "$FORCE" = 0 ]; then
+    status failed "检查" "已经是 $new，不用升级（要重装加 --force）"
+    return 1
+  fi
+  status running "检查"
+  local busy
+  busy=$(busy_reason)
+  if [ -n "$busy" ]; then
+    status failed "检查" "$busy，等它结束再升级"
+    return 1
+  fi
+  local need avail
+  need=$(($(stat -c %s "$p/images.tar.gz") * 3 / 1024 + 1048576))
+  avail=$(df -Pk /var/lib/docker 2>/dev/null | awk 'NR==2 {print $4}')
+  if [ -n "$avail" ] && [ "$avail" -lt "$need" ]; then
+    status failed "检查" "Docker 所在磁盘空间不够（要约 $((need / 1048576)) GB）"
+    return 1
+  fi
+
+  status running "导入镜像"
+  if ! load_images "$p" >>"${LOG_FILE:-/dev/null}" 2>&1; then
+    status failed "导入镜像" "docker load 失败，没有改动"
+    return 1
+  fi
+
+  UPGRADE_BACKUP=""
+  if [ "$SKIP_BACKUP" = 0 ]; then
+    status running "备份数据和配置"
+    local out
+    if ! out=$(cli scripts/system-cli.ts backup --reason 升级前 2>&1); then
+      status failed "备份数据和配置" "升级前备份失败，没有改动：$(printf '%s' "$out" | tail -1)。控制台没在运行时可以加 --skip-backup 跳过"
+      return 1
+    fi
+    UPGRADE_BACKUP=$(basename "$(printf '%s' "$out" | tail -1)")
+    say "已备份：$UPGRADE_BACKUP"
+  fi
+
+  status running "换上新版本"
+  keep_release "$p" "$new"
+  [ -d "$PXE_HOME/releases/$old" ] || say "警告：没有 $old 的文件留底，失败时回不去"
+  install_release_files "$p"
+  env_set "$PXE_HOME/.env" PXE_VERSION "$new"
+  env_set "$PXE_HOME/.env" PXE_PREVIOUS "$old"
+  env_set "$PXE_HOME/.env" PXE_UPGRADE_BACKUP "$UPGRADE_BACKUP"
+  compose up -d --remove-orphans >>"${LOG_FILE:-/dev/null}" 2>&1 || true
+
+  status running "检查新版本"
+  if wait_healthy "$new"; then
+    write_agent_json
+    history_add "$new" "从 $old 升级"
+    prune_releases
+    status "done" "完成" "已升级到 $new"
+    return 0
+  fi
+
+  say "新版本没有正常起来，最后的日志："
+  compose logs --tail 40 console 2>&1 | sed 's/^/    /' | tee -a "${LOG_FILE:-/dev/null}" >/dev/null || true
+  status running "回滚" "新版本没有正常起来，回到 $old"
+  if rollback_to "$old" "$UPGRADE_BACKUP"; then
+    # 失败的版本不算「上一个版本」：pxectl rollback 还应该回到升级前的那个上一版。
+    env_set "$PXE_HOME/.env" PXE_PREVIOUS "$prev_before"
+    env_set "$PXE_HOME/.env" PXE_UPGRADE_BACKUP "$backup_before"
+    history_add "$new" "升级失败，已回到 $old"
+    status rolled-back "回滚" "$new 没有正常起来，已回到 $old${UPGRADE_BACKUP:+ 和升级前的数据}。日志里有新版本的报错"
+  else
+    history_add "$new" "升级失败，回滚也没成功"
+    status failed "回滚" "回滚到 $old 也没起来，需要人工处理：pxectl status、pxectl logs console"
+  fi
+  return 1
+}
+
+rollback_to() { # 版本 [备份]
+  local v=$1 backup=${2:-} cur
+  cur=$(current_version)
+  [ -d "$PXE_HOME/releases/$v" ] || {
+    say "没有 $v 的文件留底"
+    return 1
+  }
+  docker image inspect "pxe/console:$v" >/dev/null 2>&1 || {
+    say "没有 $v 的镜像"
+    return 1
+  }
+  install_release_files "$PXE_HOME/releases/$v"
+  env_set "$PXE_HOME/.env" PXE_VERSION "$v"
+  env_set "$PXE_HOME/.env" PXE_PREVIOUS "$cur"
+  compose up -d --remove-orphans >>"${LOG_FILE:-/dev/null}" 2>&1 || true
+  wait_healthy "$v" || return 1
+  if [ -n "$backup" ]; then
+    say "恢复升级前的数据 $backup"
+    cli scripts/system-cli.ts stage-restore "$backup" || return 1
+    compose restart console >/dev/null
+    wait_healthy "$v" || return 1
+  fi
+  write_version_json
+  return 0
+}
+
+# 控制台网页发起的升级：systemd 的 pxe-update.path 看到请求文件就调这里。
+cmd_apply_request() {
+  need_root
+  local dir="$PXE_HOME/data/system" req file by
+  req="$dir/update-request.json"
+  [ -f "$req" ] || return 0
+  exec 9>"$dir/.update.lock"
+  flock -n 9 || return 0
+  mv -f "$req" "$dir/update-request.processing"
+  file=$(sed -n 's/.*"file":"\([^"]*\)".*/\1/p' "$dir/update-request.processing")
+  by=$(sed -n 's/.*"requestedBy":"\([^"]*\)".*/\1/p' "$dir/update-request.processing")
+  rm -f "$dir/update-request.processing"
+  STATUS_FILE_NAME=$file
+  STATUS_BY=$by
+  LOG_FILE="$dir/update.log"
+  : >"$LOG_FILE"
+  if ! [[ $file =~ ^pxe-[A-Za-z0-9._-]+\.run$ ]] || [ ! -f "$dir/updates/$file" ]; then
+    status failed "检查" "升级包 $file 不存在"
+    return 1
+  fi
+  status running "校验升级包"
+  local work
+  if ! work=$(unpack_bundle "$dir/updates/$file" 2>>"$LOG_FILE"); then
+    status failed "校验升级包" "$(tail -1 "$LOG_FILE")"
+    return 1
+  fi
+  work=$(printf '%s' "$work" | tail -1)
+  local rc=0
+  # 用新包里的 pxectl 做升级：升级步骤本身也会跟着版本改进。
+  PXE_HOME=$PXE_HOME STATUS_BY=$by "$work/p/pxectl" upgrade-dir "$work/p" --file "$file" --log "$LOG_FILE" || rc=$?
+  rm -rf "$work"
+  return "$rc"
+}
+
+# ---------- 其他命令 ----------
+
+cmd_status() {
+  local site="$PXE_HOME/site.env"
+  say "安装目录  $PXE_HOME"
+  say "当前版本  $(current_version)"
+  say "上一个    $(env_get "$PXE_HOME/.env" PXE_PREVIOUS)"
+  say "管理口    $(env_get "$site" MGMT_IPS)  端口 $(env_get "$site" HTTP_PORT)"
+  say "装机网口  $(env_get "$site" INSTALL_IF)  $(env_get "$site" INSTALL_IP)"
+  say "健康检查  $(health)"
+  say ""
+  compose ps
+  if [ -f "$PXE_HOME/data/system/update-status.json" ]; then
+    say ""
+    say "最近一次升级：$(cat "$PXE_HOME/data/system/update-status.json")"
+  fi
+}
+
+cmd_rollback() {
+  need_root
+  local prev backup="" with_data=0
+  [ "${1:-}" = "--with-data" ] && with_data=1
+  prev=$(env_get "$PXE_HOME/.env" PXE_PREVIOUS)
+  [ -n "$prev" ] || die "没有上一个版本"
+  [ "$with_data" = 1 ] && backup=$(env_get "$PXE_HOME/.env" PXE_UPGRADE_BACKUP)
+  [ "$with_data" = 1 ] && [ -z "$backup" ] && die "没有升级前的备份可以恢复"
+  STATUS_BY=$ACTOR
+  say "回到 $prev${backup:+，并恢复升级前的数据 $backup（之后的改动会丢）}"
+  [ "${ASSUME_YES:-0}" = 1 ] || [ "$(ask "确定？输入 yes" no)" = yes ] || die "取消了"
+  rollback_to "$prev" "$backup" || die "回滚没成功，看 pxectl logs console"
+  history_add "$prev" "手动回滚"
+  say "已回到 $prev"
+}
+
+cmd_backup() {
+  local full=""
+  [ "${1:-}" = "--full" ] && full=--full
+  cli scripts/system-cli.ts backup $full
+}
+
+cmd_restore() {
+  need_root
+  local file=${1:-} name
+  [ -n "$file" ] || die "用法：pxectl restore <备份文件>   （pxectl list-backups 列出已有的）"
+  if [ -f "$file" ]; then
+    # 外面拷来的文件：放进 data/ 让容器看得到。
+    name=$(basename "$file")
+    mkdir -p "$PXE_HOME/data/backups/.incoming"
+    cp "$file" "$PXE_HOME/data/backups/.incoming/$name"
+    file="/data/backups/.incoming/$name"
+  fi
+  say "恢复后，备份之后的改动都会丢掉（恢复前会自动备份一份现在的）。"
+  [ "${ASSUME_YES:-0}" = 1 ] || [ "$(ask "确定？输入 yes" no)" = yes ] || die "取消了"
+  cli scripts/system-cli.ts stage-restore "$file"
+  rm -rf "$PXE_HOME/data/backups/.incoming"
+  compose restart console >/dev/null
+  wait_healthy "$(current_version)" 120 || die "控制台没起来，看 pxectl logs console"
+  cat "$PXE_HOME/data/system/restore-result.json" 2>/dev/null && echo
+}
+
+cmd_reconfigure() {
+  need_root
+  configure_site
+  render_nginx "$PXE_HOME/releases/$(current_version)/nginx.conf.tmpl"
+  compose restart boot >/dev/null
+  apply_install_network
+  say "已按新设置重启 nginx 和 dnsmasq"
+  print_access
+}
+
+usage() {
+  cat <<EOF
+pxectl $PXECTL_VERSION  （安装目录 $PXE_HOME）
+
+  pxectl status                     版本、地址、容器状态、最近一次升级
+  pxectl upgrade <pxe-版本.run>     升级（也可以直接 sudo bash pxe-版本.run）
+  pxectl rollback [--with-data]     回到上一个版本；--with-data 同时恢复升级前的数据
+  pxectl backup [--full]            备份到 $PXE_HOME/data/backups（--full 连镜像、固件包）
+  pxectl list-backups               列出备份
+  pxectl restore <备份>             恢复（文件名或路径）
+  pxectl reconfigure                改管理口、装机网口、端口
+  pxectl reset-password <用户名>    忘了密码时重置（不存在就新建管理员）
+  pxectl logs [console|boot|dnsmasq]
+  pxectl restart | stop | start
+EOF
+}
+
+# ---------- 入口 ----------
+
+parse_common() {
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --home) PXE_HOME=$2; shift 2 ;;
+      --mgmt-ip) OPT_MGMT_IP=$2; shift 2 ;;
+      --install-if) OPT_INSTALL_IF=$2; shift 2 ;;
+      --install-ip) OPT_INSTALL_IP=$2; shift 2 ;;
+      --port) OPT_PORT=$2; shift 2 ;;
+      --yes | -y) ASSUME_YES=1; shift ;;
+      --skip-backup) SKIP_BACKUP=1; shift ;;
+      --force) FORCE=1; shift ;;
+      --file) STATUS_FILE_NAME=$2; shift 2 ;;
+      --log) LOG_FILE=$2; shift 2 ;;
+      *) ARGS+=("$1"); shift ;;
+    esac
+  done
+}
+
+main() {
+  local cmd=${1:-help}
+  [ $# -gt 0 ] && shift
+  ARGS=()
+  parse_common "$@"
+  set -- ${ARGS[@]+"${ARGS[@]}"}
+  STATUS_BY=${STATUS_BY:-$ACTOR}
+  case "$cmd" in
+    bundle-install)
+      # .run 解开后调这里：装过就升级，没装过就安装。
+      local p=$1
+      if [ -f "$PXE_HOME/.env" ] && [ -n "$(current_version)" ]; then
+        mkdir -p "$PXE_HOME/data/system"
+        LOG_FILE=${LOG_FILE:-$PXE_HOME/data/system/update.log}
+        : >"$LOG_FILE"
+        STATUS_FILE_NAME=${STATUS_FILE_NAME:-$(basename "${PXE_BUNDLE_FILE:-}")}
+        cmd_upgrade_dir "$p"
+      else
+        cmd_install "$p"
+      fi
+      ;;
+    upgrade-dir) cmd_upgrade_dir "$1" ;;
+    upgrade)
+      need_root
+      [ -n "${1:-}" ] || die "用法：pxectl upgrade <pxe-版本.run>"
+      local work
+      work=$(unpack_bundle "$1" | tail -1)
+      mkdir -p "$PXE_HOME/data/system"
+      LOG_FILE=${LOG_FILE:-$PXE_HOME/data/system/update.log}
+      : >"$LOG_FILE"
+      STATUS_FILE_NAME=$(basename "$1")
+      local rc=0
+      PXE_HOME=$PXE_HOME "$work/p/pxectl" upgrade-dir "$work/p" --file "$STATUS_FILE_NAME" --log "$LOG_FILE" $([ "$SKIP_BACKUP" = 1 ] && echo --skip-backup) $([ "$FORCE" = 1 ] && echo --force) || rc=$?
+      rm -rf "$work"
+      exit "$rc"
+      ;;
+    apply-request) cmd_apply_request ;;
+    status) cmd_status ;;
+    rollback) cmd_rollback "$@" ;;
+    backup) cmd_backup "$@" ;;
+    list-backups) cli scripts/system-cli.ts list ;;
+    restore) cmd_restore "$@" ;;
+    reconfigure) cmd_reconfigure ;;
+    reset-password)
+      [ -n "${1:-}" ] || die "用法：pxectl reset-password <用户名>"
+      cli scripts/auth-admin.ts reset-password "$1"
+      ;;
+    logs) compose logs --tail 200 -f "$@" ;;
+    restart | stop | start) need_root; compose "$cmd" "$@" ;;
+    help | -h | --help) usage ;;
+    *) usage; exit 2 ;;
+  esac
+}
+
+main "$@"

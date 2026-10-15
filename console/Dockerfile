@@ -16,6 +16,9 @@ FROM build AS test
 CMD ["npm", "test"]
 
 FROM base
+# 发布脚本按版本号构建（release/build-release.sh），控制台页面和 /api/health 显示它。
+ARG PXE_VERSION=dev
+ENV PXE_VERSION=$PXE_VERSION
 WORKDIR /app
 COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static

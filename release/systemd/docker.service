@@ -1,0 +1,24 @@
+# pxectl 装静态版 Docker 时用的服务文件（照 moby 官方的改：不用 socket 激活，二进制在 /usr/local/bin）。
+[Unit]
+Description=Docker Application Container Engine
+After=network-online.target containerd.service
+Wants=network-online.target
+Requires=containerd.service
+
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/dockerd --containerd=/run/containerd/containerd.sock
+ExecReload=/bin/kill -s HUP $MAINPID
+TimeoutStartSec=0
+RestartSec=2
+Restart=always
+LimitNOFILE=infinity
+LimitNPROC=infinity
+LimitCORE=infinity
+TasksMax=infinity
+Delegate=yes
+KillMode=process
+OOMScoreAdjust=-500
+
+[Install]
+WantedBy=multi-user.target

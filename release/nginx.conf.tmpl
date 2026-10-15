@@ -1,0 +1,68 @@
+# 由 pxectl 按 site.env 生成，别直接改：改 site.env 后执行 pxectl reconfigure。
+# 装机网口：只给目标机启动文件、镜像和诊断包，不给控制台。
+server {
+@INSTALL_LISTEN@
+    server_name _;
+    absolute_redirect off;
+    client_max_body_size 0;
+
+    location /images/ {
+        alias /data/images/;
+    }
+
+    location /diag/ {
+        alias /data/diag/;
+    }
+
+    location /boot/ {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        # 控制台按来源地址决定给不给应答文件；覆盖掉客户端自己带的。
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_read_timeout 300s;
+    }
+
+    # 控制台能以 root 在装好的机器上跑脚本，不能让装机网访问到。
+    location / { return 404; }
+}
+
+# 管理网口：控制台。不给镜像、启动文件。
+server {
+    listen 127.0.0.1:@PORT@ default_server;
+@MGMT_LISTEN@
+    server_name _;
+    absolute_redirect off;
+    client_max_body_size 0;
+
+    location /images/ { return 404; }
+    location /diag/ { return 404; }
+    location /boot/ { return 404; }
+
+    # 远程控制台：嵌在控制台页面里的 BMC 画面，转到控制台进程里的代理（127.0.0.1:3001），包括 KVM 的 WebSocket。
+    location /__bmc/ {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_http_version 1.1;
+        proxy_set_header Host $http_host;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        # 带端口的 Host 给控制台核对 Origin；X-Real-IP 给登录失败限速。
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_read_timeout 300s;
+    }
+}
+
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}

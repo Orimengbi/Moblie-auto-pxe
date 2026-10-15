@@ -361,6 +361,9 @@ const MIGRATIONS: string[] = [
   `,
 ];
 
+/** 当前代码的库结构版本（PRAGMA user_version）。备份里记下它，恢复时不接受更新版本的备份。 */
+export const SCHEMA_VERSION = MIGRATIONS.length;
+
 let opened: { file: string; db: Database } | null = null;
 
 export function dbPath(): string {
@@ -379,6 +382,12 @@ export function db(): Database {
   migrate(database);
   opened = { file, db: database };
   return database;
+}
+
+/** 关掉库，下次 db() 重新打开（测试里模拟重启用）。 */
+export function closeDb(): void {
+  opened?.db.close();
+  opened = null;
 }
 
 function migrate(database: Database): void {

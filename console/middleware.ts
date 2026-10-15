@@ -2,12 +2,12 @@ import { NextResponse, type NextRequest } from "next/server";
 import { authenticate, can, sameOrigin } from "@/lib/auth";
 import { permissionDenied, requiredPermission } from "@/lib/roles";
 
-const PUBLIC = new Set(["/login", "/api/auth/login", "/api/auth/challenge", "/api/auth/logout"]);
+const PUBLIC = new Set(["/login", "/api/auth/login", "/api/auth/challenge", "/api/auth/logout", "/api/health"]);
 
 /**
  * 除了目标机用的 /boot/ 和登录接口，控制台页面和 API 都要先登录。
- * /api/files 不经过这里：中间件会把请求体缓存一份且超过 10MB 就截断，
- * 那两个路由自己调 requirePermission。
+ * /api/files 和 /api/system/upload/ 不经过这里：中间件会把请求体缓存一份且超过 10MB 就截断，
+ * 这些路由自己调 requirePermission。
  * API 的写请求按 lib/roles.ts 里路径对应的权限点挡一道，路由里再查一遍。
  */
 export function middleware(request: NextRequest) {
@@ -34,5 +34,5 @@ export function middleware(request: NextRequest) {
 
 export const config = {
   runtime: "nodejs",
-  matcher: ["/((?!boot/|_next/static|_next/image|favicon\\.ico|api/files).*)"],
+  matcher: ["/((?!boot/|_next/static|_next/image|favicon\\.ico|api/files|api/system/upload/).*)"],
 };
