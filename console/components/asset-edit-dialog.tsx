@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Dialog from "@mui/material/Dialog";
@@ -11,6 +12,7 @@ import TextField, { type TextFieldProps } from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import { ASSET_STATUS, ASSET_TYPES } from "@/lib/asset-labels";
 import type { AssetStatus, AssetType, Customer, Datacenter, PublicAsset, PublicSnmpProfile, Rack, Site } from "@/lib/types";
+import type { SnMismatch } from "@/lib/asset-import";
 import { SiteOptions } from "@/components/site-options";
 
 /** 表单里的值都按文字存，密码留空表示不改。 */
@@ -107,7 +109,10 @@ export function AssetEditDialog({
   const [form, setForm] = useState<Form>(formOf(asset));
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
+  const [mismatch, setMismatch] = useState<SnMismatch | null>(null);
   const creating = !asset;
+  // 入库时填了 BMC 地址和账号密码，序列号可以不填，服务端从 BMC 读。
+  const fromBmc = creating && Boolean(form.bmcIp.trim() && ((form.bmcUser && form.bmcPassword) || (form.bmcFallbackUser && form.bmcFallbackPassword)));
   const [sites, setSites] = useState<Site[]>([]);
   const [datacenters, setDatacenters] = useState<Datacenter[]>([]);
   const [racks, setRacks] = useState<Rack[]>([]);
@@ -117,6 +122,7 @@ export function AssetEditDialog({
     if (!open) return;
     setForm(formOf(asset));
     setError("");
+    setMismatch(null);
     void fetch("/api/snmp-profiles")
       .then((response) => response.json())
       .then((list: PublicSnmpProfile[]) => setProfiles(Array.isArray(list) ? list : []))
@@ -140,14 +146,17 @@ export function AssetEditDialog({
     };
   }
 
-  async function save(event: React.FormEvent) {
-    event.preventDefault();
+  /** sn 是选了「用 BMC 的」后换上的序列号；keepSn 是看过提示后坚持用填的。 */
+  async function save(choice: { sn?: string; keepSn?: boolean } = {}) {
     setPending(true);
     setError("");
+    setMismatch(null);
     const { siteId, ...rest } = form;
     void siteId;
     const body = {
       ...rest,
+      ...(choice.sn ? { sn: choice.sn } : {}),
+      ...(choice.keepSn ? { keepSn: true } : {}),
       snmpProfileId: form.snmpProfileId || null,
       customerId: form.customerId || null,
       rackId: form.rackId || null,
@@ -162,6 +171,10 @@ export function AssetEditDialog({
     }).catch(() => null);
     const result = await response?.json().catch(() => ({}));
     setPending(false);
+    if (response?.status === 409 && result?.snMismatch) {
+      setMismatch(result.snMismatch as SnMismatch);
+      return;
+    }
     if (!response?.ok) {
       setError(result?.error || "保存失败");
       return;
@@ -172,15 +185,21 @@ export function AssetEditDialog({
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" scroll="paper">
-      <Box component="form" onSubmit={save} sx={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
+      <Box
+        component="form"
+        onSubmit={(event: React.FormEvent) => {
+          event.preventDefault();
+          void save();
+        }}
+        sx={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
         <DialogTitle>{creating ? "资产入库" : `编辑 ${asset.tag}`}</DialogTitle>
         <DialogContent dividers sx={{ display: "flex", flexDirection: "column", gap: 2.5 }}>
           <Typography variant="body2" sx={{ color: "text.secondary" }}>
-            {creating ? "只有序列号必填，其余可以以后补。" : "密码留空表示不改。从装机批次同步过来的 BMC 和系统地址，在这里改了以后以这里为准，直到批次里那一行再变。"}
+            {creating ? "只有序列号必填，其余可以以后补。填了 BMC 地址和账号密码时序列号可以不填，保存时从 BMC 读，厂商、型号、BMC MAC 空着的也一起补上；填了序列号就和 BMC 报的核对。" : "密码留空表示不改。从装机批次同步过来的 BMC 和系统地址，在这里改了以后以这里为准，直到批次里那一行再变。"}
           </Typography>
 
           <Group title="基本">
-            <Field label="序列号" {...field("sn")} required mono />
+            <Field label="序列号" {...field("sn")} required={!fromBmc} mono placeholder={fromBmc ? "留空从 BMC 读" : creating ? "填了 BMC 账号可以不填" : undefined} />
             <Field label="类型" select {...field("type")}>
               {Object.entries(ASSET_TYPES).map(([value, label]) => (
                 <option key={value} value={value}>
@@ -289,11 +308,37 @@ export function AssetEditDialog({
               {error}
             </Typography>
           ) : null}
+          {mismatch ? (
+            <Alert
+              severity="warning"
+              action={
+                <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5, alignItems: "flex-end" }}>
+                  <Button
+                    size="small"
+                    variant="contained"
+                    disabled={pending}
+                    onClick={() => {
+                      setForm((current) => ({ ...current, sn: mismatch.bmc }));
+                      void save({ sn: mismatch.bmc });
+                    }}
+                  >
+                    用 BMC 的 {mismatch.bmc}
+                  </Button>
+                  <Button size="small" disabled={pending} onClick={() => void save({ keepSn: true })}>
+                    用填的 {mismatch.entered}
+                  </Button>
+                </Box>
+              }
+            >
+              序列号对不上：填的是 <b>{mismatch.entered}</b>，BMC（{mismatch.via}）报的是 <b>{mismatch.bmc}</b>。
+              常见原因是 BMC 地址填成了别的机器。用填的序列号时不从 BMC 补厂商、型号和 MAC。
+            </Alert>
+          ) : null}
         </DialogContent>
         <DialogActions>
           <Button onClick={onClose}>取消</Button>
           <Button type="submit" variant="contained" disabled={pending}>
-            {pending ? "保存中" : "保存"}
+            {pending ? (fromBmc ? "连 BMC 中" : "保存中") : "保存"}
           </Button>
         </DialogActions>
       </Box>

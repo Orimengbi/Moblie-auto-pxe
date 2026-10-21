@@ -7,7 +7,8 @@ import test from "node:test";
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pxe-identify-test-"));
 process.env.PXE_DATA_DIR = temp;
 
-const { enrichRecords, enrichRow, mergeIdentity, parseFru, placeholderSerial } = await import("./bmc-identify.ts");
+const { enrichRecords, enrichRow, mergeIdentity, needsBmc, parseFru, placeholderSerial } = await import("./bmc-identify.ts");
+const { fillAssetFromBmc, prepareAssetImport } = await import("./asset-import.ts");
 const assets = await import("./assets.ts");
 const { parseAssetTable } = await import("./asset-sheet.ts");
 
@@ -41,10 +42,52 @@ test("BMC failures only block rows that have no SN", async () => {
   assert.match(withoutSn.error, /没填序列号，BMC 10.0.0.1 又读不到：BMC 没有回应/);
   assert.match((await enrichRow({ bmcIp: "10.0.0.1" }, down)).error, /也没填账号密码/);
   assert.match((await enrichRow({ model: "x" }, down)).error, /没填序列号，也没填 BMC 地址/);
-  // 表里的序列号和 BMC 报的不一样时提醒。
+});
+
+test("a filled SN is checked against the BMC: a mismatch is an error and nothing is filled from that BMC", async () => {
   const other = await enrichRow({ sn: "TYPO1", bmcIp: "10.0.0.2", bmcUser: "a", bmcPassword: "good" }, async () => found);
-  assert.match(other.note, /BMC 报的序列号是 6QM8N72HMA0065，和表里的不一样/);
-  assert.equal(other.cells.sn, "TYPO1");
+  assert.match(other.error, /序列号对不上：填的是 TYPO1，BMC 10.0.0.2（Redfish）报的是 6QM8N72HMA0065/);
+  assert.deepEqual(other.mismatch, { entered: "TYPO1", bmc: found.sn, via: "Redfish" });
+  assert.equal(other.cells.vendor, undefined, "多半是别的机器，不补");
+  // 大小写、空格不同算一致；格子都填了也要连 BMC 核对。
+  const full = { sn: "6qm8n72hma 0065", vendor: "v", model: "m", bmcMac: "aa:bb:cc:dd:ee:ff", bmcIp: "10.0.0.3", bmcUser: "a", bmcPassword: "good" };
+  assert.ok(needsBmc(full));
+  const same = await enrichRow(full, async () => found);
+  assert.equal(same.error, "");
+  assert.match(same.note, /序列号和 BMC 一致/);
+  const noSn = await enrichRow({ sn: "SN9", bmcIp: "10.0.0.4", bmcUser: "a", bmcPassword: "good" }, async () => ({ ...found, sn: "" }));
+  assert.equal(noSn.error, "");
+  assert.match(noSn.note, /BMC 没报序列号，没核对/);
+});
+
+test("batch import skips rows whose SN does not match the BMC", async () => {
+  const prepared = await prepareAssetImport(
+    [
+      { row: 2, cells: { sn: "TYPO2", bmcIp: "10.0.1.1", bmcUser: "a", bmcPassword: "good" } },
+      { row: 3, cells: { bmcIp: "10.0.1.2", bmcUser: "a", bmcPassword: "good" } },
+    ],
+    [],
+    undefined,
+    async (ip) => ({ ...found, sn: `SN-${ip.replaceAll(".", "-")}` }),
+  );
+  assert.deepEqual(prepared.failed.map((item) => item.row), [2]);
+  assert.deepEqual(prepared.records.map((item) => item.cells.sn), ["SN-10-0-1-2"]);
+});
+
+test("single create reads the SN from the BMC, and asks when the filled SN differs", async () => {
+  const identify = async () => found;
+  const read = await fillAssetFromBmc({ type: "server", bmcIp: "10.0.2.1", bmcUser: "a", bmcPassword: "good", model: "手填" }, false, identify);
+  assert.ok("input" in read);
+  assert.equal(read.input.sn, found.sn);
+  assert.equal(read.input.vendor, found.vendor);
+  assert.equal(read.input.model, "手填");
+  const asked = await fillAssetFromBmc({ sn: "TYPO3", bmcIp: "10.0.2.1", bmcUser: "a", bmcPassword: "good" }, false, identify);
+  assert.deepEqual(asked, { mismatch: { entered: "TYPO3", bmc: found.sn, via: "Redfish" } });
+  // 坚持用填的：不连 BMC，也不补别的。
+  const kept = await fillAssetFromBmc({ sn: "TYPO3", bmcIp: "10.0.2.1", bmcUser: "a", bmcPassword: "good" }, true, async () => assert.fail("不该连 BMC"));
+  assert.ok("input" in kept);
+  assert.equal(kept.input.vendor, undefined);
+  await assert.rejects(fillAssetFromBmc({ type: "server" }, false, identify), /没填序列号，也没填 BMC 地址/);
 });
 
 test("no account: the SN comes from an existing asset with that BMC address", async () => {

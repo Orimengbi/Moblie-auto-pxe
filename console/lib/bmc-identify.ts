@@ -7,7 +7,7 @@ import { defaultIpmiExec, ipmiFailure, type IpmiExec } from "./ipmi-remote.ts";
 /**
  * 导入资产时只填了 BMC 地址和账号密码：连 BMC 读出序列号、厂商、型号、BMC MAC，补进表格里空着的格子。
  * 先走 Redfish（读主机那个 System，HGX 的 GPU 底板不算），没有 Redfish 或读不到序列号再用 ipmitool fru。
- * 表里填了的格子不动。结果缓存 10 分钟，预览和正式导入不用连两遍。
+ * 表里填了的格子不动；填了序列号的拿来和 BMC 报的核对。结果缓存 10 分钟，预览和正式导入不用连两遍。
  */
 
 export interface BmcIdentity {
@@ -130,10 +130,17 @@ export interface Enriched {
   note: string;
   /** 没填序列号、BMC 又读不到时的原因；有它这一行就算出错。 */
   error: string;
+  /** 填的序列号和 BMC 报的对不上（同时有 error）。批量导入这一行跳过，单台入库让人选用哪个。 */
+  mismatch?: { entered: string; bmc: string; via: string };
+}
+
+/** 序列号比较不管大小写和空格。 */
+export function sameSn(a: string, b: string): boolean {
+  return a.replace(/\s+/g, "").toUpperCase() === b.replace(/\s+/g, "").toUpperCase();
 }
 
 /**
- * 补一行：有 BMC 地址和账号密码时连 BMC 读，空着的序列号、厂商、型号、BMC MAC、主机名补上。
+ * 补一行：有 BMC 地址和账号密码时连 BMC 读，空着的序列号、厂商、型号、BMC MAC、主机名补上；填了序列号的核对一遍。
  * 没填序列号也没给账号密码时，按 BMC 地址找已有的资产。
  */
 export async function enrichRow(cells: SheetCells, identify: typeof identifyBmc = identifyBmc): Promise<Enriched> {
@@ -142,8 +149,7 @@ export async function enrichRow(cells: SheetCells, identify: typeof identifyBmc 
     { user: cells.bmcUser || "", password: cells.bmcPassword || "" },
     { user: cells.bmcFallbackUser || "", password: cells.bmcFallbackPassword || "" },
   ].filter((item) => item.user && item.password);
-  const wanted = !cells.sn || !cells.vendor || !cells.model || !cells.bmcMac;
-  if (!ip || !wanted) return { cells, note: "", error: cells.sn ? "" : "没填序列号，也没填 BMC 地址" };
+  if (!ip) return { cells, note: "", error: cells.sn ? "" : "没填序列号，也没填 BMC 地址" };
 
   if (!accounts.length) {
     if (cells.sn) return { cells, note: "", error: "" };
@@ -156,6 +162,15 @@ export async function enrichRow(cells: SheetCells, identify: typeof identifyBmc 
   for (const account of accounts) {
     try {
       const found = await identify(ip, account.user, account.password);
+      // 对不上多半是 BMC 地址填成了别的机器，读到的厂商、型号、MAC 也是那台的，一样都不补。
+      if (cells.sn && found.sn && !sameSn(cells.sn, found.sn)) {
+        return {
+          cells,
+          note: "",
+          error: `序列号对不上：填的是 ${cells.sn}，BMC ${ip}（${found.via}）报的是 ${found.sn}。检查 BMC 地址或序列号`,
+          mismatch: { entered: cells.sn, bmc: found.sn, via: found.via },
+        };
+      }
       const filled: string[] = [];
       const next: SheetCells = { ...cells };
       const fill = (field: "sn" | "vendor" | "model" | "bmcMac" | "hostname", value: string, label: string) => {
@@ -169,8 +184,9 @@ export async function enrichRow(cells: SheetCells, identify: typeof identifyBmc 
       fill("bmcMac", found.bmcMac, "BMC MAC");
       fill("hostname", found.hostname, "主机名");
       if (!next.sn) return { cells: next, note: "", error: `BMC ${ip} 读到了，但它没报序列号，要手填` };
-      const mismatch = cells.sn && found.sn && cells.sn.replace(/\s+/g, "").toUpperCase() !== found.sn.replace(/\s+/g, "").toUpperCase() ? `（注意：BMC 报的序列号是 ${found.sn}，和表里的不一样）` : "";
-      return { cells: next, note: filled.length || mismatch ? `从 BMC（${found.via}）读到：${filled.join("，") || "表里都填了"}${mismatch}` : "", error: "" };
+      const checked = cells.sn ? (found.sn ? "序列号和 BMC 一致" : "BMC 没报序列号，没核对") : "";
+      const parts = [filled.length ? `读到：${filled.join("，")}` : "", checked].filter(Boolean);
+      return { cells: next, note: parts.length ? `从 BMC（${found.via}）${parts.join("；")}` : "", error: "" };
     } catch (error) {
       failure = error instanceof Error ? error.message : "读取失败";
     }
@@ -180,10 +196,10 @@ export async function enrichRow(cells: SheetCells, identify: typeof identifyBmc 
   return { cells, note: "", error: `没填序列号，BMC ${ip} 又读不到：${failure}` };
 }
 
-/** 这一行会不会去连 BMC（有地址、有账号，而且有要补的格子）。进度只按这些行算。 */
+/** 这一行会不会去连 BMC（有地址、有账号；格子都填了也要核对序列号）。进度只按这些行算。 */
 export function needsBmc(cells: SheetCells): boolean {
   const account = Boolean((cells.bmcUser && cells.bmcPassword) || (cells.bmcFallbackUser && cells.bmcFallbackPassword));
-  return Boolean(cells.bmcIp && account && (!cells.sn || !cells.vendor || !cells.model || !cells.bmcMac));
+  return Boolean(cells.bmcIp && account);
 }
 
 /** 一批行并发补，同时最多连 8 台 BMC。onProgress 在每读完一台 BMC 后调用。 */
