@@ -8,10 +8,11 @@ DEST="$ROOT/data/tftp"
 mkdir -p "$DEST"
 
 fetch() {
-  name=$1 magic=$2 min=$3 want=$4
+  src=$1 magic=$2 min=$3 want=$4
+  name=${src##*/}
   tmp="$DEST/.$name.download"
   rm -f "$tmp"
-  if ! wget -q --https-only -O "$tmp" "https://boot.ipxe.org/$name"; then
+  if ! wget -q --https-only -O "$tmp" "https://boot.ipxe.org/$src"; then
     rm -f "$tmp"
     echo "$name 下载失败，没有替换" >&2
     exit 1
@@ -35,6 +36,7 @@ fetch() {
 }
 
 # ipxe.efi 是 PE 文件，以 MZ（4d5a）开头；undionly.kpxe 以实模式远跳转（ea）开头。
-fetch ipxe.efi 4d5a 100000 "${IPXE_EFI_SHA256:-}"
+# x86_64 的 EFI 版放在 x86_64-efi/ 下，根目录已经没有 ipxe.efi。
+fetch x86_64-efi/ipxe.efi 4d5a 100000 "${IPXE_EFI_SHA256:-}"
 fetch undionly.kpxe ea 20000 "${IPXE_KPXE_SHA256:-}"
 echo "iPXE 固件已放到 $DEST"
