@@ -103,7 +103,10 @@ docker compose exec console node --experimental-strip-types scripts/auth-admin.t
 - 和控制台走同一个地址和端口（路径 `/__bmc/`），控制台登录后就能用，不用另外开端口。
 - BMC 的账号密码和网页会话都留在小主机上，由小主机登录 BMC（改过账号用目标账号，不行再用原账号），浏览器拿不到。
 - 控制台用户被停用或改了密码，远程控制台随之断开。点「关闭」就断开 KVM。
-- 目前适配 AMI MegaRAC 的 H5Viewer（技嘉等）。BMC 的 KVM 会话数有上限（这台是 2 个）。
+- 适配两种 BMC，第一次连时自动认（不用账号密码，看 `/login` 接口在不在）：
+  - AMI MegaRAC（技嘉等）：用 BMC 自己的 H5Viewer，能挂虚拟光驱。BMC 的 KVM 会话数有上限（这台是 2 个）。
+  - OpenBMC（Quanta D75H 等）：用小主机自己的查看页（noVNC），只有 KVM 画面和键盘鼠标，挂 ISO 用「BMC」页的虚拟介质。只转 `/kvm/0`，BMC 自己的网页不经代理，要看就直接打开 BMC 地址。
+- 能做什么按控制台用户的权限点：开关机要「电源和引导」，挂 ISO 要「虚拟介质」，改 BMC 用户、BIOS、固件、清日志要各自的权限点，认不出来的 BMC 写接口只给管理员。被拒的在 `pxectl logs console` 里有 `[kvm] … 被拒`。
 
 ## 接线
 

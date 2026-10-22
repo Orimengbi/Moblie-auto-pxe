@@ -1,5 +1,7 @@
+import fs from "node:fs";
 import http from "node:http";
 import https from "node:https";
+import path from "node:path";
 import type { Duplex } from "node:stream";
 import zlib from "node:zlib";
 import { BmcAgent } from "./bmc-tls.ts";
@@ -8,7 +10,8 @@ import { assetBmcAccounts, audit, getAsset } from "./assets.ts";
 import { permissionLabel, type Permission } from "./roles.ts";
 
 /**
- * 远程控制台：在控制台页面里嵌入某台服务器 BMC 的 KVM 画面（AMI H5Viewer）。
+ * 远程控制台：在控制台页面里嵌入某台服务器 BMC 的 KVM 画面。AMI 用 BMC 自己的 H5Viewer；
+ * OpenBMC（Quanta D75H 这类）用代理自己的查看页加 noVNC，只转 /kvm/0 这一个 WebSocket，见 openBmcViewer。
  *
  * nginx 把 /__bmc/<资产>/... 转到这里，这里再转给那台 BMC 的 https://<bmcIp>/...。
  * 和控制台同源，所以不用另开端口和窗口，控制台登录 cookie 直接拿来鉴权。
@@ -36,9 +39,17 @@ const agent = new BmcAgent({ keepAlive: true, maxSockets: 16 });
 /** WebSocket 升级用的连接不复用，升级后就从 Agent 里摘出去。 */
 const upgradeAgent = new BmcAgent();
 
+/** AMI MegaRAC（技嘉等）还是 OpenBMC（bmcweb，Quanta 等）。两边的网页登录和 KVM 完全不一样。 */
+export type BmcKind = "ami" | "openbmc";
+
 interface BmcSession {
   host: string;
+  kind: BmcKind;
+  /** AMI 的 QSESSIONID。 */
   sid: string;
+  /** 转发时带的 Cookie。 */
+  cookie: string;
+  /** AMI 的 CSRF token；OpenBMC 的 XSRF token，KVM 的 WebSocket 子协议也用它。 */
   csrf: string;
   user: string;
   privilege: number;
@@ -75,8 +86,28 @@ export function loginFailure(host: string, results: { status: number | null; err
   return `BMC ${host} 的网页登录没有成功（HTTP ${results.map((item) => item.status).join("、")}）`;
 }
 
+const kinds = new Map<string, { at: number; kind: Promise<BmcKind> }>();
+
+/**
+ * 不带账号判断是哪种 BMC，免得同一个密码在两种登录接口上各错一次、把账号锁住。
+ * OpenBMC 的 /login 对空请求回 400，AMI 没有这个接口（404）。连不上当 AMI，由登录报连不上。按地址和端口缓存一小时。
+ */
+export function detectKind(host: string): Promise<BmcKind> {
+  const key = `${host}:${bmcPort()}`;
+  const hit = kinds.get(key);
+  if (hit && Date.now() - hit.at < 3600_000) return hit.kind;
+  const body = Buffer.from("{}");
+  const kind = call(host, { method: "POST", path: "/login", headers: { "Content-Type": "application/json", "Content-Length": body.length } }, body).then(
+    ({ response }) => (response.statusCode === 400 ? "openbmc" : "ami") as BmcKind,
+    () => "ami" as BmcKind,
+  );
+  kinds.set(key, { at: Date.now(), kind });
+  return kind;
+}
+
 /** 用资产上的账号登录 BMC 网页，主账号不行再试备用账号。 */
 async function login(host: string, accounts: { user: string; password: string }[]): Promise<BmcSession> {
+  if ((await detectKind(host)) === "openbmc") return loginOpenBmc(host, accounts);
   const results: { status: number | null; error?: string }[] = [];
   for (const account of accounts) {
     const form = Buffer.from(new URLSearchParams({ username: account.user, password: account.password }).toString());
@@ -102,13 +133,49 @@ async function login(host: string, accounts: { user: string; password: string }[
     const data = JSON.parse(body.toString("utf8")) as { CSRFToken?: string; privilege?: number; extendedpriv?: number; remote_addr?: string };
     return {
       host,
+      kind: "ami",
       sid,
+      cookie: `QSESSIONID=${sid}`,
       csrf: data.CSRFToken || "",
       user: account.user,
       privilege: data.privilege ?? 4,
       extendedpriv: data.extendedpriv ?? 3,
       clientIp: data.remote_addr || "",
     };
+  }
+  throw new Error(loginFailure(host, results));
+}
+
+/** OpenBMC：POST /login {"data":[用户, 密码]}，回 BMCWEB-SESSION 和 XSRF-TOKEN 两个 cookie。 */
+async function loginOpenBmc(host: string, accounts: { user: string; password: string }[]): Promise<BmcSession> {
+  const results: { status: number | null; error?: string }[] = [];
+  for (const account of accounts) {
+    const form = Buffer.from(JSON.stringify({ data: [account.user, account.password] }));
+    let reply: Awaited<ReturnType<typeof call>>;
+    try {
+      reply = await call(host, { method: "POST", path: "/login", headers: { "Content-Type": "application/json", "Content-Length": form.length } }, form);
+    } catch (error) {
+      results.push({ status: null, error: error instanceof Error ? error.message : "连接失败" });
+      break;
+    }
+    const { response, body } = reply;
+    results.push({ status: response.statusCode ?? null });
+    if (response.statusCode !== 200) {
+      if ((response.statusCode ?? 0) >= 500) break;
+      continue;
+    }
+    const pairs = [response.headers["set-cookie"] || []].flat().map((item) => item.split(";")[0].trim()).filter((item) => item.includes("="));
+    // KVM 子协议要的是 XSRF-TOKEN cookie 的值（BMC 网页自己也这么用）。Quanta 的 body 里另有一个 token，和它不一样，拿它连 KVM 会 401。
+    let token = pairs.find((item) => item.startsWith("XSRF-TOKEN="))?.slice("XSRF-TOKEN=".length) || "";
+    if (!token) {
+      try {
+        token = (JSON.parse(body.toString("utf8")) as { token?: string }).token || "";
+      } catch {
+        // body 不是 JSON 就只能靠 cookie。
+      }
+    }
+    if (!pairs.length || !token) continue;
+    return { host, kind: "openbmc", sid: "", cookie: pairs.join("; "), csrf: token, user: account.user, privilege: 4, extendedpriv: 3, clientIp: "" };
   }
   throw new Error(loginFailure(host, results));
 }
@@ -217,7 +284,7 @@ const BMC_WRITES: [RegExp, Permission[]][] = [
  */
 export function bmcPermissions(method: string, path: string, upgrade = false): Permission[] {
   if (upgrade) {
-    if (path === "/kvm") return ["console"];
+    if (path === "/kvm" || path === "/kvm/0") return ["console"];
     if (/^\/(cd|hd|fd)-server$|^\/vmedia/.test(path)) return ["media"];
     return BMC_ADMIN;
   }
@@ -240,7 +307,7 @@ function missing(own: Permission[], needed: Permission[]): string | null {
  */
 export function bmcRequestHeaders(
   headers: http.IncomingHttpHeaders,
-  bmc: { host: string; sid: string; csrf: string },
+  bmc: { host: string; sid: string; csrf: string; cookie?: string },
   prefix: string,
   upgrade = false,
 ): http.OutgoingHttpHeaders {
@@ -250,7 +317,7 @@ export function bmcRequestHeaders(
     out[name] = value;
   }
   out.host = bmc.host;
-  out.cookie = `QSESSIONID=${bmc.sid}`;
+  out.cookie = bmc.cookie || `QSESSIONID=${bmc.sid}`;
   if (bmc.csrf) out["x-csrftoken"] = bmc.csrf;
   if (headers.origin) out.origin = `https://${bmc.host}`;
   if (typeof headers.referer === "string") {
@@ -410,6 +477,53 @@ export function shimScript(input: { prefix: string; csrf: string; user: string; 
 `;
 }
 
+/**
+ * OpenBMC 的查看页：只有 KVM 画面，用 noVNC 经代理连 /kvm/0。不转 BMC 自己的网页（单页应用，路径写死在根上，
+ * 而且转了就等于把管理员会话下的整个 BMC 网页交出去）。noVNC 的文件也由代理发，正式环境不通外网。
+ */
+export function openBmcViewer(prefix: string): string {
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><title>远程控制台</title>
+<style>html,body{margin:0;height:100%;background:#000;overflow:hidden}#screen{width:100%;height:100%}
+#status{position:fixed;top:8px;left:8px;color:#ddd;font:13px/1.5 sans-serif;background:rgba(0,0,0,.7);padding:4px 10px;border-radius:4px;max-width:80%}</style>
+</head><body><div id="screen"></div><div id="status">正在连接 KVM…</div>
+<script type="module">
+import RFB from ${JSON.stringify(`${prefix}/__pxe/novnc/core/rfb.js`)};
+const status = document.getElementById("status");
+const url = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + ${JSON.stringify(`${prefix}/kvm/0`)};
+const rfb = new RFB(document.getElementById("screen"), url, { wsProtocols: ["binary"] });
+rfb.scaleViewport = true;
+rfb.background = "#000";
+rfb.addEventListener("connect", () => { status.style.display = "none"; rfb.focus(); });
+rfb.addEventListener("disconnect", (event) => {
+  status.style.display = "";
+  status.textContent = event.detail.clean ? "KVM 已断开，点上面的「重新连接」" : "KVM 连接断了：BMC 没回应，或者 KVM 正被别人占着。点上面的「重新连接」再试";
+});
+rfb.addEventListener("credentialsrequired", () => { status.textContent = "BMC 要 VNC 密码，暂不支持"; });
+</script></body></html>
+`;
+}
+
+/** noVNC 的目录：正式镜像里在 /app/novnc（Dockerfile 拷进去），开发和测试时在 node_modules。 */
+function novncDir(): string {
+  const candidates = [process.env.PXE_NOVNC_DIR, path.join(process.cwd(), "novnc"), path.join(process.cwd(), "node_modules", "@novnc", "novnc")];
+  return candidates.find((dir) => dir && fs.existsSync(path.join(dir, "core", "rfb.js"))) || "";
+}
+
+/** 发 noVNC 的一个脚本文件，只给 core/、vendor/ 下的 .js。 */
+function sendNovnc(res: http.ServerResponse, file: string): void {
+  const dir = novncDir();
+  const clean = path.posix.normalize(file);
+  const full = dir && /^(core|vendor)\/[A-Za-z0-9_\-./]+\.js$/.test(clean) && !clean.includes("..") ? path.join(dir, clean) : "";
+  if (!full || !fs.existsSync(full)) {
+    res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+    res.end(dir ? "没有这个文件" : "控制台里没有 noVNC，重新构建镜像");
+    return;
+  }
+  res.writeHead(200, { "Content-Type": "application/javascript; charset=utf-8", "Cache-Control": "public, max-age=86400" });
+  fs.createReadStream(full).pipe(res);
+}
+
 function page(res: http.ServerResponse, status: number, message: string): void {
   res.writeHead(status, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
   res.end(
@@ -521,6 +635,23 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     return;
   }
 
+  if ((await detectKind(target.host)) === "openbmc") {
+    if (path.startsWith("/__pxe/novnc/")) {
+      sendNovnc(res, path.slice("/__pxe/novnc/".length));
+      return;
+    }
+    if (path !== "/viewer.html") {
+      page(res, 404, "这台 BMC 是 OpenBMC，远程控制台只转 KVM 画面。BMC 自己的网页请直接打开它的地址。");
+      return;
+    }
+    // 先登录一次：账号密码不对时在这里就说清楚，不要等 noVNC 连不上。
+    await session(target.key, target.host, target.accounts);
+    const ancestors = frameAncestors(req.headers.host);
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", ...(ancestors ? { "Content-Security-Policy": ancestors } : {}) });
+    res.end(openBmcViewer(target.prefix));
+    return;
+  }
+
   let bmc = await session(target.key, target.host, target.accounts);
 
   if (path === "/__pxe/shim.js") {
@@ -587,17 +718,31 @@ function handleUpgrade(req: http.IncomingMessage, socket: Duplex, head: Buffer):
     socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
     return;
   }
-  const isKvm = target.rest.split("?")[0] === "/kvm";
-  // 没人经代理在看这台时，先清掉上次留下的 KVM 会话，新开的才能拿到完整权限。
-  (isKvm && !liveCount(target.host) ? closeStaleQuietly(target, "打开前") : Promise.resolve())
-    .then(() => session(target.key, target.host, target.accounts))
-    .then((bmc) => {
+  const wsPath = target.rest.split("?")[0];
+  // 浏览器要的子协议。OpenBMC 的子协议换成了 token，回给浏览器时要换回它要的，不然浏览器会断开。
+  const asked = String(req.headers["sec-websocket-protocol"] || "").split(",").map((item) => item.trim()).filter(Boolean);
+  detectKind(target.host)
+    .then(async (kind) => {
+      if (kind === "openbmc" && wsPath !== "/kvm/0") throw new Error("OpenBMC 只转 /kvm/0");
+      const isKvm = kind === "ami" && wsPath === "/kvm";
+      // 没人经代理在看这台时，先清掉上次留下的 KVM 会话，新开的才能拿到完整权限。OpenBMC 断开 WebSocket 就结束了，不用清。
+      if (isKvm && !liveCount(target.host)) await closeStaleQuietly(target, "打开前");
+      return { isKvm, bmc: await session(target.key, target.host, target.accounts) };
+    })
+    .then(({ isKvm, bmc }) => {
+      const headers = bmcRequestHeaders(req.headers, bmc, target.prefix, true);
+      if (bmc.kind === "openbmc") {
+        // bmcweb 的 KVM 要子协议里的 token、会话 cookie，还要 Origin；浏览器的 Origin 已换成 BMC 的，没带的补上。
+        headers["Sec-WebSocket-Protocol"] = bmc.csrf;
+        headers["X-XSRF-TOKEN"] = bmc.csrf;
+        headers.Origin ||= `https://${bmc.host}`;
+      }
       const upstream = https.request({
         host: target.host,
         port: bmcPort(),
         method: req.method,
         path: target.rest,
-        headers: bmcRequestHeaders(req.headers, bmc, target.prefix, true),
+        headers,
         agent: upgradeAgent,
       });
       // BMC 卡住不回握手时别让浏览器一直挂着；握手成功后这个超时就不再管。
@@ -605,7 +750,15 @@ function handleUpgrade(req: http.IncomingMessage, socket: Duplex, head: Buffer):
       upstream.on("upgrade", (response, bmcSocket, bmcHead) => {
         upstream.setTimeout(0);
         const lines = [`HTTP/1.1 ${response.statusCode} ${response.statusMessage}`];
-        for (let i = 0; i < response.rawHeaders.length; i += 2) lines.push(`${response.rawHeaders[i]}: ${response.rawHeaders[i + 1]}`);
+        for (let i = 0; i < response.rawHeaders.length; i += 2) {
+          const name = response.rawHeaders[i];
+          let value = response.rawHeaders[i + 1];
+          if (name.toLowerCase() === "sec-websocket-protocol") {
+            if (!asked.length) continue;
+            if (!asked.includes(value)) value = asked[0];
+          }
+          lines.push(`${name}: ${value}`);
+        }
         socket.write(`${lines.join("\r\n")}\r\n\r\n`);
         if (bmcHead.length) socket.write(bmcHead);
         if (head.length) bmcSocket.write(head);

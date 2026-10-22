@@ -244,6 +244,104 @@ test("the proxy logs in to the BMC itself and relays pages and the KVM socket", 
   bmc.closeAllConnections();
 });
 
+test("an OpenBMC gets the proxy's own noVNC viewer and only its /kvm/0 socket is relayed", { skip: spawnSync("openssl", ["version"]).error ? "no openssl" : false }, async () => {
+  if (!fs.existsSync(path.join(temp, "k.pem"))) {
+    spawnSync("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", "/CN=bmc", "-keyout", path.join(temp, "k.pem"), "-out", path.join(temp, "c.pem")]);
+  }
+  const seen: { method: string; path: string; headers: Record<string, unknown>; body: string }[] = [];
+  // 和 Quanta D75H 一样：/login 对空请求回 400，登录给 BMCWEB-SESSION 和 XSRF-TOKEN，KVM 子协议要带 token。
+  const bmc = https.createServer({ key: fs.readFileSync(path.join(temp, "k.pem")), cert: fs.readFileSync(path.join(temp, "c.pem")) }, (req, res) => {
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
+      seen.push({ method: req.method || "", path: req.url || "", headers: req.headers, body });
+      if (req.url === "/login" && req.method === "POST") {
+        const data = (JSON.parse(body || "{}") as { data?: string[] }).data;
+        if (!data) {
+          res.writeHead(400);
+          res.end();
+        } else if (data[0] === "admin" && data[1] === "obmc-pass") {
+          res.writeHead(200, { "set-cookie": ["BMCWEB-SESSION=sess1; Path=/; Secure; HttpOnly", "XSRF-TOKEN=tok1; Path=/; Secure"], "content-type": "application/json" });
+          // 和真机一样，body 里的 token 和 XSRF-TOKEN 不是一个，KVM 只认 XSRF-TOKEN。
+          res.end('{"RemoteUser":false,"token":"body-token"}');
+        } else {
+          res.writeHead(401);
+          res.end();
+        }
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end("{}");
+    });
+  });
+  bmc.on("upgrade", (req, socket) => {
+    seen.push({ method: "UPGRADE", path: req.url || "", headers: req.headers, body: "" });
+    if (req.url !== "/kvm/0" || req.headers["sec-websocket-protocol"] !== "tok1" || !String(req.headers.cookie).includes("BMCWEB-SESSION=sess1")) {
+      socket.end("HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n");
+      return;
+    }
+    socket.write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Protocol: tok1\r\n\r\nRFB 003.008\n");
+  });
+  await new Promise<void>((resolve) => bmc.listen(0, "127.0.0.1", resolve));
+  process.env.PXE_KVM_BMC_PORT = String((bmc.address() as net.AddressInfo).port);
+  assert.equal(await kvm.detectKind("127.0.0.1"), "openbmc");
+
+  const row = assets.createAsset({ sn: "sn-openbmc", bmcIp: "127.0.0.1", bmcUser: "admin", bmcPassword: "obmc-pass" }, "测试");
+  const user = auth.createUser({ username: "obmc-user", role: "operator", password: "obmc-user-pass" });
+  const cookie = `${auth.SESSION_COOKIE}=${auth.createSession({ user, method: "password", credentialId: "" })}`;
+  const proxy = kvm.createKvmProxy();
+  await new Promise<void>((resolve) => proxy.listen(0, "127.0.0.1", resolve));
+  const port = (proxy.address() as net.AddressInfo).port;
+  const base = `http://127.0.0.1:${port}`;
+  const prefix = kvm.bmcPrefix(row.id);
+
+  const viewer = await fetch(`${base}${prefix}/viewer.html`, { headers: { cookie } });
+  assert.equal(viewer.status, 200);
+  const html = await viewer.text();
+  assert.ok(html.includes(`import RFB from "${prefix}/__pxe/novnc/core/rfb.js"`), "查看页用代理发的 noVNC");
+  assert.ok(html.includes(`"${prefix}/kvm/0"`));
+  assert.ok(!html.includes("obmc-pass") && !html.includes("tok1"), "页面里没有 BMC 密码和 token");
+  assert.match(viewer.headers.get("content-security-policy") || "", /frame-ancestors/);
+  assert.equal(JSON.parse(seen.find((item) => item.path === "/login" && item.body.includes("data"))!.body).data[0], "admin");
+
+  const rfb = await fetch(`${base}${prefix}/__pxe/novnc/core/rfb.js`, { headers: { cookie } });
+  assert.equal(rfb.status, 200);
+  assert.match(rfb.headers.get("content-type") || "", /javascript/);
+  assert.match(await rfb.text(), /export default class RFB/);
+  assert.equal((await fetch(`${base}${prefix}/__pxe/novnc/../package.json`, { headers: { cookie } })).status, 404);
+
+  const before = seen.length;
+  assert.equal((await fetch(`${base}${prefix}/redfish/v1/Managers`, { headers: { cookie } })).status, 404, "OpenBMC 的网页和接口不转");
+  assert.equal(seen.length, before);
+
+  const ws = async (wsPath: string, protocol?: string) => {
+    const socket = net.connect(port, "127.0.0.1");
+    const reply = await new Promise<string>((resolve) => {
+      let data = "";
+      socket.on("data", (chunk) => {
+        data += chunk;
+        if (data.includes("RFB") || !data.startsWith("HTTP/1.1 101")) resolve(data);
+      });
+      socket.on("close", () => resolve(data));
+      socket.write(`GET ${prefix}${wsPath} HTTP/1.1\r\nhost: 127.0.0.1:${port}\r\nupgrade: websocket\r\nconnection: Upgrade\r\ncookie: ${cookie}\r\nsec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\nsec-websocket-version: 13\r\n${protocol ? `sec-websocket-protocol: ${protocol}\r\n` : ""}\r\n`);
+    });
+    socket.destroy();
+    return reply;
+  };
+  const reply = await ws("/kvm/0", "binary");
+  assert.match(reply, /^HTTP\/1\.1 101/);
+  assert.match(reply, /Sec-WebSocket-Protocol: binary\r\n/, "子协议换回浏览器要的");
+  assert.ok(!reply.includes("tok1"), "token 不回给浏览器");
+  assert.match(reply, /RFB 003\.008/);
+  assert.doesNotMatch(await ws("/kvm/0"), /Sec-WebSocket-Protocol/, "浏览器没要子协议就不回");
+  assert.doesNotMatch(await ws("/cd-server", "binary"), /^HTTP\/1\.1 101/, "OpenBMC 只转 /kvm/0");
+
+  proxy.close();
+  bmc.close();
+  proxy.closeAllConnections();
+  bmc.closeAllConnections();
+});
+
 test("BMC calls through the proxy need the matching console permission", () => {
   assert.deepEqual(kvm.bmcPermissions("GET", "/api/settings/users"), ["console"]);
   assert.deepEqual(kvm.bmcPermissions("DELETE", "/api/session"), ["console"]);

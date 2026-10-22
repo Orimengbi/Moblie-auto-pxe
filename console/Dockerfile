@@ -24,6 +24,8 @@ COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
 COPY --from=build /app/public ./public
 COPY --from=build /app/lib ./lib
+# OpenBMC 的远程控制台用 noVNC（ES 模块），由 KVM 代理直接发给浏览器；standalone 输出不带它。
+COPY --from=build /app/node_modules/@novnc/novnc ./novnc
 COPY --from=build /app/scripts ./scripts
 ENV PORT=3000
 ENV PXE_DATA_DIR=/data

@@ -7,7 +7,7 @@ import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
 
 /**
- * 页面内的远程控制台：全屏浮层里嵌 BMC 的 H5Viewer（经 /__bmc/ 代理，和控制台同源）。
+ * 页面内的远程控制台：全屏浮层里嵌 BMC 的 KVM 画面（经 /__bmc/ 代理；AMI 是 BMC 的 H5Viewer，OpenBMC 是代理自己的 noVNC 查看页）。
  * 关掉浮层就断开 KVM。
  */
 export function RemoteConsole({
