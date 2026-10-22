@@ -99,7 +99,7 @@ test("the proxy logs in to the BMC itself and relays pages and the KVM socket", 
         res.writeHead(200, { "content-type": "application/json" });
         res.end('{"ok":0}');
       } else if (req.url === "/viewer.html") {
-        res.writeHead(200, { "content-type": "text/html", "content-encoding": "gzip", "set-cookie": "refresh=1; secure" });
+        res.writeHead(200, { "content-type": "text/html", "content-encoding": "gzip", "set-cookie": "refresh=1; secure", "x-frame-options": "SAMEORIGIN", "content-security-policy": "default-src 'self'" });
         res.end(zlib.gzipSync('<html><head><script data-main="/app/main" src="/viewer.min.js"></script></head><body>KVM</body></html>'));
       } else if (req.url === "/api/configuration/project") {
         res.writeHead(200, { "content-type": "application/json" });
@@ -161,6 +161,8 @@ test("the proxy logs in to the BMC itself and relays pages and the KVM socket", 
   const viewer = await fetch(`${base}${prefix}/viewer.html`, { headers: { cookie } });
   assert.equal(viewer.status, 200);
   assert.equal(viewer.headers.get("set-cookie"), null, "BMC 的 cookie 不发给浏览器");
+  assert.equal(viewer.headers.get("x-frame-options"), null, "控制台和代理端口不同，不能让 BMC 的 SAMEORIGIN 挡住嵌入");
+  assert.match(viewer.headers.get("content-security-policy") || "", /default-src 'self', frame-ancestors http:\/\/127\.0\.0\.1:\* https:\/\/127\.0\.0\.1:\*/);
   assert.equal(viewer.headers.get("content-encoding"), null);
   const html = await viewer.text();
   assert.match(html, new RegExp(`<head><script src="${prefix}/__pxe/shim.js"></script><script data-main="${prefix}/app/main" src="${prefix}/viewer.min.js">`));

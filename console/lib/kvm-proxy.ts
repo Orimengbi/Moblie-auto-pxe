@@ -265,6 +265,20 @@ export function bmcRequestHeaders(
   return canonicalHeaders(out);
 }
 
+/**
+ * BMC 的页面带 X-Frame-Options: SAMEORIGIN。画面嵌在控制台页面里，控制台和 /__bmc/ 端口不同，算两个源，
+ * 浏览器会拒绝显示。代理去掉这个头，改成只许同一主机（任何端口）的页面嵌入，别的网站还是嵌不了。
+ */
+export function frameAncestors(host: string | undefined): string {
+  if (!host) return "";
+  try {
+    const name = new URL(`http://${host}`).hostname;
+    return `frame-ancestors http://${name}:* https://${name}:*`;
+  } catch {
+    return "";
+  }
+}
+
 /** HTML 里写死的根路径（src="/..."、data-main="/app/main"）加上前缀，最前面插入 shim.js。 */
 export function rewriteHtml(html: string, prefix: string): string {
   const fixed = html.replace(/(\s(?:src|href|action|data-main)\s*=\s*["'])\/(?!\/)/gi, `$1${prefix}/`);
@@ -536,9 +550,11 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
   const { response } = answer;
   const out: http.OutgoingHttpHeaders = {};
   for (const [name, value] of Object.entries(response.headers)) {
-    if (value === undefined || ["connection", "keep-alive", "transfer-encoding", "set-cookie", "content-length"].includes(name)) continue;
+    if (value === undefined || ["connection", "keep-alive", "transfer-encoding", "set-cookie", "content-length", "x-frame-options"].includes(name)) continue;
     out[name] = value;
   }
+  const ancestors = frameAncestors(req.headers.host);
+  if (ancestors) out["content-security-policy"] = [out["content-security-policy"] || [], ancestors].flat().map(String);
   if (typeof response.headers.location === "string") {
     const location = response.headers.location.replace(new RegExp(`^https?://${target.host.replace(/\./g, "\\.")}(:\\d+)?`), "");
     out.location = location.startsWith("/") ? `${target.prefix}${location}` : location;
