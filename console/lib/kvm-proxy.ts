@@ -288,7 +288,7 @@ const BMC_WRITES: [RegExp, Permission[]][] = [
  */
 export function bmcPermissions(method: string, path: string, upgrade = false): Permission[] {
   if (upgrade) {
-    if (path === "/kvm" || path === "/kvm/0") return ["console"];
+    if (path === "/kvm" || path === "/kvm/0" || path === "/kvm/0/control") return ["console"];
     if (/^\/(cd|hd|fd)-server$|^\/vmedia/.test(path)) return ["media"];
     return BMC_ADMIN;
   }
@@ -609,26 +609,89 @@ export function shimScript(input: { prefix: string; csrf: string; user: string; 
 /**
  * OpenBMC 的查看页：只有 KVM 画面，用 noVNC 经代理连 /kvm/0。不转 BMC 自己的网页（单页应用，路径写死在根上，
  * 而且转了就等于把管理员会话下的整个 BMC 网页交出去）。noVNC 的文件也由代理发，正式环境不通外网。
+ *
+ * QCT 的 BMC 只收 KVM「拥有者」的键盘鼠标：要另连 /kvm/0/control 登记，第一个登记的是拥有者，后来的只能看。
+ * 只连 /kvm/0 不登记，画面有、打字没反应。所以画面连上后也连控制通道，别人在控制时显示是谁，可以请求控制。
  */
 export function openBmcViewer(prefix: string): string {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>远程控制台</title>
 <style>html,body{margin:0;height:100%;background:#000;overflow:hidden}#screen{width:100%;height:100%}
-#status{position:fixed;top:8px;left:8px;color:#ddd;font:13px/1.5 sans-serif;background:rgba(0,0,0,.7);padding:4px 10px;border-radius:4px;max-width:80%}</style>
+#status{position:fixed;top:8px;left:8px;color:#ddd;font:13px/1.5 sans-serif;background:rgba(0,0,0,.7);padding:4px 10px;border-radius:4px;max-width:80%}
+#status button{margin-left:8px;font:inherit;padding:0 8px;cursor:pointer}</style>
 </head><body><div id="screen"></div><div id="status">正在连接 KVM…</div>
 <script type="module">
 import RFB from ${JSON.stringify(`${prefix}/__pxe/novnc/core/rfb.js`)};
 const status = document.getElementById("status");
-const url = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + ${JSON.stringify(`${prefix}/kvm/0`)};
-const rfb = new RFB(document.getElementById("screen"), url, { wsProtocols: ["binary"] });
+const base = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + ${JSON.stringify(`${prefix}/kvm/0`)};
+const rfb = new RFB(document.getElementById("screen"), base, { wsProtocols: ["binary"] });
 rfb.scaleViewport = true;
 rfb.background = "#000";
-rfb.addEventListener("connect", () => { status.style.display = "none"; rfb.focus(); });
+// 登记上拥有者之前先只看，免得以为能打字。
+rfb.viewOnly = true;
+let connected = false;
+let control = null;
+let myId = "";
+let users = [];
+
+function show(text, action) {
+  status.textContent = text;
+  status.style.display = text ? "" : "none";
+  if (action) {
+    const button = document.createElement("button");
+    button.textContent = action.label;
+    button.onclick = action.run;
+    status.appendChild(button);
+  }
+}
+
+function refresh() {
+  if (!connected || !myId) return;
+  const owner = users.find((user) => user.connectPrivilege === "KVMOwner");
+  const mine = owner && owner.id === myId;
+  rfb.viewOnly = !mine;
+  if (mine) {
+    show("");
+    rfb.focus();
+  } else {
+    show((owner ? owner.userName + "（" + owner.address + "）正在控制，" : "") + "现在只能看画面", {
+      label: "请求控制",
+      run: () => { control && control.readyState === 1 && control.send(JSON.stringify({ action: "requestPrivilege", data: {} })); show("已经请求控制，等对方同意…"); },
+    });
+  }
+}
+
+function openControl() {
+  control = new WebSocket(base + "/control");
+  control.onmessage = (event) => {
+    let message;
+    try { message = JSON.parse(event.data); } catch { return; }
+    const data = message.data || {};
+    if (message.action === "updateUsers") { users = data.users || []; refresh(); }
+    else if (message.action === "informId") { myId = data.id || ""; refresh(); }
+    else if (message.action === "requestPrivilege" && data.id) {
+      const who = users.find((user) => user.id === data.id);
+      const agree = confirm((who ? who.userName + "（" + who.address + "）" : "另一个用户") + "请求控制这台服务器的键盘鼠标，同意吗？");
+      control.send(JSON.stringify({ action: "responsePrivilege", data: { ownerApprove: agree, id: data.id } }));
+    } else if (message.action === "responsePrivilege" && !data.ownerApprove) {
+      show("对方拒绝了控制请求，现在只能看画面");
+    }
+  };
+  control.onclose = () => {
+    control = null;
+    myId = "";
+    if (connected) setTimeout(() => connected && !control && openControl(), 2000);
+  };
+}
+
+rfb.addEventListener("connect", () => { connected = true; show("正在登记 KVM 控制…"); openControl(); });
 rfb.addEventListener("disconnect", (event) => {
-  status.style.display = "";
-  status.textContent = event.detail.clean ? "KVM 已断开，点上面的「重新连接」" : "KVM 连接断了：BMC 没回应，或者 KVM 正被别人占着。点上面的「重新连接」再试";
+  connected = false;
+  if (control) control.close();
+  rfb.viewOnly = true;
+  show(event.detail.clean ? "KVM 已断开，点上面的「重新连接」" : "KVM 连接断了：BMC 没回应，或者 KVM 正被别人占着。点上面的「重新连接」再试");
 });
-rfb.addEventListener("credentialsrequired", () => { status.textContent = "BMC 要 VNC 密码，暂不支持"; });
+rfb.addEventListener("credentialsrequired", () => { show("BMC 要 VNC 密码，暂不支持"); });
 </script></body></html>
 `;
 }
@@ -852,7 +915,7 @@ function handleUpgrade(req: http.IncomingMessage, socket: Duplex, head: Buffer):
   const asked = String(req.headers["sec-websocket-protocol"] || "").split(",").map((item) => item.trim()).filter(Boolean);
   detectKind(target.host)
     .then(async (kind) => {
-      if (kind === "openbmc" && wsPath !== "/kvm/0") throw new Error("OpenBMC 只转 /kvm/0");
+      if (kind === "openbmc" && wsPath !== "/kvm/0" && wsPath !== "/kvm/0/control") throw new Error("OpenBMC 只转 /kvm/0 和它的控制通道");
       const isKvm = kind === "ami" && wsPath === "/kvm";
       // 没人经代理在看这台时，先清掉上次留下的 KVM 会话，新开的才能拿到完整权限。OpenBMC 断开 WebSocket 就结束了，不用清。
       if (isKvm && !liveCount(target.host)) await closeStaleQuietly(target, "打开前");

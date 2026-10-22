@@ -353,11 +353,14 @@ test("an OpenBMC gets the proxy's own noVNC viewer and only its /kvm/0 socket is
   });
   bmc.on("upgrade", (req, socket) => {
     seen.push({ method: "UPGRADE", path: req.url || "", headers: req.headers, body: "" });
-    if (req.url !== "/kvm/0" || req.headers["sec-websocket-protocol"] !== "tok1" || !String(req.headers.cookie).includes("BMCWEB-SESSION=sess1")) {
+    if (!["/kvm/0", "/kvm/0/control"].includes(req.url || "") || req.headers["sec-websocket-protocol"] !== "tok1" || !String(req.headers.cookie).includes("BMCWEB-SESSION=sess1")) {
       socket.end("HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n");
       return;
     }
-    socket.write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Protocol: tok1\r\n\r\nRFB 003.008\n");
+    // 控制通道一连上就发 KVM 用户列表（文字帧）。
+    const users = '{"action":"updateUsers","data":{"users":[]}}';
+    const greeting = req.url === "/kvm/0" ? "RFB 003.008\n" : `\x81${String.fromCharCode(users.length)}${users}`;
+    socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Protocol: tok1\r\n\r\n${greeting}`);
   });
   await new Promise<void>((resolve) => bmc.listen(0, "127.0.0.1", resolve));
   process.env.PXE_KVM_BMC_PORT = String((bmc.address() as net.AddressInfo).port);
@@ -377,6 +380,8 @@ test("an OpenBMC gets the proxy's own noVNC viewer and only its /kvm/0 socket is
   const html = await viewer.text();
   assert.ok(html.includes(`import RFB from "${prefix}/__pxe/novnc/core/rfb.js"`), "查看页用代理发的 noVNC");
   assert.ok(html.includes(`"${prefix}/kvm/0"`));
+  assert.ok(html.includes('new WebSocket(base + "/control")'), "画面连上后连控制通道登记拥有者，不然打字没反应");
+  assert.doesNotThrow(() => new Function(html.split('<script type="module">')[1].split("</script>")[0].replace(/^import .*$/m, "const RFB = class {};")), "查看页脚本是合法的 JavaScript");
   assert.ok(!html.includes("obmc-pass") && !html.includes("tok1"), "页面里没有 BMC 密码和 token");
   assert.match(viewer.headers.get("content-security-policy") || "", /frame-ancestors/);
   assert.equal(JSON.parse(seen.find((item) => item.path === "/login" && item.body.includes("data"))!.body).data[0], "admin");
@@ -397,7 +402,7 @@ test("an OpenBMC gets the proxy's own noVNC viewer and only its /kvm/0 socket is
       let data = "";
       socket.on("data", (chunk) => {
         data += chunk;
-        if (data.includes("RFB") || !data.startsWith("HTTP/1.1 101")) resolve(data);
+        if (data.includes("RFB") || data.includes("updateUsers") || !data.startsWith("HTTP/1.1 101")) resolve(data);
       });
       socket.on("close", () => resolve(data));
       socket.write(`GET ${prefix}${wsPath} HTTP/1.1\r\nhost: 127.0.0.1:${port}\r\nupgrade: websocket\r\nconnection: Upgrade\r\ncookie: ${cookie}\r\nsec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\nsec-websocket-version: 13\r\n${protocol ? `sec-websocket-protocol: ${protocol}\r\n` : ""}\r\n`);
@@ -411,7 +416,8 @@ test("an OpenBMC gets the proxy's own noVNC viewer and only its /kvm/0 socket is
   assert.ok(!reply.includes("tok1"), "token 不回给浏览器");
   assert.match(reply, /RFB 003\.008/);
   assert.doesNotMatch(await ws("/kvm/0"), /Sec-WebSocket-Protocol/, "浏览器没要子协议就不回");
-  assert.doesNotMatch(await ws("/cd-server", "binary"), /^HTTP\/1\.1 101/, "OpenBMC 只转 /kvm/0");
+  assert.match(await ws("/kvm/0/control"), /^HTTP\/1\.1 101[\s\S]*updateUsers/, "控制通道也转");
+  assert.doesNotMatch(await ws("/cd-server", "binary"), /^HTTP\/1\.1 101/, "OpenBMC 只转 /kvm/0 和控制通道");
 
   proxy.close();
   bmc.close();
@@ -431,6 +437,7 @@ test("BMC calls through the proxy need the matching console permission", () => {
   assert.deepEqual(kvm.bmcPermissions("POST", "/api/session"), ["bmc.settings", "bmc.users", "firmware", "bios", "logs.clear"]);
   assert.deepEqual(kvm.bmcPermissions("PUT", "/api/settings/network/1"), ["bmc.settings", "bmc.users", "firmware", "bios", "logs.clear"]);
   assert.deepEqual(kvm.bmcPermissions("GET", "/kvm", true), ["console"]);
+  assert.deepEqual(kvm.bmcPermissions("GET", "/kvm/0/control", true), ["console"]);
   assert.deepEqual(kvm.bmcPermissions("GET", "/cd-server", true), ["media"]);
   assert.deepEqual(kvm.bmcPermissions("GET", "/sol", true), ["bmc.settings", "bmc.users", "firmware", "bios", "logs.clear"]);
 });
