@@ -5,6 +5,7 @@ import zlib from "node:zlib";
 import { BmcAgent } from "./bmc-tls.ts";
 import { authenticate, clientAddress, sameOrigin } from "./auth.ts";
 import { assetBmcAccounts, audit, getAsset } from "./assets.ts";
+import { permissionLabel, type Permission } from "./roles.ts";
 
 /**
  * 远程控制台：在控制台页面里嵌入某台服务器 BMC 的 KVM 画面（AMI H5Viewer）。
@@ -194,6 +195,45 @@ export function canonicalHeaders(headers: http.OutgoingHttpHeaders): http.Outgoi
   return out;
 }
 
+/** BMC 上能改任何东西的那几项。认不出来的写接口要全有，相当于只给管理员。 */
+const BMC_ADMIN: Permission[] = ["bmc.settings", "bmc.users", "firmware", "bios", "logs.clear"];
+
+/** BMC 网页写接口要什么权限点，按顺序对第一条。 */
+const BMC_WRITES: [RegExp, Permission[]][] = [
+  [/^\/api\/kvm(\/.*)?$/, ["console"]],
+  [/^\/api\/actions\/power(\/.*)?$/, ["power"]],
+  [/^\/api\/(settings\/)?v?media(\/.*)?$/, ["media"]],
+  [/^\/api\/settings\/users(\/.*)?$/, ["bmc.users"]],
+  [/^\/api\/(settings\/)?bios(\/.*)?$/, ["bios"]],
+  [/^\/api\/maintenance\/.*(firmware|fwimage|flash|fwupdate)/, ["firmware"]],
+  [/^\/api\/logs(\/.*)?$/, ["logs.clear"]],
+];
+
+/**
+ * 经代理调 BMC 要什么权限点。代理拿资产上的 BMC 账号（一般是管理员）登录，BMC 自己分不出是控制台的哪个用户，
+ * 所以在这里按控制台的权限点拦：KVM 画面只要「远程控制台」，开关机要「电源和引导」，挂 ISO 要「虚拟介质」，
+ * 改 BMC 用户、BIOS、固件、清日志要各自的权限点；认不出来的写接口和 WebSocket 一律要 BMC_ADMIN 全有。
+ * 读（GET）只要「远程控制台」。
+ */
+export function bmcPermissions(method: string, path: string, upgrade = false): Permission[] {
+  if (upgrade) {
+    if (path === "/kvm") return ["console"];
+    if (/^\/(cd|hd|fd)-server$|^\/vmedia/.test(path)) return ["media"];
+    return BMC_ADMIN;
+  }
+  if (["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase())) return ["console"];
+  // 查看器退出时注销会话，代理自己回，不转给 BMC。
+  if (method.toUpperCase() === "DELETE" && path === "/api/session") return ["console"];
+  for (const [re, permissions] of BMC_WRITES) if (re.test(path)) return permissions;
+  return BMC_ADMIN;
+}
+
+/** 缺哪几个权限点，都有返回 null。 */
+function missing(own: Permission[], needed: Permission[]): string | null {
+  const lack = needed.filter((permission) => !own.includes(permission));
+  return lack.length ? `需要${lack.map((permission) => `「${permissionLabel(permission)}」`).join("")}权限` : null;
+}
+
 /**
  * 发给 BMC 的请求头：浏览器的 cookie（控制台会话）不转发，换成小主机保存的 BMC 会话；
  * Host、Origin、Referer 改成 BMC 自己的地址，否则 BMC 的 CSRF 检查会拒绝。
@@ -242,7 +282,7 @@ export function rewriteCss(css: string, prefix: string): string {
  * - document.cookie 换成内存里的一份（真正的 BMC 会话在小主机上），H5Viewer 在 HTTP 页面里写不了 __Host- cookie；
  * - H5Viewer 本来由 BMC 首页 window.open 打开，会读 window.opener 上的权限和开关，这里补一个替身。
  */
-export function shimScript(input: { prefix: string; csrf: string; user: string; privilege: number; extendedpriv: number; features: string[] }): string {
+export function shimScript(input: { prefix: string; csrf: string; user: string; privilege: number; extendedpriv: number; features: string[]; media?: boolean }): string {
   const has = (name: string) => input.features.includes(name);
   const constants = {
     CD_SERVER_APP_FLAG: has("CD_SERVER_APP"),
@@ -251,7 +291,8 @@ export function shimScript(input: { prefix: string; csrf: string; user: string; 
     VMEDIA_MAX_COUNT_FLAG: has("VMEDIA_MAX_COUNT_FOR_KVM"),
   };
   const kvm = input.extendedpriv & 1 ? 1 : 0;
-  const vmedia = input.extendedpriv & 2 ? 1 : 0;
+  // 没有「虚拟介质」权限的用户不显示挂载按钮；真正拦的是代理（/cd-server 要这个权限点）。
+  const vmedia = input.extendedpriv & 2 && input.media !== false ? 1 : 0;
   return `(function () {
   var P = ${JSON.stringify(input.prefix)};
   function fix(u) {
@@ -394,6 +435,9 @@ interface Resolved {
   key: string;
   host: string;
   accounts: { user: string; password: string }[];
+  /** 控制台用户的权限点，转发前按 bmcPermissions 查。 */
+  permissions: Permission[];
+  actor: string;
 }
 
 /** 控制台登录有效、写请求来自本站页面、服务器有 IPMI 地址和账号，才转发。 */
@@ -420,6 +464,8 @@ function resolve(req: http.IncomingMessage): Resolved | { status: number; messag
     key: `${identity.user.id}:${row.id}`,
     host: row.bmcIp,
     accounts,
+    permissions: identity.permissions,
+    actor: identity.user.username,
   };
 }
 
@@ -453,11 +499,19 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     return;
   }
 
+  const denied = missing(target.permissions, bmcPermissions(method, path));
+  if (denied) {
+    console.warn(`[kvm] ${target.actor} ${method} ${path} 被拒：${denied}`);
+    res.writeHead(403, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
+    res.end(JSON.stringify({ code: 403, error: denied }));
+    return;
+  }
+
   let bmc = await session(target.key, target.host, target.accounts);
 
   if (path === "/__pxe/shim.js") {
     res.writeHead(200, { "Content-Type": "application/javascript; charset=utf-8", "Cache-Control": "no-store" });
-    res.end(shimScript({ prefix: target.prefix, csrf: bmc.csrf, user: bmc.user, privilege: bmc.privilege, extendedpriv: bmc.extendedpriv, features: await features(bmc) }));
+    res.end(shimScript({ prefix: target.prefix, csrf: bmc.csrf, user: bmc.user, privilege: bmc.privilege, extendedpriv: bmc.extendedpriv, features: await features(bmc), media: target.permissions.includes("media") }));
     return;
   }
   // 会话留给同一用户的其他窗口；BMC 那边过期后下次请求会自动重新登录。
@@ -508,6 +562,12 @@ function handleUpgrade(req: http.IncomingMessage, socket: Duplex, head: Buffer):
   const target = resolve(req);
   if ("status" in target) {
     socket.end(`HTTP/1.1 ${target.status} Refused\r\nConnection: close\r\n\r\n`);
+    return;
+  }
+  const denied = missing(target.permissions, bmcPermissions(req.method || "GET", target.rest.split("?")[0], true));
+  if (denied) {
+    console.warn(`[kvm] ${target.actor} WebSocket ${target.rest.split("?")[0]} 被拒：${denied}`);
+    socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
     return;
   }
   const isKvm = target.rest.split("?")[0] === "/kvm";

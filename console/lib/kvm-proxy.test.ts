@@ -207,6 +207,32 @@ test("the proxy logs in to the BMC itself and relays pages and the KVM socket", 
   const opened = assets.listAudit({ targetId: row.assetId }).filter((entry) => entry.action === "打开远程控制台");
   assert.ok(opened.length >= 1 && opened.every((entry) => entry.actor === "kvm-user"), "打开远程控制台记审计");
 
+  // 代理用的是资产上的 BMC 管理员账号，控制台用户能做什么要按自己的权限点拦。
+  const before = seen.length;
+  const write = (who: string, method: string, url: string) => fetch(`${base}${prefix}${url}`, { method, headers: { cookie: who, "content-type": "application/json" }, body: "{}" });
+  const denied = await write(cookie, "PUT", "/api/settings/users/3");
+  assert.equal(denied.status, 403, "工程师没有「BMC 用户」权限，不能经远程控制台改 BMC 用户");
+  assert.match((await denied.json()).error, /BMC 用户/);
+  const operator = auth.createUser({ username: "kvm-operator", role: "operator", password: "kvm-operator-pass" });
+  const operatorCookie = `${auth.SESSION_COOKIE}=${auth.createSession({ user: operator, method: "password", credentialId: "" })}`;
+  assert.equal((await write(operatorCookie, "PUT", "/api/settings/network/1")).status, 403, "值班不能改 BMC 网络");
+  assert.equal((await write(operatorCookie, "POST", "/api/maintenance/reset")).status, 403, "认不出来的写接口要 BMC 的全部权限");
+  assert.equal(seen.length, before, "被拒的请求不发给 BMC");
+  assert.notEqual((await write(operatorCookie, "POST", "/api/actions/power")).status, 403, "值班有「电源和引导」，可以开关机");
+  assert.equal(seen.at(-1)?.path, "/api/actions/power");
+
+  const watcher = auth.createUser({ username: "kvm-watcher", role: auth.saveRole({ name: "只看画面", permissions: ["console"] }).id, password: "kvm-watcher-pass" });
+  const watcherCookie = `${auth.SESSION_COOKIE}=${auth.createSession({ user: watcher, method: "password", credentialId: "" })}`;
+  assert.match(await (await fetch(`${base}${prefix}/__pxe/shim.js`, { headers: { cookie: watcherCookie } })).text(), /window\.vmedia_access = 0;/, "没有「虚拟介质」不显示挂载");
+  const media = net.connect(port, "127.0.0.1");
+  const mediaReply = await new Promise<string>((resolve) => {
+    let data = "";
+    media.on("data", (chunk) => (data += chunk));
+    media.on("close", () => resolve(data));
+    media.write(`GET ${prefix}/cd-server HTTP/1.1\r\nhost: 127.0.0.1:${port}\r\nupgrade: websocket\r\nconnection: Upgrade\r\ncookie: ${watcherCookie}\r\nsec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n`);
+  });
+  assert.match(mediaReply, /^HTTP\/1\.1 403/, "没有「虚拟介质」不能挂 ISO");
+
   auth.updateUser(user.id, { disabled: true });
   assert.equal((await fetch(`${base}${prefix}/viewer.html`, { headers: { cookie } })).status, 401, "停用用户后远程控制台也断开");
 
@@ -214,6 +240,22 @@ test("the proxy logs in to the BMC itself and relays pages and the KVM socket", 
   bmc.close();
   proxy.closeAllConnections();
   bmc.closeAllConnections();
+});
+
+test("BMC calls through the proxy need the matching console permission", () => {
+  assert.deepEqual(kvm.bmcPermissions("GET", "/api/settings/users"), ["console"]);
+  assert.deepEqual(kvm.bmcPermissions("DELETE", "/api/session"), ["console"]);
+  assert.deepEqual(kvm.bmcPermissions("POST", "/api/kvm/token"), ["console"]);
+  assert.deepEqual(kvm.bmcPermissions("POST", "/api/actions/power"), ["power"]);
+  assert.deepEqual(kvm.bmcPermissions("PUT", "/api/settings/media/instance"), ["media"]);
+  assert.deepEqual(kvm.bmcPermissions("PUT", "/api/settings/users/3"), ["bmc.users"]);
+  assert.deepEqual(kvm.bmcPermissions("PUT", "/api/maintenance/firmware/verification"), ["firmware"]);
+  assert.deepEqual(kvm.bmcPermissions("DELETE", "/api/logs/event"), ["logs.clear"]);
+  assert.deepEqual(kvm.bmcPermissions("POST", "/api/session"), ["bmc.settings", "bmc.users", "firmware", "bios", "logs.clear"]);
+  assert.deepEqual(kvm.bmcPermissions("PUT", "/api/settings/network/1"), ["bmc.settings", "bmc.users", "firmware", "bios", "logs.clear"]);
+  assert.deepEqual(kvm.bmcPermissions("GET", "/kvm", true), ["console"]);
+  assert.deepEqual(kvm.bmcPermissions("GET", "/cd-server", true), ["media"]);
+  assert.deepEqual(kvm.bmcPermissions("GET", "/sol", true), ["bmc.settings", "bmc.users", "firmware", "bios", "logs.clear"]);
 });
 
 test("a failed BMC web login says why instead of always blaming the password", () => {

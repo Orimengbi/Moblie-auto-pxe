@@ -163,8 +163,13 @@ export function ServerBmcUsers({ assetId }: { assetId: string }) {
                   <Box sx={{ fontFamily: MONO, fontSize: 14, width: 130, overflowWrap: "anywhere" }}>
                     {user.name}
                     {self ? (
-                      <Typography component="span" variant="caption" sx={{ display: "block", color: "text.secondary", fontFamily: "inherit" }}>
-                        控制台在用
+                      <Typography
+                        component="span"
+                        variant="caption"
+                        title="PXE 控制台连这台 BMC 用的账号，不代表有人正在开远程控制台"
+                        sx={{ display: "block", color: "text.secondary", fontFamily: "inherit" }}
+                      >
+                        PXE 控制台登录用
                       </Typography>
                     ) : null}
                   </Box>
