@@ -554,7 +554,8 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse): Prom
     out[name] = value;
   }
   const ancestors = frameAncestors(req.headers.host);
-  if (ancestors) out["content-security-policy"] = [out["content-security-policy"] || [], ancestors].flat().map(String);
+  // 逗号隔开就是两条各自生效的策略，BMC 自己的那条不动。
+  if (ancestors) out["content-security-policy"] = [out["content-security-policy"] || [], ancestors].flat().join(", ");
   if (typeof response.headers.location === "string") {
     const location = response.headers.location.replace(new RegExp(`^https?://${target.host.replace(/\./g, "\\.")}(:\\d+)?`), "");
     out.location = location.startsWith("/") ? `${target.prefix}${location}` : location;
