@@ -90,7 +90,8 @@ const kinds = new Map<string, { at: number; kind: Promise<BmcKind> }>();
 
 /**
  * 不带账号判断是哪种 BMC，免得同一个密码在两种登录接口上各错一次、把账号锁住。
- * OpenBMC 的 /login 对空请求回 400，AMI 没有这个接口（404）。连不上当 AMI，由登录报连不上。按地址和端口缓存一小时。
+ * OpenBMC 的 /login 对空请求回 400，AMI 没有这个接口（404）。按地址和端口缓存一小时；连不上时报错、不缓存，
+ * 免得 BMC 刚好宕着的时候被记成 AMI。
  */
 export function detectKind(host: string): Promise<BmcKind> {
   const key = `${host}:${bmcPort()}`;
@@ -99,15 +100,18 @@ export function detectKind(host: string): Promise<BmcKind> {
   const body = Buffer.from("{}");
   const kind = call(host, { method: "POST", path: "/login", headers: { "Content-Type": "application/json", "Content-Length": body.length } }, body).then(
     ({ response }) => (response.statusCode === 400 ? "openbmc" : "ami") as BmcKind,
-    () => "ami" as BmcKind,
   );
   kinds.set(key, { at: Date.now(), kind });
+  kind.catch(() => kinds.delete(key));
   return kind;
 }
 
 /** 用资产上的账号登录 BMC 网页，主账号不行再试备用账号。 */
 async function login(host: string, accounts: { user: string; password: string }[]): Promise<BmcSession> {
-  if ((await detectKind(host)) === "openbmc") return loginOpenBmc(host, accounts);
+  const kind = await detectKind(host).catch((error: unknown) => {
+    throw new Error(loginFailure(host, [{ status: null, error: error instanceof Error ? error.message : "连接失败" }]));
+  });
+  if (kind === "openbmc") return loginOpenBmc(host, accounts);
   const results: { status: number | null; error?: string }[] = [];
   for (const account of accounts) {
     const form = Buffer.from(new URLSearchParams({ username: account.user, password: account.password }).toString());

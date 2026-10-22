@@ -116,9 +116,12 @@ export class BmcAgent extends https.Agent {
     const socket = (https.Agent.prototype as unknown as { createConnection: (o: unknown) => tls.TLSSocket }).createConnection.call(this, options);
     const endpoint = endpointOf(String(options.host || options.hostname || ""), Number(options.port || 443));
     let done = false;
+    // 握手完才把连接交给 http，请求上的 timeout 管不到连接这一段。BMC 不回时不能等系统的 TCP 超时（两分钟以上），自己限时。
+    const timer = setTimeout(() => finish(new Error("连 BMC 超时")), Number(options.timeout) || 20_000);
     const finish = (error: Error | null) => {
       if (done) return;
       done = true;
+      clearTimeout(timer);
       socket.off("error", onError);
       if (error) socket.destroy();
       callback?.(error, socket);

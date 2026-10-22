@@ -70,3 +70,22 @@ test("the agent refuses a changed certificate before sending anything", { skip: 
     server.close();
   }
 });
+
+test("a BMC that accepts TCP but never finishes TLS times out instead of hanging", async () => {
+  const { createServer } = await import("node:net");
+  // 只接 TCP、不做 TLS 握手：和 BMC 卡死、或包被丢一样，请求不能一直挂着。
+  const held: net.Socket[] = [];
+  const server = createServer((socket) => held.push(socket));
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as net.AddressInfo).port;
+  const started = Date.now();
+  const error = await new Promise<Error>((resolve) => {
+    const request = https.request({ host: "127.0.0.1", port, agent: new tls.BmcAgent(), timeout: 300 }, () => resolve(new Error("不该有回应")));
+    request.on("error", resolve);
+    request.end();
+  });
+  assert.match(error.message, /连 BMC 超时/);
+  assert.ok(Date.now() - started < 3000, "按请求的 timeout 断开");
+  for (const socket of held) socket.destroy();
+  server.close();
+});
