@@ -60,7 +60,7 @@ export async function menuFor(macRaw: string | null, snRaw: string | null = null
   });
 }
 
-/** 装机口的 nginx 用 X-Real-IP 带过来的目标机地址。 */
+/** 装机口的 nginx 用 X-Real-IP 带过来的目标机地址（直连控制台的请求在进程入口就换成了 socket 地址，见 client-address.ts）。 */
 export function clientIp(request: Request): string {
   return request.headers.get("x-real-ip")?.trim() || "";
 }

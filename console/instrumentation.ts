@@ -4,6 +4,9 @@
  */
 export async function register() {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
+  // 最先装：请求里的来源地址只信 nginx 容器设的，见 lib/client-address.ts。
+  const { installClientAddressGuard } = await import("./lib/client-address");
+  await installClientAddressGuard();
   const { applyPendingRestore } = await import("./lib/system");
   const restored = applyPendingRestore();
   if (restored) console.log(`[restore] ${restored.message}`);

@@ -497,8 +497,9 @@ export function sameOrigin(headers: Pick<Headers, "get">): boolean {
   }
 }
 
+/** 来源地址。X-Real-IP 在进程入口已按 socket 改写过，只有 nginx 转来的才是它设的，见 client-address.ts。 */
 export function clientAddress(headers: Pick<Headers, "get">): string {
-  return headers.get("x-real-ip") || headers.get("x-forwarded-for")?.split(",")[0].trim() || "local";
+  return headers.get("x-real-ip") || "local";
 }
 
 // ---- 用户管理 ----
