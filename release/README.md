@@ -33,6 +33,10 @@ sudo bash pxe-<版本>-full.run --mgmt-ip 10.0.0.5 --install-if eno2 --install-i
 
 装好后会打印控制台地址和 admin 的初始密码。程序装在 `/opt/pxe`，命令行工具是 `pxectl`。
 
+控制台在管理口上走 HTTPS（端口不变，用 `http://` 打开会自动跳到 `https://`）；装机网口还是明文 HTTP，iPXE 和安装程序认不了自建证书。证书在 `/opt/pxe/data/tls/`，nginx 启动时自动生成：本机专用的根证书 `ca.crt` 只能给管理口地址签证书（名称约束），登录页可以下载，导入系统的「受信任的根证书颁发机构」后浏览器不再报不安全。`pxectl status` 会显示根证书的 SHA-256 指纹，导入前可以核对。改了管理口地址后执行 `pxectl reconfigure`，证书会重签，根证书也会重做，要重新导入。用公司的证书：放成 `data/tls/custom.crt`（带中间证书）和 `data/tls/custom.key`，再执行 `pxectl reconfigure`。
+
+从还没有 HTTPS 的版本升级上来时，生成 nginx 配置的是旧版 pxectl，管理口还是明文；升级完执行一次 `sudo pxectl reconfigure` 打开 HTTPS（`pxectl status` 也会提示）。
+
 ## 升级
 
 两种方式，效果一样：

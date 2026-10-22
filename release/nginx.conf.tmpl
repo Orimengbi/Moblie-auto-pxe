@@ -27,7 +27,8 @@ server {
     location / { return 404; }
 }
 
-# 管理网口：控制台。不给镜像、启动文件。
+# 管理网口：控制台，HTTPS（证书见 boot 镜像的 tls-init.sh，放在 data/tls）。不给镜像、启动文件。
+# 127.0.0.1 上还是明文，给本机的 pxectl 和脚本用。管理口上用 http:// 打开的跳到 https://。
 server {
     listen 127.0.0.1:@PORT@ default_server;
 @MGMT_LISTEN@
@@ -35,9 +36,22 @@ server {
     absolute_redirect off;
     client_max_body_size 0;
 
+    ssl_certificate /tls/active.crt;
+    ssl_certificate_key /tls/active.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:pxe_tls:1m;
+    error_page 497 =301 https://$host:$server_port$request_uri;
+
     location /images/ { return 404; }
     location /diag/ { return 404; }
     location /boot/ { return 404; }
+
+    # 自建的根证书，浏览器导入一次就不再报不安全。登录页有链接。
+    location = /pxe-ca.crt {
+        alias /tls/ca.crt;
+        default_type application/x-x509-ca-cert;
+        add_header Content-Disposition 'attachment; filename="pxe-ca.crt"';
+    }
 
     # 远程控制台：嵌在控制台页面里的 BMC 画面，转到控制台进程里的代理（127.0.0.1:3001），包括 KVM 的 WebSocket。
     location /__bmc/ {
@@ -57,9 +71,10 @@ server {
     location / {
         proxy_pass http://127.0.0.1:3000;
         proxy_http_version 1.1;
-        # 带端口的 Host 给控制台核对 Origin；X-Real-IP 给登录失败限速。
+        # 带端口的 Host 给控制台核对 Origin；X-Real-IP 给登录失败限速；X-Forwarded-Proto 让登录 cookie 带上 Secure。
         proxy_set_header Host $http_host;
         proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
         proxy_read_timeout 300s;
     }
 }

@@ -326,7 +326,10 @@ render_nginx() { # 模板
   local site="$PXE_HOME/site.env" port install_ip mgmt_listen="" ip tmp
   port=$(env_get "$site" HTTP_PORT)
   install_ip=$(env_get "$site" INSTALL_IP)
-  for ip in $(env_get "$site" MGMT_IPS | tr ',' ' '); do mgmt_listen="${mgmt_listen}    listen $ip:$port;\n"; done
+  # 管理口走 HTTPS；证书里要有这些地址，boot 启动时按 data/tls/hosts 签（地址变了重签）。
+  for ip in $(env_get "$site" MGMT_IPS | tr ',' ' '); do mgmt_listen="${mgmt_listen}    listen $ip:$port ssl;\n"; done
+  mkdir -p "$PXE_HOME/data/tls"
+  env_get "$site" MGMT_IPS >"$PXE_HOME/data/tls/hosts"
   tmp=$(mktemp)
   sed -e "s|@INSTALL_LISTEN@|    listen ${install_ip%/*}:$port;|" -e "s|@MGMT_LISTEN@|${mgmt_listen%\\n}|" -e "s|@PORT@|$port|g" "$1" >"$tmp"
   # 单文件挂载：原地写（同一个 inode），容器里看得到新内容。
@@ -412,7 +415,8 @@ print_access() {
   local site="$PXE_HOME/site.env" port ip pw=""
   port=$(env_get "$site" HTTP_PORT)
   say ""
-  for ip in $(env_get "$site" MGMT_IPS | tr ',' ' '); do say "控制台：http://$ip:$port/"; done
+  for ip in $(env_get "$site" MGMT_IPS | tr ',' ' '); do say "控制台：https://$ip:$port/"; done
+  say "浏览器第一次打开会提示不安全：在登录页下载根证书，导入系统的「受信任的根证书颁发机构」后重开浏览器"
   local i
   for i in $(seq 1 20); do
     if [ -f "$PXE_HOME/data/auth/initial-admin-password" ]; then
@@ -625,6 +629,16 @@ cmd_status() {
   say "当前版本  $(current_version)"
   say "上一个    $(env_get "$PXE_HOME/.env" PXE_PREVIOUS)"
   say "管理口    $(env_get "$site" MGMT_IPS)  端口 $(env_get "$site" HTTP_PORT)"
+  if grep -q ' ssl;' "$PXE_HOME/nginx.conf" 2>/dev/null; then
+    say "控制台    https://$(env_get "$site" MGMT_IPS | cut -d, -f1):$(env_get "$site" HTTP_PORT)/"
+    if [ -s "$PXE_HOME/data/tls/custom.crt" ]; then
+      say "证书      data/tls/custom.crt（自己放的）"
+    elif [ -s "$PXE_HOME/data/tls/ca.crt" ]; then
+      say "根证书    data/tls/ca.crt（登录页可下载，导入浏览器）$(compose exec -T boot openssl x509 -noout -fingerprint -sha256 -in /tls/ca.crt 2>/dev/null | sed 's/.*=/  SHA256 /')"
+    fi
+  else
+    say "控制台    还是明文 HTTP：执行 pxectl reconfigure 打开 HTTPS"
+  fi
   say "装机网口  $(env_get "$site" INSTALL_IF)  $(env_get "$site" INSTALL_IP)"
   say "健康检查  $(health)"
   say ""

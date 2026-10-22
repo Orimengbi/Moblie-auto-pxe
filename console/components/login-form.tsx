@@ -4,6 +4,7 @@ import { useState } from "react";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
+import Link from "@mui/material/Link";
 import Paper from "@mui/material/Paper";
 import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
@@ -161,6 +162,14 @@ export function LoginForm({ next }: { next: string }) {
         <Button type="submit" variant="contained" size="large" disabled={pending} fullWidth>
           {pending ? "请稍候" : method === "ssh" && !challenge ? "获取挑战码" : "登录"}
         </Button>
+        {/* 控制台用的是本机自建的根证书（nginx 发 /pxe-ca.crt），导入一次浏览器就不再报不安全。 */}
+        <Typography variant="caption" sx={{ color: "text.secondary", textAlign: "center" }}>
+          浏览器提示「不安全」？
+          <Link href="/pxe-ca.crt" download underline="hover">
+            下载根证书
+          </Link>
+          ，导入到系统的「受信任的根证书颁发机构」后重开浏览器
+        </Typography>
       </Stack>
     </Paper>
   );
