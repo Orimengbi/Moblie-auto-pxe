@@ -6,7 +6,8 @@ import { defaultIpmiExec, ipmiFailure, type IpmiExec } from "./ipmi-remote.ts";
 
 /**
  * 导入资产时只填了 BMC 地址和账号密码：连 BMC 读出序列号、厂商、型号、BMC MAC，补进表格里空着的格子。
- * 先走 Redfish（读主机那个 System，HGX 的 GPU 底板不算），没有 Redfish 或读不到序列号再用 ipmitool fru。
+ * 先走 Redfish（读主机那个 System，HGX 的 GPU 底板不算），再看 ipmitool fru：Redfish 读不到序列号时用 FRU 的整机序列号，
+ * Redfish 报的其实是主板序列号时不用（见 dropBoardSerial）。
  * 表里填了的格子不动；填了序列号的拿来和 BMC 报的核对。结果缓存 10 分钟，预览和正式导入不用连两遍。
  */
 
@@ -18,6 +19,8 @@ export interface BmcIdentity {
   hostname: string;
   /** redfish 或 ipmi，提示里用。 */
   via: string;
+  /** FRU 里的主板序列号。BMC 只有它、没有整机序列号时 sn 是空的，提示里告诉人 BMC 报的是什么。 */
+  boardSn?: string;
 }
 
 /** 出厂没刷的序列号常见 0123456789…、123456789…、同一个字符重复，当没有。 */
@@ -43,7 +46,16 @@ function serial(value: unknown): string {
  * 这时序列号、厂商、型号都以 IPMI FRU 的产品区为准，FRU 也没有的才用 Redfish 的。
  */
 export function mergeIdentity(redfish: BmcIdentity, ipmi: BmcIdentity): BmcIdentity {
-  return { sn: ipmi.sn, vendor: ipmi.vendor || redfish.vendor, model: ipmi.model || redfish.model, bmcMac: redfish.bmcMac || ipmi.bmcMac, hostname: redfish.hostname, via: "Redfish + IPMI" };
+  return { sn: ipmi.sn, vendor: ipmi.vendor || redfish.vendor, model: ipmi.model || redfish.model, bmcMac: redfish.bmcMac || ipmi.bmcMac, hostname: redfish.hostname, via: "Redfish + IPMI", ...(ipmi.boardSn ? { boardSn: ipmi.boardSn } : {}) };
+}
+
+/**
+ * 有的厂商没把整机序列号写进 BMC（Quanta D75H：FRU 的整机、机箱序列号是空的，Redfish 的 System 和 Chassis 都报主板序列号 T31S8HMB…，
+ * 整机序列号 QTWS… 只在机身标签上）。Redfish 报的和 FRU 的主板序列号一样、FRU 又没有整机序列号时，不当整机序列号用，要手填。
+ */
+export function dropBoardSerial(redfish: BmcIdentity, ipmi: BmcIdentity): BmcIdentity {
+  if (!redfish.sn || ipmi.sn || !ipmi.boardSn || !sameSn(redfish.sn, ipmi.boardSn)) return redfish;
+  return { ...redfish, sn: "", boardSn: ipmi.boardSn };
 }
 
 async function viaRedfish(ip: string, user: string, password: string): Promise<BmcIdentity> {
@@ -87,7 +99,9 @@ async function viaIpmi(ip: string, user: string, password: string, exec: IpmiExe
   const lan = await exec(ip, user, password, ["lan", "print", "1"]).catch(() => ({ code: 1, stdout: "", stderr: "" }));
   const mac = parseFru(lan.stdout)["MAC Address"] || "";
   return {
-    sn: serial(fields["Product Serial"]) || serial(fields["Chassis Serial"]) || serial(fields["Board Serial"]),
+    // 主板序列号不算整机的：换过主板就变了，和机身标签也对不上。
+    sn: serial(fields["Product Serial"]) || serial(fields["Chassis Serial"]),
+    boardSn: serial(fields["Board Serial"]),
     vendor: clean(fields["Product Manufacturer"]) || clean(fields["Board Mfg"]),
     model: clean(fields["Product Name"]) || clean(fields["Board Product"]),
     bmcMac: /^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/i.test(mac) ? mac.toLowerCase() : "",
@@ -111,13 +125,12 @@ export async function identifyBmc(ip: string, user: string, password: string, ex
     if (error instanceof RedfishAuthError || /不接受/.test(error instanceof Error ? error.message : "")) throw new Error("BMC 不接受这个账号密码");
     redfishError = error instanceof Error ? error.message : "Redfish 读取失败";
   }
-  if (!value?.sn) {
-    try {
-      const ipmi = await viaIpmi(ip, user, password, exec);
-      value = value ? mergeIdentity(value, ipmi) : ipmi;
-    } catch (error) {
-      if (!value) throw new Error(redfishError || (error instanceof Error ? error.message : "读取失败"));
-    }
+  // Redfish 读到了序列号也要看一眼 FRU，认出报的是不是主板序列号。Redfish 能登，账号密码是对的，多连一次不会锁账号。
+  try {
+    const ipmi = await viaIpmi(ip, user, password, exec);
+    value = !value ? ipmi : value.sn ? dropBoardSerial(value, ipmi) : mergeIdentity(value, ipmi);
+  } catch (error) {
+    if (!value) throw new Error(redfishError || (error instanceof Error ? error.message : "读取失败"));
   }
   cache.set(key, { at: Date.now(), value: value! });
   return value!;
@@ -183,8 +196,11 @@ export async function enrichRow(cells: SheetCells, identify: typeof identifyBmc 
       fill("model", found.model, "型号");
       fill("bmcMac", found.bmcMac, "BMC MAC");
       fill("hostname", found.hostname, "主机名");
-      if (!next.sn) return { cells: next, note: "", error: `BMC ${ip} 读到了，但它没报序列号，要手填` };
-      const checked = cells.sn ? (found.sn ? "序列号和 BMC 一致" : "BMC 没报序列号，没核对") : "";
+      if (!next.sn) {
+        const why = found.boardSn ? `只报了主板序列号 ${found.boardSn}，整机序列号要按机身标签手填` : "但它没报序列号，要手填";
+        return { cells: next, note: "", error: `BMC ${ip} 读到了，${why}` };
+      }
+      const checked = cells.sn ? (found.sn ? "序列号和 BMC 一致" : found.boardSn ? `BMC 只报了主板序列号 ${found.boardSn}，没核对` : "BMC 没报序列号，没核对") : "";
       const parts = [filled.length ? `读到：${filled.join("，")}` : "", checked].filter(Boolean);
       return { cells: next, note: parts.length ? `从 BMC（${found.via}）${parts.join("；")}` : "", error: "" };
     } catch (error) {

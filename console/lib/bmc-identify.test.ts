@@ -7,7 +7,7 @@ import test from "node:test";
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pxe-identify-test-"));
 process.env.PXE_DATA_DIR = temp;
 
-const { enrichRecords, enrichRow, mergeIdentity, needsBmc, parseFru, placeholderSerial } = await import("./bmc-identify.ts");
+const { dropBoardSerial, enrichRecords, enrichRow, mergeIdentity, needsBmc, parseFru, placeholderSerial } = await import("./bmc-identify.ts");
 const { fillAssetFromBmc, prepareAssetImport } = await import("./asset-import.ts");
 const assets = await import("./assets.ts");
 const { parseAssetTable } = await import("./asset-sheet.ts");
@@ -123,4 +123,25 @@ test("factory placeholder serials are not taken, and FRU product data wins over 
   assert.deepEqual(mergeIdentity(redfish, ipmi), { ...ipmi, bmcMac: redfish.bmcMac, via: "Redfish + IPMI" });
   const fields = parseFru(" Board Product         : MZB3-PE2-000\n Board Serial          : QH8N2500035\n Product Name          : G894-ZD3-AAX7-000\n Product Serial        : 6QL8N72HMA0063\n");
   assert.equal(fields["Product Name"], "G894-ZD3-AAX7-000");
+});
+
+test("a BMC that only knows the board serial is not taken as the server serial", async () => {
+  // Quanta D75H：FRU 整机区没有序列号，Redfish 报的是主板序列号，整机序列号只在机身标签上。
+  const redfish = { sn: "T31S8HMB0010536000Q", vendor: "Quanta Cloud Technology Inc.", model: "QuantaGrid D75H-10U", bmcMac: "90:82:c3:03:a6:11", hostname: "", via: "Redfish" };
+  const ipmi = { sn: "", boardSn: "T31S8HMB0010536000Q", vendor: "Quanta Cloud Technology Inc.", model: "QuantaGrid D75H-10U", bmcMac: "", hostname: "", via: "IPMI" };
+  const quanta = dropBoardSerial(redfish, ipmi);
+  assert.equal(quanta.sn, "");
+  assert.equal(quanta.boardSn, "T31S8HMB0010536000Q");
+  assert.equal(dropBoardSerial(redfish, { ...ipmi, sn: "QTWS8H0L253900029" }).sn, redfish.sn, "FRU 有整机序列号时不动 Redfish 的");
+  assert.equal(dropBoardSerial({ ...redfish, sn: "6QM8N72HMA0065" }, ipmi).sn, "6QM8N72HMA0065", "和主板序列号不一样的照用");
+  assert.equal(parseFru(" Board Serial          : T31S8HMB0010536000Q\n")["Board Serial"], "T31S8HMB0010536000Q");
+
+  const identify = async () => quanta;
+  const blank = await enrichRow({ bmcIp: "43.128.0.128", bmcUser: "admin", bmcPassword: "good" }, identify);
+  assert.match(blank.error, /只报了主板序列号 T31S8HMB0010536000Q，整机序列号要按机身标签手填/);
+  assert.equal(blank.cells.vendor, "Quanta Cloud Technology Inc.", "厂商、型号照样补");
+  const typed = await enrichRow({ bmcIp: "43.128.0.128", bmcUser: "admin", bmcPassword: "good", sn: "QTWS8H0L253900029" }, identify);
+  assert.equal(typed.error, "", "填了机身标签上的序列号，不算对不上，批量导入也能进");
+  assert.equal(typed.mismatch, undefined);
+  assert.match(typed.note, /BMC 只报了主板序列号 T31S8HMB0010536000Q，没核对/);
 });
