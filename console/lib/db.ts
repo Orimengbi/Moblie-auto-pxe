@@ -359,6 +359,10 @@ const MIGRATIONS: string[] = [
     seen_at TEXT NOT NULL DEFAULT ''
   );
   `,
+  // 机柜号不分大小写，统一存成大写（rackKey 本来就不分，同一机房里不会因此撞号）。
+  `
+  UPDATE racks SET name = upper(name) WHERE name <> upper(name);
+  `,
 ];
 
 /** 当前代码的库结构版本（PRAGMA user_version）。备份里记下它，恢复时不接受更新版本的备份。 */

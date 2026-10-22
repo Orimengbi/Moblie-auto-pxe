@@ -223,8 +223,9 @@ export function findRackByName<T extends Pick<Rack, "name">>(list: T[], name: st
 function cleanRack(input: RackInput, id: string | null, taken?: Set<string>): RackFields {
   const site = getSite(String(input.siteId ?? ""));
   if (!site) throw new Error("选的机房不存在");
-  const name = String(input.name ?? "").trim();
-  if (!/^[A-Za-z0-9._-]{1,24}$/.test(name)) throw new Error("机柜号需要 1 到 24 位字母、数字、点、- 或 _");
+  // 机柜号不分大小写，一律存成大写：表格里写 l1、a03 也显示成 L1、A03。
+  const name = String(input.name ?? "").trim().toUpperCase();
+  if (!/^[A-Z0-9._-]{1,24}$/.test(name)) throw new Error("机柜号需要 1 到 24 位字母、数字、点、- 或 _");
   // G3 和 G03 算同一个机柜号，不能同时有。
   const clash = taken ? (taken.has(rackKey(name)) ? { name } : null) : listRacks(site.id).find((rack) => rack.id !== id && rackKey(rack.name) === rackKey(name));
   if (clash) throw new Error(clash.name === name ? `「${site.name}」里已经有机柜 ${name}` : `「${site.name}」里已经有机柜 ${clash.name}，和 ${name} 是同一个机柜号`);
@@ -304,7 +305,7 @@ export function createRacks(input: RackInput & { prefix?: string; from?: number 
     const taken = new Set(listRacks(String(input.siteId ?? "")).map((rack) => rackKey(rack.name)));
     for (const prefix of prefixes) {
       for (let n = from; n <= to; n++) {
-        const name = `${prefix}${String(n).padStart(pad, "0")}`;
+        const name = `${prefix}${String(n).padStart(pad, "0")}`.toUpperCase();
         if (taken.has(rackKey(name))) {
           skipped.push(name);
           continue;
@@ -402,9 +403,12 @@ export function importRacks(rows: unknown[][], defaultSiteId: string | null, opt
           const found = findRackByName(listRacks(site.id), cells.name!);
           if (found === "ambiguous") throw new Error(`机柜号 ${cells.name} 对得上好几个机柜，写完整的机柜号`);
           const existing = found;
+          // 表格里写 l1、系统里是 L01 时，按系统里的机柜号显示。
+          if (existing) entry.name = existing.name;
           if (!existing) {
             const made = createRack({ siteId: site.id, name: cells.name, rowLabel: cells.rowLabel, heightU: cells.heightU ?? 42, powerKw: cells.powerKw, note: cells.note, disabled });
             if (facing) db().prepare("UPDATE racks SET facing = ? WHERE id = ?").run(facing, made.id);
+            entry.name = made.name;
             entry.action = "create";
             result.created++;
             return;
@@ -473,8 +477,9 @@ export function placeLabel(asset: { rackId: string | null; uStart: number | null
 /**
  * 按数据中心、机房（代码或名称）和机柜号找机柜（Excel 导入用）。数据中心和机房都可以不写，但找到的机柜要唯一。
  * 返回的函数里这几张表只读一次，整个导入复用。代码和名称不分大小写。
+ * 对上好几个时返回 { ambiguous }：在同样范围里能对上的机柜，写成「S110 的 L01」，报错时列出来。
  */
-export function cachedRackFinder(): (siteText: string, rackName: string, datacenterText?: string) => Rack | null | "ambiguous" {
+export function cachedRackFinder(): (siteText: string, rackName: string, datacenterText?: string) => Rack | null | { ambiguous: string[] } {
   const datacenters = listDatacenters();
   const sites = listSites();
   const racks = listRacks();
@@ -488,10 +493,12 @@ export function cachedRackFinder(): (siteText: string, rackName: string, datacen
     if (key && !site) return null;
     const inDatacenter = new Set(sites.filter((item) => !datacenter || item.datacenterId === datacenter.id).map((item) => item.id));
     // g3 能对上 G03，见 findRackByName。
-    return findRackByName(
-      racks.filter((rack) => (site ? rack.siteId === site.id : inDatacenter.has(rack.siteId))),
-      rackName,
-    );
+    const scope = racks.filter((rack) => (site ? rack.siteId === site.id : inDatacenter.has(rack.siteId)));
+    const found = findRackByName(scope, rackName);
+    if (found !== "ambiguous") return found;
+    const siteCode = new Map(sites.map((item) => [item.id, item.code]));
+    const matches = scope.filter((rack) => rackKey(rack.name) === rackKey(rackName)).map((rack) => `${siteCode.get(rack.siteId) || "?"} 的 ${rack.name}`);
+    return { ambiguous: matches.sort((a, b) => a.localeCompare(b, "zh-CN", { numeric: true })) };
   };
 }
 

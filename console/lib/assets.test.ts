@@ -296,6 +296,34 @@ test("racks can be created several rows at a time and imported from a sheet", as
   assert.equal(racks.listRacks(site.id).find((rack) => rack.name === "D02")?.heightU, 52);
 });
 
+test("rack names ignore case, are stored upper case, and l1 in a sheet finds L01", async () => {
+  const racks = await import("./racks.ts");
+  const north = racks.createSite({ datacenterId: testDatacenter(racks), code: "CS1", name: "大小写一号" });
+  const south = racks.createSite({ datacenterId: testDatacenter(racks), code: "CS2", name: "大小写二号" });
+  assert.equal(racks.createRack({ siteId: north.id, name: "l01" }).name, "L01", "小写建的机柜号存成大写");
+  assert.deepEqual(racks.createRacks({ siteId: north.id, prefix: "m", from: 1, to: 2, pad: 2 }).created.map((rack) => rack.name), ["M01", "M02"]);
+  assert.throws(() => racks.createRack({ siteId: north.id, name: "L1" }), /已经有机柜 L01/);
+
+  // 机柜表：l1 对上已有的 L01（显示 L01），没有的按大写新建。
+  const sheet = racks.importRacks([["机房", "机柜号", "高度U"], ["cs1", "l1", "48"], ["CS1", "n3", ""]], null);
+  assert.deepEqual(sheet.rows.map((row) => [row.action, row.name]), [["update", "L01"], ["create", "N3"]]);
+  assert.equal(racks.listRacks(north.id).find((rack) => rack.name === "L01")?.heightU, 48);
+
+  // 资产表：l1 放进 L01；两个机房都有 L01 又没写机房时，说清楚是哪几个。
+  racks.createRack({ siteId: south.id, name: "L01" });
+  const result = assets.importAssets(
+    [
+      { row: 2, cells: { sn: "case-001", site: "cs1", rack: "l1", uStart: "3" } },
+      { row: 3, cells: { sn: "case-002", rack: "l1" } },
+    ],
+    "tester",
+  );
+  assert.deepEqual(result.rows.map((row) => row.action), ["create", "error"]);
+  const placed = assets.findAssetBySn("CASE-001");
+  assert.equal(placed && racks.getRack(placed.rackId || "")?.name, "L01");
+  assert.match(result.rows[1].message, /CS1 的 L01、CS2 的 L01/);
+});
+
 test("a failed commit does not leave later transactions broken", async () => {
   const { db, transaction } = await import("./db.ts");
   // 外键检查推迟到提交时：插一条指向不存在机柜的资产，COMMIT 才失败。
@@ -424,7 +452,8 @@ test("data centers hold rooms, rooms move between them and sheets carry the data
     "alice",
   );
   assert.deepEqual(imported.rows.map((row) => row.action), ["error", "error", "create", "create", "error", "error"], JSON.stringify(imported.rows));
-  assert.match(imported.rows[0].message, /对得上好几个（不同机房都有/);
+  assert.match(imported.rows[0].message, /对得上好几个（.* 等 \d+ 个）/, "多了只列前 5 个");
+  assert.match(imported.rows[1].message, /对得上好几个（S110 的 A01、S120 的 A01）/, "写了数据中心就只列它里面的");
   assert.match(imported.rows[4].message, /数据中心「NRT1」的机房「S110」里没有机柜 A01/);
   assert.match(imported.rows[5].message, /填了数据中心就要填机柜/);
 
