@@ -17,6 +17,74 @@ const assets = await import("./assets.ts");
 const { parseServerTable } = await import("./server-sheet.ts");
 const kvm = await import("./kvm-proxy.ts");
 
+/** H5Viewer 发的 IVTP 包：类型、长度、状态（小端），后面是包体。 */
+function ivtp(type: number, body = Buffer.alloc(0), size = body.length): Buffer {
+  const head = Buffer.alloc(8);
+  head.writeUInt16LE(type, 0);
+  head.writeUInt32LE(size, 2);
+  return Buffer.concat([head, body]);
+}
+
+/** 浏览器发的 WebSocket 帧（带掩码）。 */
+function wsFrame(payload: Buffer, opcode = 2, fin = true): Buffer {
+  const mask = Buffer.from([0x11, 0x22, 0x33, 0x44]);
+  const length = payload.length < 126 ? Buffer.from([0x80 | payload.length]) : Buffer.from([0x80 | 126, payload.length >> 8, payload.length & 0xff]);
+  const masked = Buffer.from(payload.map((byte, i) => byte ^ mask[i & 3]));
+  return Buffer.concat([Buffer.from([(fin ? 0x80 : 0) | opcode]), length, mask, masked]);
+}
+
+/** 把几段字节依次喂给过滤器，收集转发出去的。 */
+async function filtered(denied: (type: number) => string | null, chunks: Buffer[]): Promise<{ out: Buffer; dropped: string[] }> {
+  const dropped: string[] = [];
+  const filter = kvm.kvmFrameFilter(denied, (reason) => dropped.push(reason));
+  const parts: Buffer[] = [];
+  filter.on("data", (chunk: Buffer) => parts.push(chunk));
+  for (const chunk of chunks) filter.write(chunk);
+  filter.end();
+  await new Promise((resolve) => filter.on("end", resolve));
+  return { out: Buffer.concat(parts), dropped };
+}
+
+test("power and raw IPMI commands inside the AMI KVM socket follow the console permissions", async () => {
+  const watcher = (type: number) => kvm.kvmCommandDenied(["console"], type);
+  assert.match(watcher(35) || "", /电源/);
+  assert.ok(watcher(48));
+  assert.equal(watcher(1), null, "键盘鼠标不拦");
+  assert.equal(kvm.kvmCommandDenied(["console", "power"], 35), null);
+  assert.ok(kvm.kvmNeedsFilter(["console", "power"]), "有电源但不是管理员，裸 IPMI 还要拦");
+  assert.ok(!kvm.kvmNeedsFilter(["console", "power", "bmc.settings", "bmc.users", "firmware", "bios", "logs.clear"]), "管理员直接对接");
+
+  const key = wsFrame(ivtp(1, Buffer.alloc(41)));
+  const power = wsFrame(ivtp(35));
+  // 分成几段到达也一样：帧原样转发，不许的整帧丢。
+  const mixed = Buffer.concat([key, power, key]);
+  const run = await filtered(watcher, [mixed.subarray(0, 5), mixed.subarray(5, 60), mixed.subarray(60)]);
+  assert.deepEqual(run.out, Buffer.concat([key, key]));
+  assert.equal(run.dropped.length, 1);
+  assert.match(run.dropped[0], /第 35 类命令/);
+
+  // H5Viewer 自己会把几个包拼在一条消息里，第二个包是开关机也要拦。
+  assert.deepEqual((await filtered(watcher, [wsFrame(Buffer.concat([ivtp(57), ivtp(35)]))])).out.length, 0);
+  // 包体声称比这一帧长，下一帧开头在按流解析的 BMC 看来还是包体；按每条消息解析的 BMC 看来是新包头。两种都查。
+  const long = wsFrame(ivtp(57, Buffer.alloc(4), 12));
+  // 按每条消息看：一个包体 8 字节的保活。按流看：前 8 字节是上一包的包体，后面是开关机。
+  const tail = wsFrame(Buffer.concat([ivtp(57, Buffer.alloc(0), 8), ivtp(35)]));
+  assert.deepEqual((await filtered(watcher, [tail])).out, tail, "单看这一帧没有开关机");
+  assert.deepEqual((await filtered(watcher, [long, tail])).out, long, "按流看藏在后一帧里的开关机");
+  assert.deepEqual((await filtered(watcher, [long, power])).out, long, "按每条消息看的开关机");
+  // base64 模式（文字帧）。
+  const text = wsFrame(Buffer.from(ivtp(35).toString("base64")), 1);
+  const textKey = wsFrame(Buffer.from(ivtp(57).toString("base64")), 1);
+  assert.deepEqual((await filtered(watcher, [text, textKey])).out, textKey);
+  // 分片的消息丢掉，控制帧照转。
+  const close = wsFrame(Buffer.alloc(0), 8);
+  const pieces = await filtered(watcher, [wsFrame(ivtp(57), 2, false), wsFrame(Buffer.alloc(0), 0, true), close]);
+  assert.deepEqual(pieces.out, close);
+  assert.deepEqual(pieces.dropped, ["分片的消息", "分片的消息"]);
+  // 有「电源和引导」的可以开关机。
+  assert.deepEqual((await filtered((type) => kvm.kvmCommandDenied(["console", "power"], type), [power])).out, power);
+});
+
 test("root paths in BMC pages and headers are moved under the server's prefix", () => {
   const prefix = "/__bmc/22222222-2222-4222-8222-222222222222";
   assert.deepEqual(kvm.parseBmcPath(`${prefix}/api/kvm/token`), {
@@ -51,6 +119,7 @@ test("root paths in BMC pages and headers are moved under the server's prefix", 
   assert.match(shim, /window\.kvm_access = 1;/);
   // 同一标签页里刷新过查看器后，H5Viewer 留下的 reloaded=1 会让后面每次打开都停在「请重新启动」。
   assert.match(shim, /sessionStorage\.removeItem\("reloaded"\)/);
+  assert.match(shim, /\.h5-toolbar,\.statusbar\{display:none!important\}/, "只留画面，不显示菜单栏和状态栏");
   assert.doesNotThrow(() => new Function(shim), "shim 是合法的 JavaScript");
 });
 
@@ -189,17 +258,25 @@ test("the proxy logs in to the BMC itself and relays pages and the KVM socket", 
   assert.equal(await again.text(), "asset", "BMC 会话过期后自动重新登录");
   assert.equal(logins, 2);
 
+  // 工程师没有 BMC 的全部权限：KVM 连接里的裸 IPMI 命令要丢掉，保活照转。
+  const ipmi = wsFrame(ivtp(48, Buffer.from([0x20, 0x18, 0x01])));
+  const keepAlive = wsFrame(ivtp(57));
   const socket = net.connect(port, "127.0.0.1");
   const reply = await new Promise<string>((resolve) => {
     let data = "";
+    let sent = false;
     socket.on("data", (chunk) => {
-      data += chunk;
-      if (data.includes("\r\n\r\n") && !data.includes("echo:") && data.startsWith("HTTP/1.1 101")) socket.write("frame");
-      if (data.includes("echo:frame") || !data.startsWith("HTTP/1.1 101")) resolve(data);
+      data += chunk.toString("latin1");
+      if (!sent && data.includes("\r\n\r\n") && data.startsWith("HTTP/1.1 101")) {
+        sent = true;
+        socket.write(Buffer.concat([ipmi, keepAlive]));
+      }
+      if (data.includes(`echo:${keepAlive.toString("latin1")}`) || !data.startsWith("HTTP/1.1 101")) resolve(data);
     });
     socket.write(`GET ${prefix}/kvm HTTP/1.1\r\nhost: 127.0.0.1:${port}\r\nupgrade: websocket\r\nconnection: Upgrade\r\ncookie: ${cookie}\r\nsec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\nsec-websocket-protocol: binary\r\n\r\n`);
   });
   assert.match(reply, /^HTTP\/1\.1 101/);
+  assert.ok(!reply.includes(ipmi.toString("latin1")), "工程师经 KVM 连接发的裸 IPMI 没到 BMC");
   assert.equal(seen.find((item) => item.method === "UPGRADE")?.path, "/kvm");
   assert.deepEqual(kvmSessions.map((item) => item.id), [20, 30], "打开前清掉了上次留下的会话，别人的不动");
   socket.destroy();

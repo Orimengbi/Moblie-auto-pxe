@@ -2,7 +2,7 @@ import fs from "node:fs";
 import http from "node:http";
 import https from "node:https";
 import path from "node:path";
-import type { Duplex } from "node:stream";
+import { Transform, type Duplex } from "node:stream";
 import zlib from "node:zlib";
 import { BmcAgent } from "./bmc-tls.ts";
 import { authenticate, clientAddress, sameOrigin } from "./auth.ts";
@@ -306,6 +306,125 @@ function missing(own: Permission[], needed: Permission[]): string | null {
 }
 
 /**
+ * AMI H5Viewer 在 KVM 的 WebSocket 里发的命令（IVTP 包：类型 u16、长度 u32、状态 u16，小端，后面跟长度那么多字节）。
+ * 开关机和裸 IPMI 不走 HTTP 接口，bmcPermissions 拦不到，只能在这条连接里按包类型拦。
+ */
+const KVM_COMMANDS: Record<number, Permission[]> = {
+  35: ["power"], // CMD_POWER_CTRL_REQUEST：开机、关机、重启
+  48: BMC_ADMIN, // CMD_IPMI_REQ_COMMAND：任意 IPMI 命令
+};
+
+/** 这个用户在 KVM 连接里发某类包缺什么权限，不缺返回 null。 */
+export function kvmCommandDenied(own: Permission[], type: number): string | null {
+  const needed = KVM_COMMANDS[type];
+  return needed ? missing(own, needed) : null;
+}
+
+/** 有没有要拦的命令。全有（管理员）就直接对接，不解析。 */
+export function kvmNeedsFilter(own: Permission[]): boolean {
+  return Object.keys(KVM_COMMANDS).some((type) => kvmCommandDenied(own, Number(type)));
+}
+
+const IVTP_HEADER = 8;
+const MAX_FRAME = 16 * 1024 * 1024;
+
+/** 从 skip 个包体字节之后逐个看包头；返回第一个不许的原因，以及走完后剩下的半个包头和还没收完的包体字节数。 */
+function walkIvtp(data: Buffer, head: Buffer, skip: number, denied: (type: number) => string | null) {
+  const buf = head.length ? Buffer.concat([head, data]) : data;
+  let at = 0;
+  let rest = skip;
+  let reason: string | null = null;
+  for (;;) {
+    const take = Math.min(rest, buf.length - at);
+    at += take;
+    rest -= take;
+    if (rest || buf.length - at < IVTP_HEADER) break;
+    const type = buf.readUInt16LE(at);
+    const why = denied(type);
+    if (why && !reason) reason = `第 ${type} 类命令${why}`;
+    rest = buf.readUInt32LE(at + 2);
+    at += IVTP_HEADER;
+  }
+  return { reason, partial: Buffer.from(buf.subarray(at)), body: rest };
+}
+
+/**
+ * 浏览器发给 BMC 的 KVM WebSocket 帧，逐帧看里面的 IVTP 包，有不许发的就整帧丢掉，其余原样转发。
+ * 不知道 BMC 是按每条消息从头解析，还是把消息接成一条流解析（H5Viewer 自己会把几个包拼在一条消息里发），
+ * 所以两种看法都查，任一种看到不许的包就丢。分片的消息、解不开的 base64 也丢（浏览器不会这么发）。
+ * 控制帧（关闭、ping、pong）照转。
+ */
+export function kvmFrameFilter(denied: (type: number) => string | null, onDrop: (reason: string) => void): Transform {
+  let pending: Buffer = Buffer.alloc(0);
+  // 按流看：上一帧留下的半个包头，或者还没收完的包体字节数。
+  let partial: Buffer = Buffer.alloc(0);
+  let body = 0;
+  let fragmented = false;
+
+  return new Transform({
+    transform(chunk: Buffer, _encoding, done) {
+      pending = pending.length ? Buffer.concat([pending, chunk]) : chunk;
+      for (;;) {
+        if (pending.length < 2) break;
+        const fin = (pending[0] & 0x80) !== 0;
+        const opcode = pending[0] & 0x0f;
+        const masked = (pending[1] & 0x80) !== 0;
+        let length = pending[1] & 0x7f;
+        let at = 2;
+        if (length === 126) {
+          if (pending.length < 4) break;
+          length = pending.readUInt16BE(2);
+          at = 4;
+        } else if (length === 127) {
+          if (pending.length < 10) break;
+          const big = pending.readBigUInt64BE(2);
+          length = big > BigInt(MAX_FRAME) ? MAX_FRAME + 1 : Number(big);
+          at = 10;
+        }
+        if (length > MAX_FRAME) return done(new Error("KVM 帧太大"));
+        const mask = masked ? pending.subarray(at, at + 4) : null;
+        if (masked) at += 4;
+        if (pending.length < at + length) break;
+        const frame = pending.subarray(0, at + length);
+        pending = pending.subarray(at + length);
+
+        if (opcode >= 8) {
+          this.push(Buffer.from(frame));
+          continue;
+        }
+        if (opcode === 0 || !fin || fragmented) {
+          // 分片的消息：第一片 FIN=0，最后一片 FIN=1 且 opcode=0。整条丢掉。
+          fragmented = !fin;
+          onDrop("分片的消息");
+          continue;
+        }
+        let payload: Buffer = Buffer.from(frame.subarray(at));
+        if (mask) for (let i = 0; i < payload.length; i++) payload[i] ^= mask[i & 3];
+        if (opcode === 1) {
+          const text = payload.toString("latin1").trim();
+          if (!/^[A-Za-z0-9+/]*={0,2}$/.test(text)) {
+            onDrop("解不开的 base64");
+            continue;
+          }
+          payload = Buffer.from(text, "base64");
+        }
+        const alone = walkIvtp(payload, Buffer.alloc(0), 0, denied);
+        const stream = walkIvtp(payload, partial, body, denied);
+        const reason = alone.reason || stream.reason;
+        if (reason) {
+          onDrop(reason);
+          continue;
+        }
+        partial = stream.partial;
+        body = stream.body;
+        this.push(Buffer.from(frame));
+      }
+      done();
+    },
+  });
+}
+
+/**
  * 发给 BMC 的请求头：浏览器的 cookie（控制台会话）不转发，换成小主机保存的 BMC 会话；
  * Host、Origin、Referer 改成 BMC 自己的地址，否则 BMC 的 CSRF 检查会拒绝。
  */
@@ -477,6 +596,12 @@ export function shimScript(input: { prefix: string; csrf: string; user: string; 
     // 刷新过一次查看器以后，这个标签页里再开哪台都打不开。每次打开前清掉。
     sessionStorage.removeItem("reloaded");
   } catch (e) {}
+
+  // 和 OpenBMC 的查看页一样只留画面：上面的菜单栏（电源、虚拟介质、录像……）和下面的状态栏都不显示。
+  // 开关机、挂 ISO 用控制台自己的按钮；KVM 连接里的开关机命令由代理按权限拦。
+  var style = document.createElement("style");
+  style.textContent = ".h5-toolbar,.statusbar{display:none!important}";
+  (document.head || document.documentElement).appendChild(style);
 })();
 `;
 }
@@ -765,11 +890,23 @@ function handleUpgrade(req: http.IncomingMessage, socket: Duplex, head: Buffer):
         }
         socket.write(`${lines.join("\r\n")}\r\n\r\n`);
         if (bmcHead.length) socket.write(bmcHead);
-        if (head.length) bmcSocket.write(head);
         bmcSocket.on("error", () => socket.destroy());
         socket.on("close", () => bmcSocket.destroy());
         bmcSocket.on("close", () => socket.destroy());
-        bmcSocket.pipe(socket).pipe(bmcSocket);
+        bmcSocket.pipe(socket);
+        // H5Viewer 的开关机、裸 IPMI 走这条连接，不是管理员就逐帧过一遍。
+        if (isKvm && kvmNeedsFilter(target.permissions)) {
+          const filter = kvmFrameFilter(
+            (type) => kvmCommandDenied(target.permissions, type),
+            (reason) => console.warn(`[kvm] ${target.actor} KVM ${target.host} 丢掉一帧：${reason}`),
+          );
+          filter.on("error", () => socket.destroy());
+          if (head.length) filter.write(head);
+          socket.pipe(filter).pipe(bmcSocket);
+        } else {
+          if (head.length) bmcSocket.write(head);
+          socket.pipe(bmcSocket);
+        }
         if (isKvm) {
           const live = liveKvm.get(target.host) || new Set<Duplex>();
           live.add(socket);
