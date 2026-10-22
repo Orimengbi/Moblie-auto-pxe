@@ -33,6 +33,14 @@ function refresh(): Promise<void> {
   return lookingUp;
 }
 
+/**
+ * 正式环境（release/compose.yml）都是 host 网络：nginx 从 127.0.0.1 转给只听 127.0.0.1 的控制台，没有 boot 这个名字可查。
+ * 回环地址只有本机进程连得上，当 nginx 信。开发用的 compose 里宿主机转进容器的请求来自网桥网关，不是回环。
+ */
+export function isLoopback(address: string): boolean {
+  return address === "::1" || /^127\./.test(address);
+}
+
 export function plainAddress(address: string | undefined): string {
   return String(address || "").replace(/^::ffff:/, "");
 }
@@ -57,7 +65,7 @@ export function installClientAddressGuard(): Promise<void> {
       if (event === "request" || event === "upgrade") {
         const req = args[0] as http.IncomingMessage;
         const remote = plainAddress(req.socket?.remoteAddress);
-        const fromProxy = trusted.has(remote);
+        const fromProxy = trusted.has(remote) || isLoopback(remote);
         // nginx 容器重建后地址会变：私有地址又不在名单里，就重新查一次，下一个请求就认得了。
         if (!fromProxy && remote && /^(10|172|192)\./.test(remote)) void refresh();
         settleClientAddress(req.headers, remote, fromProxy);

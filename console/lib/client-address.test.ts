@@ -3,8 +3,8 @@ import http from "node:http";
 import net from "node:net";
 import test from "node:test";
 
-process.env.PXE_TRUSTED_PROXY_HOST = "localhost";
-const { installClientAddressGuard, plainAddress, settleClientAddress } = await import("./client-address.ts");
+process.env.PXE_TRUSTED_PROXY_HOST = "";
+const { installClientAddressGuard, isLoopback, plainAddress, settleClientAddress } = await import("./client-address.ts");
 
 test("only nginx may say where a request came from", () => {
   const direct: http.IncomingHttpHeaders = { "x-real-ip": "192.168.77.9", "x-forwarded-for": "10.0.0.1, 10.0.0.2" };
@@ -20,6 +20,8 @@ test("only nginx may say where a request came from", () => {
   assert.equal(bare["x-real-ip"], "172.19.0.3", "nginx 没设就用 nginx 自己的地址");
 
   assert.equal(plainAddress("::ffff:172.19.0.3"), "172.19.0.3");
+  assert.ok(isLoopback("127.0.0.1") && isLoopback("::1"));
+  assert.ok(!isLoopback("172.19.0.1"), "开发 compose 里宿主机转进来的请求不是回环");
 });
 
 test("the guard rewrites headers before any server sees the request", async () => {
@@ -27,7 +29,7 @@ test("the guard rewrites headers before any server sees the request", async () =
   const server = http.createServer((req, res) => res.end(JSON.stringify([req.headers["x-real-ip"], req.headers["x-forwarded-for"] ?? null])));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const port = (server.address() as net.AddressInfo).port;
-  // 127.0.0.1 就是测试里的「nginx」（localhost），它设的地址保留。
+  // 正式环境 nginx 从 127.0.0.1 连过来，没有 boot 这个名字可查（这里也不查），它设的地址照样保留。
   const trusted = await (await fetch(`http://127.0.0.1:${port}/`, { headers: { "x-real-ip": "192.168.77.9", "x-forwarded-for": "1.2.3.4" } })).json();
   assert.deepEqual(trusted, ["192.168.77.9", null]);
   server.close();
