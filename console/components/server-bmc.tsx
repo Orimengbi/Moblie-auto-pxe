@@ -32,6 +32,7 @@ import { api } from "@/lib/client-api";
 import type { StreamStatus } from "@/lib/redfish-events";
 import { formatTime, UTC_OFFSETS } from "@/lib/time";
 import { useCan } from "@/components/role-context";
+import { ServerBmcUsers } from "@/components/server-bmc-users";
 
 const MONO = '"SF Mono", ui-monospace, var(--font-geist-mono), monospace';
 
@@ -203,6 +204,8 @@ export function ServerBmc({ assetId }: { assetId: string }) {
           </Typography>
         ) : null}
         <EventStreamLine status={data.events} />
+        {/* BMC 用户走 IPMI，Redfish 没读到也能看能改。 */}
+        <ServerBmcUsers assetId={assetId} />
         <BmcCertSection assetId={assetId} canEdit={canEdit} onChanged={() => void load(true)} />
       </Stack>
     );
@@ -286,6 +289,7 @@ export function ServerBmc({ assetId }: { assetId: string }) {
       </Section>
 
       <MediaSection view={view} busy={busy || !canOperate} onSend={(body) => send(`/api/assets/${assetId}/redfish/media`, "POST", body)} />
+      <ServerBmcUsers assetId={assetId} />
       <BmcCertSection assetId={assetId} canEdit={canEdit} onChanged={() => void load(true)} />
     </Stack>
   );

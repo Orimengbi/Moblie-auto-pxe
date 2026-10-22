@@ -71,7 +71,7 @@ export function UserChangeFields({ action, value, onChange, nameLocked }: { acti
 
 const TITLE: Record<BmcUserAction, string> = { ensure: "新建用户", password: "改密码", privilege: "改权限", enable: "启用", disable: "停用", delete: "删除用户" };
 
-/** 侧边栏「BMC 用户」：这台 BMC 的 16 个 IPMI 用户槽，增删改。 */
+/** 侧边栏「BMC」页里的 IPMI 用户：这台 BMC 的 16 个用户槽，增删改。 */
 export function ServerBmcUsers({ assetId }: { assetId: string }) {
   const [users, setUsers] = useState<IpmiUser[] | null>(null);
   const [loginUser, setLoginUser] = useState("");

@@ -18,7 +18,6 @@ import { AssetTickets } from "@/components/asset-tickets";
 import { NetworkDevice } from "@/components/network-device";
 import { ServerBios } from "@/components/server-bios";
 import { ServerBmc } from "@/components/server-bmc";
-import { ServerBmcUsers } from "@/components/server-bmc-users";
 import { ServerBmcLogs } from "@/components/server-bmc-logs";
 import { ServerFirmware } from "@/components/server-firmware";
 import { ServerInventory } from "@/components/server-inventory";
@@ -37,7 +36,7 @@ interface Row {
   description: string;
 }
 
-export type Tab = "overview" | "netports" | "monitor" | "sensors" | "bmc" | "bmcusers" | "bios" | "firmware" | "bmclogs" | "tickets" | "hardware" | "topology" | "history";
+export type Tab = "overview" | "netports" | "monitor" | "sensors" | "bmc" | "bios" | "firmware" | "bmclogs" | "tickets" | "hardware" | "topology" | "history";
 
 interface TabContext {
   row: Row;
@@ -55,7 +54,6 @@ const TABS: { id: Tab; label: string; where: "server" | "network" | "all"; rende
   { id: "monitor", label: "监控", where: "all", render: ({ row }) => <AssetMonitor assetId={row.id} /> },
   { id: "sensors", label: "传感器", where: "server", render: ({ row }) => <ServerSensors assetId={row.id} /> },
   { id: "bmc", label: "BMC", where: "server", render: ({ row }) => <ServerBmc assetId={row.id} /> },
-  { id: "bmcusers", label: "BMC 用户", where: "server", render: ({ row }) => <ServerBmcUsers assetId={row.id} /> },
   { id: "bios", label: "BIOS", where: "server", render: ({ row }) => <ServerBios assetId={row.id} /> },
   { id: "firmware", label: "固件", where: "server", render: ({ row }) => <ServerFirmware assetId={row.id} /> },
   { id: "bmclogs", label: "BMC 日志", where: "server", render: ({ row }) => <ServerBmcLogs assetId={row.id} /> },
