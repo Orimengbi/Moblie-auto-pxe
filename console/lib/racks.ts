@@ -477,20 +477,28 @@ export function placeLabel(asset: { rackId: string | null; uStart: number | null
 /**
  * 按数据中心、机房（代码或名称）和机柜号找机柜（Excel 导入用）。数据中心和机房都可以不写，但找到的机柜要唯一。
  * 返回的函数里这几张表只读一次，整个导入复用。代码和名称不分大小写。
+ * 名称后面的「数据中心」「机房」可以不写：KIX13 对得上名称是「KIX13 数据中心」的。
  * 对上好几个时返回 { ambiguous }：在同样范围里能对上的机柜，写成「S110 的 L01」，报错时列出来。
+ * 数据中心或机房对不上时返回 { missing }：说清楚是哪个没对上、有哪些可选，别说成没有机柜。
  */
-export function cachedRackFinder(): (siteText: string, rackName: string, datacenterText?: string) => Rack | null | { ambiguous: string[] } {
+export function cachedRackFinder(): (siteText: string, rackName: string, datacenterText?: string) => Rack | null | { ambiguous: string[] } | { missing: string } {
   const datacenters = listDatacenters();
   const sites = listSites();
   const racks = listRacks();
-  const same = (item: { code: string; name: string }, key: string) => item.code.toLowerCase() === key || item.name.toLowerCase() === key;
+  const bare = (value: string) => value.trim().toLowerCase().replace(/\s*(数据中心|机房)$/, "");
+  const same = (item: { code: string; name: string }, key: string) =>
+    item.code.toLowerCase() === key || item.name.toLowerCase() === key || (bare(key) !== "" && bare(item.name) === bare(key));
+  const choices = (list: { code: string; name: string }[]) => list.map((item) => (bare(item.name) === item.code.toLowerCase() ? item.code : `${item.code}（${item.name}）`)).join("、") || "还没有";
   return (siteText, rackName, datacenterText = "") => {
     const dcKey = datacenterText.trim().toLowerCase();
     const datacenter = dcKey ? datacenters.find((item) => same(item, dcKey)) : null;
-    if (dcKey && !datacenter) return null;
+    if (dcKey && !datacenter) return { missing: `没有数据中心「${datacenterText.trim()}」，系统里有：${choices(datacenters)}` };
     const key = siteText.trim().toLowerCase();
     const site = key ? sites.find((item) => (!datacenter || item.datacenterId === datacenter.id) && same(item, key)) : null;
-    if (key && !site) return null;
+    if (key && !site) {
+      const inScope = sites.filter((item) => !datacenter || item.datacenterId === datacenter.id);
+      return { missing: `${datacenter ? `数据中心 ${datacenter.code} 里` : ""}没有机房「${siteText.trim()}」，有：${choices(inScope)}` };
+    }
     const inDatacenter = new Set(sites.filter((item) => !datacenter || item.datacenterId === datacenter.id).map((item) => item.id));
     // g3 能对上 G03，见 findRackByName。
     const scope = racks.filter((rack) => (site ? rack.siteId === site.id : inDatacenter.has(rack.siteId)));

@@ -322,6 +322,23 @@ test("rack names ignore case, are stored upper case, and l1 in a sheet finds L01
   const placed = assets.findAssetBySn("CASE-001");
   assert.equal(placed && racks.getRack(placed.rackId || "")?.name, "L01");
   assert.match(result.rows[1].message, /CS1 的 L01、CS2 的 L01/);
+
+  // 数据中心代码录错了（KXI13），表格里写的是名称里的 KIX13：按名称对上；真对不上的说清楚是数据中心没对上。
+  const typo = racks.createDatacenter({ code: "KXI99", name: "KIX99 数据中心" });
+  const far = racks.createSite({ datacenterId: typo.id, code: "S990", name: "S990 机房" });
+  racks.createRack({ siteId: far.id, name: "L01" });
+  const named = assets.importAssets(
+    [
+      { row: 2, cells: { sn: "case-003", datacenter: "kix99", site: "s990", rack: "l1" } },
+      { row: 3, cells: { sn: "case-004", datacenter: "KIX98", site: "S990", rack: "l1" } },
+      { row: 4, cells: { sn: "case-005", site: "S999", rack: "l1" } },
+    ],
+    "tester",
+    { dryRun: true },
+  );
+  assert.deepEqual(named.rows.map((row) => row.action), ["create", "error", "error"], JSON.stringify(named.rows));
+  assert.match(named.rows[1].message, /没有数据中心「KIX98」，系统里有：.*KXI99（KIX99 数据中心）/);
+  assert.match(named.rows[2].message, /没有机房「S999」，有：.*S990/);
 });
 
 test("a failed commit does not leave later transactions broken", async () => {
@@ -454,7 +471,7 @@ test("data centers hold rooms, rooms move between them and sheets carry the data
   assert.deepEqual(imported.rows.map((row) => row.action), ["error", "error", "create", "create", "error", "error"], JSON.stringify(imported.rows));
   assert.match(imported.rows[0].message, /对得上好几个（.* 等 \d+ 个）/, "多了只列前 5 个");
   assert.match(imported.rows[1].message, /对得上好几个（S110 的 A01、S120 的 A01）/, "写了数据中心就只列它里面的");
-  assert.match(imported.rows[4].message, /数据中心「NRT1」的机房「S110」里没有机柜 A01/);
+  assert.match(imported.rows[4].message, /数据中心 NRT1 里没有机房「S110」/, "对不上的是机房，不说成没有机柜");
   assert.match(imported.rows[5].message, /填了数据中心就要填机柜/);
 
   const rows = assetsToRows(assets.listAssets(), assets.listCustomers(), racks.listRacks(), racks.listSites(), [], racks.listDatacenters());
