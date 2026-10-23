@@ -18,7 +18,7 @@ import TextField from "@mui/material/TextField";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import ClearOutlined from "@mui/icons-material/ClearOutlined";
-import { GridColumnMenu, type GridColDef, type GridColumnMenuItemProps, type GridColumnMenuProps, type GridRowProps, type GridRowSelectionModel } from "@mui/x-data-grid";
+import { GridColumnMenu, type GridColDef, type GridColumnMenuItemProps, type GridColumnMenuProps, type GridRowProps, type GridRowSelectionModel, type GridSortModel } from "@mui/x-data-grid";
 import ListItemIcon from "@mui/material/ListItemIcon";
 import ListItemText from "@mui/material/ListItemText";
 import Menu from "@mui/material/Menu";
@@ -301,6 +301,8 @@ export function AssetList({
     [initialRows, livePower],
   );
   const [filters, setFilters] = useState<Filters>(EMPTY);
+  // 点表头排的序；空的时候按编号排（见 shown）。
+  const [sortModel, setSortModel] = useState<GridSortModel>([]);
   const [picked, setPicked] = useState<string[]>([]);
   const [exporting, setExporting] = useState(false);
   const [batching, setBatching] = useState(false);
@@ -397,9 +399,10 @@ export function AssetList({
     saveFilters({ ...filters, [key]: value });
   }
 
-  // 记着的筛选和地址栏带的筛选一起清掉，不然刷新、再进这页又筛回去了。
+  // 记着的筛选和地址栏带的筛选一起清掉，不然刷新、再进这页又筛回去了；点表头排的序也回到按编号排。
   function clearFilters() {
     saveFilters(EMPTY);
+    setSortModel([]);
     const url = new URL(window.location.href);
     const keys = Object.keys(EMPTY).filter((key) => url.searchParams.has(key));
     if (keys.length) {
@@ -659,7 +662,7 @@ export function AssetList({
           control={<Checkbox checked={Boolean(filters.warranty)} onChange={(event) => setFilter("warranty", event.target.checked ? "1" : "")} />}
           label={<Typography variant="body2">只看过保和快到期的</Typography>}
         />
-        {filtering ? <Button onClick={clearFilters}>清除筛选</Button> : null}
+        {filtering || sortModel.length ? <Button onClick={clearFilters}>{filtering ? "清除筛选" : "恢复默认排序"}</Button> : null}
         <Stack direction="row" useFlexGap spacing={1} sx={{ ml: "auto", flexWrap: "wrap" }}>
           {/* 只有这一个入口；勾了机器时变成主按钮并带上台数。 */}
           <Button variant={picked.length ? "contained" : "outlined"} onClick={() => setBatching(true)}>
@@ -737,6 +740,8 @@ export function AssetList({
             checkboxSelection
             // 只用上面那排筛选：表头菜单里的筛选「清除筛选」管不到，「筛选后几台」、导出、批量选也不认。
             disableColumnFilter
+            sortModel={sortModel}
+            onSortModelChange={setSortModel}
             rowSelectionModel={selection}
             onRowSelectionModelChange={onSelection}
             onColumnWidthChange={({ colDef, width }) => saveWidth(colDef.field, width)}

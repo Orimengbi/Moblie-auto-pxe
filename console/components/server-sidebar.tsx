@@ -57,7 +57,7 @@ const TABS: { id: Tab; label: string; where: "server" | "network" | "all"; rende
   { id: "bmc", label: "BMC", where: "server", render: ({ row }) => <ServerBmc assetId={row.id} /> },
   { id: "bios", label: "BIOS", where: "server", render: ({ row }) => <ServerBios assetId={row.id} /> },
   { id: "firmware", label: "固件", where: "server", render: ({ row }) => <ServerFirmware assetId={row.id} /> },
-  { id: "bmclogs", label: "BMC 日志", where: "server", render: ({ row }) => <ServerBmcLogs assetId={row.id} /> },
+  { id: "bmclogs", label: "日志", where: "server", render: ({ row }) => <ServerBmcLogs assetId={row.id} /> },
   { id: "install", label: "装机", where: "server", render: ({ row }) => <ServerInstall assetId={row.id} /> },
   { id: "tickets", label: "工单", where: "all", render: ({ row, onChanged }) => <AssetTickets asset={{ id: row.id, tag: row.tag || row.sn, sn: row.sn, model: "" }} onChanged={onChanged} /> },
   { id: "hardware", label: "硬件配置 / 接口", where: "server", render: ({ row, projectId }) => <ServerInventory projectId={projectId} row={row} /> },

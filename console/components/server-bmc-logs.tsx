@@ -150,7 +150,7 @@ function selSummary(entry: LogEntryView): string {
   return [field("Sensor_Type"), field("Sensor_Name") !== "Unknown" ? field("Sensor_Name") : "", field("Event_Type"), field("Event_Dir")].filter(Boolean).join(" · ");
 }
 
-/** 侧边栏「BMC 日志」：实时推来的事件，以及 BMC 上各个日志（SEL、事件、审计、BIOS…）按页翻。 */
+/** 侧边栏「日志」：实时推来的事件，以及 BMC 上各个日志（SEL、事件、审计、BIOS…）按页翻。 */
 export function ServerBmcLogs({ assetId }: { assetId: string }) {
   const canClear = useCan("logs.clear");
   const [stream, setStream] = useState<{ stream: StreamStatus; events: BmcEvent[] } | null>(null);
