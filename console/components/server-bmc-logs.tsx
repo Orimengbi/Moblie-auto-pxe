@@ -68,8 +68,9 @@ export async function saveResponse(response: Response, fallback: string): Promis
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
-/** 选几类 BMC 日志现读一遍，打成 tar.gz 下载。services 是这台有哪些日志（日志列表读到以后才有）。 */
-function LogDownload({ assetId, services, ready }: { assetId: string; services: LogServiceView[] | null; ready: boolean }) {
+/** 选几类 BMC 日志现读一遍，打成 tar.gz 下载。services 是这台有哪些日志（日志列表读到以后才有）。
+ * 按钮放在日志翻页那排，进度、出错和读到的摘要放在那排下面。 */
+function useLogDownload(assetId: string, services: LogServiceView[] | null, ready: boolean) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [summary, setSummary] = useState("");
@@ -97,28 +98,17 @@ function LogDownload({ assetId, services, ready }: { assetId: string; services: 
     setPending(false);
   }
 
-  return (
-    <Paper variant="outlined" sx={{ p: 2 }}>
-      <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} sx={{ alignItems: { sm: "center" } }}>
-        <Box sx={{ flex: 1 }}>
-          <Typography variant="subtitle2">下载日志</Typography>
-          <Typography variant="body2" color="text.secondary">
-            选要哪几类：IPMI 的 SEL、传感器、FRU，Redfish 上的各份日志（含 HGX 底板、HGX BMC），现读一遍打成一个 tar.gz。选得多要一两分钟。
-          </Typography>
-        </Box>
-        <Button variant="outlined" disabled={pending || !ready} onClick={pick}>
-          {pending ? "正在读取…" : !ready ? "正在读日志列表…" : "选择并下载"}
-        </Button>
-      </Stack>
-      {pending ? <LinearProgress sx={{ mt: 1.5 }} /> : null}
-      {error ? (
-        <Typography variant="body2" color="error" sx={{ mt: 1 }}>
-          {error}
-        </Typography>
-      ) : null}
+  const button = (
+    <>
+      <Button size="small" variant="outlined" disabled={pending || !ready} onClick={pick}>
+        {pending ? "正在读取…" : "下载日志"}
+      </Button>
       <Dialog open={picking} onClose={() => setPicking(false)} fullWidth maxWidth="sm">
         <DialogTitle>下载哪些日志</DialogTitle>
         <DialogContent dividers>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+            IPMI 的 SEL、传感器、FRU，Redfish 上的各份日志（含 HGX 底板、HGX BMC），现读一遍打成一个 tar.gz。选得多要一两分钟。
+          </Typography>
           <LogKindPicker value={kinds} onChange={setKinds} services={services || []} />
         </DialogContent>
         <DialogActions>
@@ -128,13 +118,26 @@ function LogDownload({ assetId, services, ready }: { assetId: string; services: 
           </Button>
         </DialogActions>
       </Dialog>
+    </>
+  );
+
+  const status = (
+    <>
+      {pending ? <LinearProgress sx={{ mb: 1 }} /> : null}
+      {error ? (
+        <Typography variant="body2" color="error" sx={{ mb: 1 }}>
+          下载日志：{error}
+        </Typography>
+      ) : null}
       {summary ? (
-        <Box component="pre" sx={{ mt: 1.5, mb: 0, p: 1, bgcolor: "action.hover", borderRadius: 1, fontSize: 12, whiteSpace: "pre-wrap", maxHeight: 200, overflow: "auto" }}>
+        <Box component="pre" sx={{ mt: 0, mb: 1, p: 1, bgcolor: "action.hover", borderRadius: 1, fontSize: 12, whiteSpace: "pre-wrap", maxHeight: 200, overflow: "auto" }}>
           {summary}
         </Box>
       ) : null}
-    </Paper>
+    </>
   );
+
+  return { button, status };
 }
 
 /** HGX 的日志前面标出来源（HGX_BMC_0、HGX_Baseboard_0），主 BMC、主系统的按 BMC / 主机。 */
@@ -215,10 +218,10 @@ export function ServerBmcLogs({ assetId }: { assetId: string }) {
 
   const current = services?.find((item) => item.path === service);
   const pages = log ? Math.max(1, Math.ceil(log.total / PAGE)) : 1;
+  const logDownload = useLogDownload(assetId, services, listed);
 
   return (
     <Stack spacing={2}>
-      <LogDownload assetId={assetId} services={services} ready={listed} />
       <Paper variant="outlined" sx={{ p: 2 }}>
         <Typography variant="subtitle2">实时事件</Typography>
         {stream ? <EventStreamLine status={stream.stream} /> : null}
@@ -270,6 +273,7 @@ export function ServerBmcLogs({ assetId }: { assetId: string }) {
             label={<Typography variant="body2">只看告警</Typography>}
           />
           <Box sx={{ flex: 1 }} />
+          {logDownload.button}
           <Button size="small" disabled={loading || page === 0} onClick={() => setPage(page - 1)}>
             上一页
           </Button>
@@ -288,6 +292,7 @@ export function ServerBmcLogs({ assetId }: { assetId: string }) {
             </Button>
           ) : null}
         </Stack>
+        {logDownload.status}
         {error ? (
           <Typography variant="body2" color="error">
             {error}
