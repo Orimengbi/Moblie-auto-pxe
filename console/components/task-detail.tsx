@@ -68,7 +68,9 @@ export function TaskDetail({ initial, project, tags }: { initial: RemoteTask; pr
           {task.finishedAt ? ` → ${formatTime(task.finishedAt)}` : ""}
         </Typography>
         <Typography variant="body2" sx={{ color: "text.secondary" }}>
-          {project ? (
+          {task.kind === "import" ? (
+            `导入人 ${task.createdBy || "未知"}`
+          ) : project ? (
             <>
               装机批次{" "}
               <MuiLink component={Link} href={`/projects/${project.id}`}>
@@ -78,7 +80,7 @@ export function TaskDetail({ initial, project, tags }: { initial: RemoteTask; pr
           ) : (
             "从资产发起"
           )}
-          ，并发 {task.concurrency}，单台超时 {task.timeoutSec} 秒
+          {task.kind === "import" ? "" : `，并发 ${task.concurrency}，单台超时 ${task.timeoutSec} 秒`}
         </Typography>
       </Stack>
 

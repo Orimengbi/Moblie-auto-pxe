@@ -1,5 +1,5 @@
 import { auditRequest, jsonError, readJson, userOrResponse } from "@/lib/api";
-import { runAssetImport, type PreparedAssetImport } from "@/lib/asset-import";
+import { recordImportTask, runAssetImport, type PreparedAssetImport } from "@/lib/asset-import";
 import { getJob, removeJob, runInBackground, updateJob } from "@/lib/import-jobs";
 
 export const dynamic = "force-dynamic";
@@ -32,6 +32,7 @@ export async function POST(request: Request, context: Context) {
     updateJob(id, { phase: "commit", status: "running", progress: { done: 0, total: 1, label: "正在写入" } });
     runInBackground(id, async () => {
       const result = runAssetImport(prepared, identity.user.username, false);
+      recordImportTask(job.title, identity.user.username, result, job.startedAt);
       updateJob(id, { status: "done", result, progress: { done: 1, total: 1, label: "导入完成" } });
       auditRequest(request, identity, {
         action: "Excel 导入资产",

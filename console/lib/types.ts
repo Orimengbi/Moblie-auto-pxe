@@ -333,7 +333,7 @@ export const DEFAULT_STATE: ApplianceState = {
 };
 
 /** firmware-push 不是从任务接口建的：固件页推送时顺带建一条，进度从推送那边同步过来（firmware-push.ts）。 */
-export type TaskKind = "script" | "revoke" | "inventory" | "bmc-reset" | "bmc-clock" | "bmc-logs" | "bmc-user" | "firmware-push";
+export type TaskKind = "script" | "revoke" | "inventory" | "bmc-reset" | "bmc-clock" | "bmc-logs" | "bmc-user" | "firmware-push" | "import";
 /** 重启 BMC 的方式：outband 经 BMC 网口发 IPMI，inband SSH 进系统用系统里的 ipmitool 发。 */
 export type BmcResetVia = "outband" | "inband";
 export type TaskStatus = "running" | "done";
@@ -390,6 +390,8 @@ export interface RemoteTask {
   bmcUser?: import("./ipmi-user-types.ts").BmcUserChange;
   /** 收集 BMC 日志任务要哪几类（见 log-kinds.ts）；旧任务没有，表示全要。 */
   bmcLogs?: string[];
+  /** 谁发起的。只有 Excel 导入记了，别的任务看审计。 */
+  createdBy?: string;
   createdAt: string;
   finishedAt?: string;
   /** 归档了就不在右上角任务列表里，任务中心照样能查。结束满 1 小时自动归档（archivedBy 记「自动」）。 */

@@ -1,6 +1,9 @@
+import crypto from "node:crypto";
 import type { SheetCells } from "./asset-sheet.ts";
-import { importAssets, type AssetInput, type ImportResult } from "./assets.ts";
+import { findAssetBySn, importAssets, type AssetInput, type ImportResult } from "./assets.ts";
 import { enrichRecords, enrichRow, identifyBmc, type Enriched } from "./bmc-identify.ts";
+import { writeTask } from "./store.ts";
+import type { RemoteTask } from "./types.ts";
 
 /**
  * 资产表格导入的两步：prepare 连 BMC 把空格子补上（慢，可以放后台），run 按补好的数据预览或写入（快）。
@@ -46,6 +49,45 @@ export function runAssetImport(prepared: PreparedAssetImport, actor: string, dry
   }
   result.rows.sort((a, b) => a.row - b.row);
   return { ...result, ignored: prepared.ignored, dryRun };
+}
+
+const ROW_ACTION = { create: "新建", update: "更新", same: "没变", error: "出错" } as const;
+
+/**
+ * 正式写入后在任务中心记一条「Excel 导入」，一行一条结果：新建、更新、没变算成功，出错算没成功。
+ * 对上资产的行能点进资产；出错又没对上的行用行号占位。主机一栏写行号。
+ */
+export function recordImportTask(title: string, actor: string, result: ImportResult, startedAt: string, now = new Date().toISOString()): RemoteTask {
+  const task: RemoteTask = {
+    id: crypto.randomUUID(),
+    projectId: "",
+    kind: "import",
+    name: `Excel 导入 ${title}`.slice(0, 80),
+    script: "",
+    fileIds: [],
+    concurrency: 1,
+    timeoutSec: 0,
+    status: "done",
+    targets: result.rows.map((row) => {
+      const asset = row.sn && row.action !== "error" ? findAssetBySn(row.sn) : null;
+      return {
+        serverId: asset?.id || `row-${row.row}`,
+        sn: row.sn,
+        host: `第 ${row.row} 行`,
+        hostSource: "",
+        status: row.action === "error" ? "failed" : "ok",
+        exitCode: null,
+        output: [ROW_ACTION[row.action], row.message].filter(Boolean).join("：") || ROW_ACTION[row.action],
+        startedAt,
+        finishedAt: now,
+      };
+    }),
+    createdBy: actor,
+    createdAt: startedAt,
+    finishedAt: now,
+  };
+  writeTask(task);
+  return task;
 }
 
 /** 单台入库时填的序列号和 BMC 报的对不上。 */

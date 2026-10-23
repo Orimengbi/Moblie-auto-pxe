@@ -8,7 +8,9 @@ const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pxe-import-jobs-test-"));
 process.env.PXE_DATA_DIR = temp;
 
 const jobs = await import("./import-jobs.ts");
-const { prepareAssetImport, runAssetImport } = await import("./asset-import.ts");
+const { prepareAssetImport, recordImportTask, runAssetImport } = await import("./asset-import.ts");
+const store = await import("./store.ts");
+const { allTaskSummaries } = await import("./task-center.ts");
 const assets = await import("./assets.ts");
 
 test("import jobs are private to their owner and the list leaves out the rows", () => {
@@ -62,4 +64,20 @@ test("prepare reads each BMC once with progress; preview and commit use the same
   assert.equal(committed.created, 2);
   assert.ok(assets.findAssetBySn("SN-1"));
   assert.equal(calls, 2, "确认时不再连 BMC");
+});
+
+test("a committed import shows up in the task center, one line per sheet row", () => {
+  const prepared = { records: [{ row: 2, cells: { sn: "TASK-IMP-1" } }, { row: 3, cells: { sn: "TASK-IMP-1" } }], failed: [{ row: 4, error: "BMC 连不上" }], notes: {}, ignored: [] };
+  const result = runAssetImport(prepared, "alice", false);
+  const task = recordImportTask("机器.xlsx", "alice", result, "2026-10-23T01:00:00.000Z", "2026-10-23T01:00:05.000Z");
+  const saved = store.getTask(task.id)!;
+  assert.equal(saved.kind, "import");
+  assert.equal(saved.createdBy, "alice");
+  assert.equal(saved.status, "done");
+  assert.deepEqual(saved.targets.map((t) => [t.host, t.status]), [["第 2 行", "ok"], ["第 3 行", "failed"], ["第 4 行", "failed"]]);
+  assert.equal(saved.targets[0].serverId, assets.findAssetBySn("TASK-IMP-1")!.id, "入库的行能点进资产");
+  assert.equal(new Set(saved.targets.map((t) => t.serverId)).size, 3, "出错的行也各占一条");
+  assert.match(saved.targets[2].output, /出错：BMC 连不上/);
+  const summary = allTaskSummaries(Date.parse("2026-10-23T01:10:00.000Z")).find((item) => item.id === task.id)!;
+  assert.deepEqual([summary.name, summary.total, summary.ok, summary.failed], ["Excel 导入 机器.xlsx", 3, 1, 2]);
 });

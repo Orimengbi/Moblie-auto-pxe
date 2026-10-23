@@ -127,6 +127,7 @@ export const TASK_KIND_LABEL: Record<TaskKind, string> = {
   "bmc-logs": "收集 BMC 日志",
   "bmc-user": "BMC 用户",
   "firmware-push": "固件升级",
+  import: "Excel 导入",
 };
 
 export function taskTargetTone(status: string): Tone {

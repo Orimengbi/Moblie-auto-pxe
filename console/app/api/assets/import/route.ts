@@ -1,5 +1,5 @@
 import { auditRequest, jsonError, readSheetUpload, userOrResponse } from "@/lib/api";
-import { prepareAssetImport, runAssetImport } from "@/lib/asset-import";
+import { prepareAssetImport, recordImportTask, runAssetImport } from "@/lib/asset-import";
 import { parseAssetTable } from "@/lib/asset-sheet";
 import { createJob, runInBackground, updateJob } from "@/lib/import-jobs";
 
@@ -30,9 +30,11 @@ export async function POST(request: Request) {
       return Response.json({ jobId: job.id });
     }
 
+    const startedAt = new Date().toISOString();
     // 只填了 BMC 地址和账号密码的行：连 BMC 读序列号、厂商、型号、BMC MAC，补进空格子。读不到又没序列号的算出错。
     const result = runAssetImport(await prepareAssetImport(parsed.records, parsed.ignored), identity.user.username, dryRun);
     if (!dryRun) {
+      recordImportTask(file.name, identity.user.username, result, startedAt);
       auditRequest(request, identity, {
         action: "Excel 导入资产",
         targetType: "asset",
