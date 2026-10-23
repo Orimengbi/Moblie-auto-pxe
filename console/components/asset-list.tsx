@@ -18,7 +18,7 @@ import TextField from "@mui/material/TextField";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import ClearOutlined from "@mui/icons-material/ClearOutlined";
-import { GridColumnMenu, type GridColDef, type GridColumnMenuItemProps, type GridColumnMenuProps, type GridRowProps, type GridRowSelectionModel, type GridSortModel } from "@mui/x-data-grid";
+import { GridColumnMenu, gridFilteredSortedRowIdsSelector, useGridApiRef, type GridColDef, type GridFilterModel, type GridColumnMenuItemProps, type GridColumnMenuProps, type GridRowProps, type GridRowSelectionModel, type GridSortModel } from "@mui/x-data-grid";
 import ListItemIcon from "@mui/material/ListItemIcon";
 import ListItemText from "@mui/material/ListItemText";
 import Menu from "@mui/material/Menu";
@@ -303,6 +303,10 @@ export function AssetList({
   const [filters, setFilters] = useState<Filters>(EMPTY);
   // 点表头排的序；空的时候按编号排（见 shown）。
   const [sortModel, setSortModel] = useState<GridSortModel>([]);
+  // 表头菜单里的筛选，在上面那排筛完的基础上再筛。不记在浏览器里，刷新就没了。
+  const [columnFilter, setColumnFilter] = useState<GridFilterModel>({ items: [] });
+  const [gridIds, setGridIds] = useState<Set<string> | null>(null);
+  const apiRef = useGridApiRef();
   const [picked, setPicked] = useState<string[]>([]);
   const [exporting, setExporting] = useState(false);
   const [batching, setBatching] = useState(false);
@@ -402,6 +406,7 @@ export function AssetList({
   // 记着的筛选和地址栏带的筛选一起清掉，不然刷新、再进这页又筛回去了；点表头排的序也回到按编号排。
   function clearFilters() {
     saveFilters(EMPTY);
+    setColumnFilter({ items: [] });
     setSortModel([]);
     const url = new URL(window.location.href);
     const keys = Object.keys(EMPTY).filter((key) => url.searchParams.has(key));
@@ -412,7 +417,18 @@ export function AssetList({
   }
 
   const shown = useMemo(() => rows.filter((row) => matches(row, filters)).sort((a, b) => tagCompare(a.tag, b.tag)), [rows, filters]);
-  const filtering = Object.values(filters).some(Boolean);
+  // 表头筛选只算填了值的条件（「为空」「不为空」不用填值）。
+  const columnFiltering = columnFilter.items.some((item) => ["isEmpty", "isNotEmpty"].includes(item.operator) || (item.value !== undefined && item.value !== "" && !(Array.isArray(item.value) && !item.value.length)));
+  const filtering = Object.values(filters).some(Boolean) || columnFiltering;
+
+  // 表头筛选后表格里实际剩哪些行，「筛选后几台」、选中筛选出的、导出都按它算。
+  useEffect(() => {
+    const api = apiRef.current;
+    if (!api) return;
+    const update = () => setGridIds(new Set(gridFilteredSortedRowIdsSelector(apiRef).map(String)));
+    update();
+    return api.subscribeEvent("filteredRowsSet", update);
+  }, [apiRef, rows.length]);
   // 一次搜了好几项（如贴了一串 SN）时，列出哪几项一台都没对上。
   const terms = useMemo(() => searchTerms(filters.q), [filters.q]);
   const missingTerms = useMemo(() => {
@@ -421,7 +437,7 @@ export function AssetList({
     return terms.filter((term) => !texts.some((text) => text.includes(term)));
   }, [terms, shown]);
   const sideRow = rows.find((row) => row.id === sideId) || null;
-  const shownIds = useMemo(() => shown.map((row) => row.id), [shown]);
+  const shownIds = useMemo(() => shown.filter((row) => !columnFiltering || !gridIds || gridIds.has(row.id)).map((row) => row.id), [shown, columnFiltering, gridIds]);
   const unpickedShown = shownIds.filter((id) => !picked.includes(id)).length;
 
   // 表格只管当前显示的行；被筛掉但之前勾过的照样留着，和以前一样。
@@ -720,11 +736,11 @@ export function AssetList({
 
       <Stack direction="row" useFlexGap spacing={1} sx={{ flexWrap: "wrap", alignItems: "center" }}>
         <Typography variant="body2" sx={{ color: "text.secondary" }}>
-          共 {rows.length} 台{filtering ? `，筛选后 ${shown.length} 台` : ""}
+          共 {rows.length} 台{filtering ? `，筛选后 ${shownIds.length} 台` : ""}
           {picked.length ? `，选中 ${picked.length} 台` : ""}。
         </Typography>
         {filtering && unpickedShown ? (
-          <Button onClick={() => setPicked((list) => [...list, ...shownIds.filter((id) => !list.includes(id))])}>{`选中筛选出的 ${shown.length} 台`}</Button>
+          <Button onClick={() => setPicked((list) => [...list, ...shownIds.filter((id) => !list.includes(id))])}>{`选中筛选出的 ${shownIds.length} 台`}</Button>
         ) : null}
         {!filtering && unpickedShown ? <Button onClick={() => setPicked(shownIds)}>{`全选 ${rows.length} 台`}</Button> : null}
         {picked.length ? <Button onClick={() => setPicked([])}>取消选择</Button> : null}
@@ -738,8 +754,9 @@ export function AssetList({
             rows={shown}
             columns={shownColumns}
             checkboxSelection
-            // 只用上面那排筛选：表头菜单里的筛选「清除筛选」管不到，「筛选后几台」、导出、批量选也不认。
-            disableColumnFilter
+            apiRef={apiRef}
+            filterModel={columnFilter}
+            onFilterModelChange={setColumnFilter}
             sortModel={sortModel}
             onSortModelChange={setSortModel}
             rowSelectionModel={selection}
