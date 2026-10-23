@@ -106,6 +106,7 @@ const WRITES: [RegExp, Permission | null][] = [
   [/^\/api\/assets\/[^/]+\/redfish$/, "bmc.settings"],
   [/^\/api\/assets\/[^/]+\/bmc-users$/, "bmc.users"],
   [/^\/api\/assets\/[^/]+\/bmc-cert$/, "bmc.settings"],
+  [/^\/api\/assets\/[^/]+\/install$/, "install"],
   [/^\/api\/(assets|assets\/import|assets\/[^/]+|import-jobs(\/.*)?)$/, "assets.edit"],
   [/^\/api\/(customers|datacenters|sites|racks)(\/.*)?$/, "dc.edit"],
   [/^\/api\/(images|profiles)(\/.*)?$/, "images"],

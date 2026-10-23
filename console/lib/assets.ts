@@ -694,7 +694,8 @@ export function syncAssetFromRow(previous: ServerRow | undefined, row: ServerRow
     if (changed("osNetmask") && row.osNetmask) record.osNetmask = row.osNetmask;
     const account = rowAccount(row);
     const old = previous ? rowAccount(previous) : null;
-    if (account.user && account.password && (!old || JSON.stringify(old) !== JSON.stringify(account))) {
+    // 单台装机的行用的就是资产上的账号，不同步回去，免得把备用账号盖成主账号。
+    if (!row.managed && account.user && account.password && (!old || JSON.stringify(old) !== JSON.stringify(account))) {
       record.bmcUser = account.user;
       record.bmcPassword = account.password;
       record.bmcFallbackUser = account.fallbackUser;

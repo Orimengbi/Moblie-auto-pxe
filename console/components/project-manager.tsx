@@ -132,7 +132,8 @@ export function ProjectManager({ projects }: { projects: Project[] }) {
                   <Button variant="outlined" component={Link} href={`/projects/${project.id}`}>
                     进入批次
                   </Button>
-                  {canDelete ? (
+                  {/* 「单台装机」是资产侧边栏「装机」用的常驻批次，不能删。 */}
+                  {canDelete && project.kind !== "single" ? (
                     <Button color="error" onClick={() => remove(project.id)}>
                       删除
                     </Button>

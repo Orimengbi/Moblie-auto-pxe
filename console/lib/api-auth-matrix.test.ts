@@ -16,6 +16,7 @@ const EXPECTED = [
   "POST /api/assets/x1/bmc-cert bmc.settings",
   "POST /api/assets/x1/bmc-users bmc.users",
   "POST /api/assets/x1/control power",
+  "POST /api/assets/x1/install install",
   "POST /api/assets/x1/monitor refresh",
   "POST /api/assets/x1/network/baseline assets.edit",
   "POST /api/assets/x1/network refresh",

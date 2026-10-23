@@ -27,8 +27,8 @@ import {
   renderNicScript,
   renderUbuntuAutoinstall,
 } from "./render.ts";
-import { assetPowerState, bindServerBoot, controlAsset, removeAsset, createIpmi, deleteProject, deleteServer, saveServer, getTask, listMachines, listServers, markServerInstalled, requestReinstall, saveFile, createNic, createProfile, createProject, createReport, customizationForMac, getIpmiBySn, getMachine, getProject, getState, importProjectPlan, importServerSheet, listImages, listNicsBySn, listProjects, publicServer, reconcileServers, renameProject, saveMachine, saveMachineFact, saveNetwork, setProjectEnabled, updateProjectNetwork } from "./store.ts";
-import { getAsset, updateAsset } from "./assets.ts";
+import { planSingleInstall, singleProject, assetPowerState, bindServerBoot, controlAsset, removeAsset, createIpmi, deleteProject, deleteServer, saveServer, getTask, listMachines, listServers, markServerInstalled, requestReinstall, saveFile, createNic, createProfile, createProject, createReport, customizationForMac, getIpmiBySn, getMachine, getProject, getState, importProjectPlan, importServerSheet, listImages, listNicsBySn, listProjects, publicServer, reconcileServers, renameProject, saveMachine, saveMachineFact, saveNetwork, setProjectEnabled, updateProjectNetwork } from "./store.ts";
+import { createAsset, getAsset, updateAsset } from "./assets.ts";
 import { DEFAULT_STATE, type ImageRecord, type Profile } from "./types.ts";
 
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "pxe-test-"));
@@ -1023,4 +1023,72 @@ test("extract is refused when the peak would fill the data disk", () => {
   assert.throws(() => assertExtractFits("tree", 6.5 * GB, 8 * GB), /还要再占 6\.5 GB.*只剩 8\.0 GB/);
   assertExtractFits("disk", 10 * GB, 16 * GB);
   assert.throws(() => assertExtractFits("disk", 10 * GB, 15.9 * GB), /峰值约 2\.4 倍.*还要再占 14\.0 GB/);
+});
+
+test("single install boots a managed server from the asset's bmc without touching its accounts", async () => {
+  for (const project of listProjects()) if (project.enabled) await setProjectEnabled(project.id, false);
+  const asset = createAsset({ sn: "SN-SINGLE1", type: "server", status: "active", bmcIp: "10.9.0.5", bmcUser: "ops", bmcPassword: "ops-pass", bmcFallbackUser: "ADMIN", bmcFallbackPassword: "old-pass" }, "测试");
+  await assert.rejects(planSingleInstall(asset.id, { osName: "单台 Ubuntu" }), /还没写 DHCP/);
+
+  const single = await singleProject();
+  assert.equal(single.kind, "single");
+  assert.equal((await singleProject()).id, single.id, "只建一个常驻批次");
+  await assert.rejects(deleteProject(single.id), /常驻批次，不能删/);
+  await updateProjectNetwork(single.id, {
+    dhcp: { start: "192.168.77.100", end: "192.168.77.200", netmask: "255.255.255.0", gateway: "192.168.77.1", dns: "", serverIp: "192.168.77.1", leaseHours: 2 },
+  });
+  await assert.rejects(planSingleInstall(asset.id, { osName: "单台 Ubuntu" }), /没有名为「单台 Ubuntu」的安装设置/);
+  await createProfile({ name: "单台 Ubuntu", projectId: single.id, imageId: ubuntu.id, hostnamePattern: "srv-{{mac_last4}}", username: "ops", password: "install-pass", diskPolicy: "largest", packages: [], postScript: "" });
+
+  const busy = await createProject({ name: "正在批量装" });
+  await updateProjectNetwork(busy.id, {
+    dhcp: { start: "192.168.77.10", end: "192.168.77.50", netmask: "255.255.255.0", gateway: "192.168.77.1", dns: "", serverIp: "192.168.77.1", leaseHours: 2 },
+  });
+  await setProjectEnabled(busy.id, true);
+  await assert.rejects(planSingleInstall(asset.id, { osName: "单台 Ubuntu" }), /「正在批量装」正开着/);
+  assert.equal(getProject(busy.id)?.enabled, true, "不抢别的批次的开关");
+  await setProjectEnabled(busy.id, false);
+
+  const { project, row } = await planSingleInstall(asset.id, { osName: "单台 Ubuntu", osAddress: "10.50.0.31", osNetmask: "24" });
+  assert.equal(project.enabled, true);
+  assert.equal(row.managed, true);
+  assert.equal(row.bmcIp, "10.9.0.5");
+  assert.equal(row.ipmiMac, "", "资产没记 BMC MAC 也能装");
+  assert.equal(row.osAddress, "10.50.0.31");
+
+  const calls: { user: string; args: string[] }[] = [];
+  const exec = async (_host: string, user: string, _password: string, args: string[]) => {
+    calls.push({ user, args });
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  await reconcileServers(project.id, { exec, leasesText: "" });
+  assert.equal(calls.some((call) => call.args[0] === "user" || call.args[0] === "lan" && call.args[1] === "set"), false, "不改账号、不改 IPMI 网络");
+  assert.deepEqual(calls.filter((call) => call.args[0] === "chassis" && call.args[1] === "bootdev").map((call) => call.user), ["ops"]);
+  assert.equal(listServers().find((item) => item.id === row.id)?.stage, "ready");
+
+  const bound = await bindServerBoot("SN-SINGLE1", "aa:bb:cc:dd:ee:a1");
+  assert.equal(bound?.stage, "installing");
+  const after = getAsset(asset.id);
+  assert.equal(after?.status, "installing");
+  assert.equal(after?.bmcUser, "ops");
+  assert.equal(after?.bmcFallbackUser, "ADMIN", "备用账号不被盖掉");
+
+  // 再点一次「装机」就是重装：同一行改回等待，不会多出一行。
+  await markServerInstalled("SN-SINGLE1");
+  const again = await planSingleInstall(asset.id, { osName: "单台 Ubuntu" });
+  assert.equal(again.row.id, row.id);
+  assert.equal(again.row.installed, "no");
+  assert.equal(listServers().filter((item) => item.projectId === project.id).length, 1);
+
+  // 主账号被拒、备用账号能登录：改用备用账号让它从网卡启动，还是不改 BMC 上的账号。
+  const denied: { user: string; args: string[] }[] = [];
+  const deniedExec = async (_host: string, user: string, _password: string, args: string[]) => {
+    denied.push({ user, args });
+    if (user === "ops") return { code: 1, stdout: "", stderr: "Error: Unable to establish IPMI v2 / RMCP+ session\nRAKP 2 HMAC is invalid" };
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  await reconcileServers(project.id, { exec: deniedExec, leasesText: "" });
+  assert.equal(denied.some((call) => call.args[0] === "user"), false);
+  assert.deepEqual(denied.filter((call) => call.args[0] === "chassis" && call.args[1] === "bootdev").map((call) => call.user), ["ADMIN"]);
+  assert.equal(getAsset(asset.id)?.bmcUser, "ops", "资产上的账号不跟着换");
 });

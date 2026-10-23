@@ -488,6 +488,32 @@ export function activeProject(): Project | null {
   return listProjects().find((project) => project.enabled && project.dhcp) || null;
 }
 
+/** 常驻的「单台装机」批次。还没有就建一个（没写 DHCP、没打开），调用方要在锁里。 */
+function ensureSingleProject(): Project {
+  const found = listProjects().find((project) => project.kind === "single");
+  if (found) return found;
+  const now = new Date().toISOString();
+  const project: Project = {
+    id: crypto.randomUUID(),
+    name: SINGLE_PROJECT_NAME,
+    note: "资产侧边栏「装机」用的批次：在这里写一次 DHCP 和安装设置，之后单台装机不用再建批次、填服务器表",
+    kind: "single",
+    enabled: false,
+    dhcp: null,
+    fixed: null,
+    createdAt: now,
+    updatedAt: now,
+  };
+  writeJson(projectPath(project.id), project);
+  return project;
+}
+
+export const SINGLE_PROJECT_NAME = "单台装机";
+
+export function singleProject(): Promise<Project> {
+  return withLock(ensureSingleProject);
+}
+
 export function profilesForProject(projectId: string): Profile[] {
   return listProfiles().filter((profile) => profile.projectId === projectId);
 }
@@ -612,6 +638,7 @@ export async function deleteProject(id: string): Promise<void> {
   return withLock(() => {
     const existing = getProject(id);
     if (!existing) throw new Error("项目不存在");
+    if (existing.kind === "single") throw new Error("「单台装机」是常驻批次，不能删。不用时把开关关掉就行");
     const profileIds = new Set(profilesForProject(id).map((profile) => profile.id));
     for (const machine of listMachines()) {
       if (machine.projectId === id) fs.rmSync(machinePath(machine.mac), { force: true });
@@ -1338,6 +1365,7 @@ function buildServerRow(
   label: string,
   now: string,
   siblings: ServerRow[] = listServers().filter((item) => item.projectId === project.id),
+  options: { managed?: boolean } = {},
 ): { row: ServerRow; problems: string[] } {
   const problems: string[] = [];
   let sn = "";
@@ -1350,7 +1378,8 @@ function buildServerRow(
   let ipmiMac = "";
   try {
     ipmiMac = cells.ipmiMac ? normalizeMac(cells.ipmiMac) : "";
-    if (!ipmiMac) problems.push("没有 IPMI MAC");
+    // 单台装机直接用资产上的 BMC 地址，不靠 DHCP 租约按 MAC 找。
+    if (!ipmiMac && !options.managed) problems.push("没有 IPMI MAC");
   } catch (error) {
     problems.push(problemOf(error, "IPMI MAC 不合法"));
   }
@@ -1579,7 +1608,12 @@ async function reconcileOnce(projectId: string, options?: ReconcileOptions): Pro
           const original = await probeIpmi(row.bmcIp, row.originalUser, row.originalPassword, exec);
           if (original.link === "up") {
             probed = original;
-            row.passwordChanged = false;
+            if (row.managed) {
+              // 单台装机不改 BMC 账号：资产主账号不认、备用账号能登录，就改用备用账号。
+              [row.targetUser, row.targetPassword, row.originalUser, row.originalPassword] = [row.originalUser, row.originalPassword, row.targetUser, row.targetPassword];
+            } else {
+              row.passwordChanged = false;
+            }
           }
         }
         row.ipmiLink = probed.link;
@@ -1629,7 +1663,7 @@ async function reconcileOnce(projectId: string, options?: ReconcileOptions): Pro
           row.bmcIp = row.ipmiAddress;
           row.ipSource = "static";
         }
-        if (!row.passwordChanged) {
+        if (!row.passwordChanged && !row.managed) {
           await changeIpmiAccount(
             {
               host: row.bmcIp,
@@ -1648,7 +1682,7 @@ async function reconcileOnce(projectId: string, options?: ReconcileOptions): Pro
         } else if (row.stage !== "ready") {
           await bootFromPxe(row.bmcIp, row.targetUser, row.targetPassword, exec);
           row.stage = "ready";
-          row.detail = `已把 IPMI 账号改成 ${row.targetUser}，并让 ${row.bmcIp} 从网卡启动`;
+          row.detail = row.managed ? `已让 ${row.bmcIp} 从网卡启动，等它开机进装机菜单` : `已把 IPMI 账号改成 ${row.targetUser}，并让 ${row.bmcIp} 从网卡启动`;
         }
       } catch (error) {
         row.stage = "error";
@@ -1946,6 +1980,82 @@ export async function requestReinstall(projectId: string, serverId: string): Pro
     row.updatedAt = new Date().toISOString();
     writeServer(row);
     return row;
+  });
+}
+
+export interface SingleInstallInput {
+  osName: string;
+  customization?: string;
+  osAddress?: string;
+  osNetmask?: string;
+  osGateway?: string;
+  osDns?: string;
+  osNic?: string;
+}
+
+/**
+ * 单台装机：把一台已经入库、BMC 配好的服务器放进「单台装机」批次，按资产上的 BMC 地址和账号让它从网卡启动。
+ * 这台已经在里面就改成这次的系统和地址，当成重装。别的批次开着时不抢它的开关，让人先关掉。
+ * 只写行、开开关；让 BMC 从网卡启动由调用方接着跑一次 reconcileServers。
+ */
+export async function planSingleInstall(assetId: string, input: SingleInstallInput): Promise<{ project: Project; row: ServerRow }> {
+  return withLock(() => {
+    const asset = getAsset(assetId);
+    if (!asset) throw new Error("资产不存在");
+    if (asset.type !== "server") throw new Error("只有服务器能装机");
+    if (!asset.bmcIp) throw new Error("这台还没有 BMC 地址，先在「概况」里填上");
+    const accounts = assetBmcAccounts(asset);
+    if (!accounts.length) throw new Error("这台没有 BMC 账号密码，先在「概况」里填上");
+    let project = ensureSingleProject();
+    if (!project.dhcp) throw new Error(`「${project.name}」批次还没写 DHCP，先去批次页写好 DHCP 和安装设置`);
+    const other = listProjects().find((item) => item.enabled && item.id !== project.id);
+    if (other) throw new Error(`装机批次「${other.name}」正开着，同时只能开一个批次。先在批次页关掉它再单台装机`);
+    const osName = input.osName.trim();
+    if (!profilesForProject(project.id).some((item) => item.name === osName)) throw new Error(`「${project.name}」批次里没有名为「${osName}」的安装设置`);
+    const siblings = listServers().filter((item) => item.projectId === project.id);
+    const existing = siblings.find((item) => item.assetId === asset.id || item.sn === asset.sn);
+    const [target, original = target] = accounts;
+    const cells: ServerCells = {
+      sn: asset.sn,
+      ipmiMac: asset.bmcMac,
+      originalUser: original.user,
+      originalPassword: original.password,
+      targetUser: target.user,
+      targetPassword: target.password,
+      osName,
+      customization: input.customization || "",
+      ipmiAddress: "",
+      ipmiNetmask: "",
+      ipmiGateway: "",
+      ipmiVlan: "",
+      osAddress: input.osAddress || "",
+      osNetmask: input.osNetmask || "",
+      osGateway: input.osGateway || "",
+      osDns: input.osDns || "",
+      osNic: input.osNic || "",
+    };
+    const now = new Date().toISOString();
+    const { row, problems } = buildServerRow(project, cells, existing, "这一台", now, siblings, { managed: true });
+    if (problems.length) throw new Error(problems.join("；"));
+    const ready: ServerRow = {
+      ...row,
+      assetId: asset.id,
+      managed: true,
+      bmcIp: asset.bmcIp,
+      passwordChanged: true,
+      networkApplied: true,
+      ipmiLink: "unknown",
+      installed: "no",
+      stage: "waiting",
+      detail: "等待让它从网卡启动",
+    };
+    writeServer(ready);
+    if (!project.enabled) {
+      project = { ...project, enabled: true, updatedAt: now };
+      writeJson(projectPath(project.id), project);
+      syncBootFiles(getState().network);
+    }
+    return { project, row: ready };
   });
 }
 

@@ -103,6 +103,8 @@ export interface Project {
   id: string;
   name: string;
   note: string;
+  /** single：常驻的「单台装机」批次，资产侧边栏点「装机」时用它，不能删。普通批次没有这一项。 */
+  kind?: "single";
   enabled: boolean;
   dhcp: ProjectDhcp | null;
   fixed: ProjectFixed | null;
@@ -169,6 +171,11 @@ export interface ServerRow {
   /** 业务网卡：接口名或 MAC。留空时自动挑一块不是 PXE 口的物理网卡。 */
   osNic?: string;
   passwordChanged: boolean;
+  /**
+   * 从资产侧边栏单台装机加的行：BMC 已经配好，用资产上的地址和账号（目标账号是资产主账号，原账号是备用账号），
+   * 不按 DHCP 租约找 BMC、不改 IPMI 网络和账号，也不把账号同步回资产。
+   */
+  managed?: boolean;
   canApply: boolean;
   ipmiLink: IpmiLink;
   ipSource: IpSource;
