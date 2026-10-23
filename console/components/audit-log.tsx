@@ -11,6 +11,7 @@ import { type GridColDef, type GridPaginationModel } from "@mui/x-data-grid";
 import { ScrollGrid } from "@/components/mui/scroll-grid";
 import type { AuditEntry } from "@/lib/types";
 import { formatTime } from "@/lib/time";
+import { ipCompare } from "@/lib/ip-order";
 import { gridText } from "@/components/mui/theme";
 
 const MONO = '"SF Mono", ui-monospace, var(--font-geist-mono), monospace';
@@ -18,7 +19,7 @@ const MONO = '"SF Mono", ui-monospace, var(--font-geist-mono), monospace';
 const COLUMNS: GridColDef<AuditEntry>[] = [
   { field: "at", headerName: "时间", width: 160, renderCell: ({ row }) => <Box sx={{ fontSize: 12, whiteSpace: "nowrap" }}>{formatTime(row.at)}</Box> },
   { field: "actor", headerName: "用户", width: 110 },
-  { field: "ip", headerName: "来源", width: 130, renderCell: ({ row }) => <Box sx={{ fontFamily: MONO, fontSize: 12 }}>{row.ip}</Box> },
+  { field: "ip", headerName: "来源", width: 130, sortComparator: ipCompare, renderCell: ({ row }) => <Box sx={{ fontFamily: MONO, fontSize: 12 }}>{row.ip}</Box> },
   {
     field: "action",
     headerName: "动作",

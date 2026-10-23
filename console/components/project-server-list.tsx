@@ -18,6 +18,7 @@ import { ServerSidebar } from "@/components/server-sidebar";
 import { RemoteConsole } from "@/components/remote-console";
 import { InventoryCollectDialog, type CollectTarget } from "@/components/inventory-collect-dialog";
 import { ServerPowerDialog } from "@/components/server-power-dialog";
+import { ipKey } from "@/lib/ip-order";
 import type { Tone } from "@/lib/asset-labels";
 import type { InstallState, InventoryStatus, IpmiLink, IpSource, PowerState, RemoteFile, RemoteTask, ServerImportReport, ServerRow, ServerStage, TaskHostSource } from "@/lib/types";
 import { formatTime } from "@/lib/time";
@@ -88,10 +89,6 @@ function collectedLine(label: string, item: InventoryStatus["os"]): string {
 }
 
 /** IP 按每段数字比，不按字符串比。 */
-function ipKey(ip: string | undefined): string {
-  return ip && /^\d+(\.\d+){3}$/.test(ip) ? ip.split(".").map((part) => part.padStart(3, "0")).join(".") : ip || "";
-}
-
 interface Column {
   key: string;
   label: string;

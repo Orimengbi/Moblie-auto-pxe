@@ -43,6 +43,7 @@ import { ServerPowerDialog } from "@/components/server-power-dialog";
 import { ServerSidebar, type Tab as SidebarTab } from "@/components/server-sidebar";
 import type { AssetRow } from "@/lib/asset-view";
 import { ASSET_STATUS, ASSET_STATUS_TONE, ASSET_TYPES, HEALTH_LABEL, HEALTH_TONE, WARRANTY_LABEL } from "@/lib/asset-labels";
+import { ipCompare } from "@/lib/ip-order";
 import type { AssetHealth, PowerState, Customer, Datacenter, RemoteFile, Site } from "@/lib/types";
 import { SiteOptions } from "@/components/site-options";
 import { matchesSearch, pasteAsList, searchTerms } from "@/lib/search";
@@ -211,11 +212,12 @@ function Dash() {
 const tagCompare = (a: string, b: string) => a.localeCompare(b, "zh-CN", { numeric: true });
 
 /** 一格普通文字的列。mono 用等宽字（地址、MAC、单号）。 */
-function textColumn(field: string, headerName: string, value: (row: AssetRow) => string, width = 130, mono = false): GridColDef<AssetRow> {
+function textColumn(field: string, headerName: string, value: (row: AssetRow) => string, width = 130, mono = false, sortComparator?: GridColDef<AssetRow>["sortComparator"]): GridColDef<AssetRow> {
   return {
     field,
     headerName,
     width,
+    sortComparator,
     valueGetter: (_value, row) => value(row),
     renderCell: ({ value: text }) => (text ? <Box sx={{ fontSize: 12, fontFamily: mono ? MONO : undefined, whiteSpace: "normal", wordBreak: "break-word" }}>{text}</Box> : <Dash />),
   };
@@ -229,7 +231,7 @@ const EXTRA_COLUMNS: GridColDef<AssetRow>[] = [
   textColumn("owner", "负责人", (row) => row.owner, 100),
   textColumn("location", "位置备注", (row) => row.location, 140),
   textColumn("hostname", "主机名", (row) => row.hostname, 140, true),
-  textColumn("osAddress", "系统地址（资产里填的）", (row) => row.osAddress, 130, true),
+  textColumn("osAddress", "系统地址（资产里填的）", (row) => row.osAddress, 130, true, ipCompare),
   textColumn("bmcMac", "BMC MAC", (row) => row.bmcMac, 150, true),
   textColumn("bootMac", "装机网卡 MAC", (row) => row.bootMac, 150, true),
   textColumn("batch", "装机批次", (row) => row.batch?.name || "", 140),
@@ -493,6 +495,7 @@ export function AssetList({
         headerName: "BMC",
         width: 150,
         valueGetter: (_value, row) => row.bmcIp || row.mgmtIp || "",
+        sortComparator: ipCompare,
         renderCell: ({ row }) => (
           <Box sx={{ fontFamily: MONO, fontSize: 12 }}>
             {row.bmcIp || (row.mgmtIp ? "" : "—")}
@@ -504,6 +507,7 @@ export function AssetList({
         field: "host",
         headerName: "系统地址",
         width: 130,
+        sortComparator: ipCompare,
         renderCell: ({ row }) => (
           <Box title={row.hostSource ? HOST_SOURCE[row.hostSource] : undefined} sx={{ fontFamily: MONO, fontSize: 12 }}>
             {row.host || "—"}
