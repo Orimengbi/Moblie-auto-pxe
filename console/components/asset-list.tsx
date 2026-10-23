@@ -384,13 +384,27 @@ export function AssetList({
     }
   }
 
-  function setFilter(key: keyof Filters, value: string) {
-    const next = { ...filters, [key]: value };
+  function saveFilters(next: Filters) {
     setFilters(next);
     try {
       localStorage.setItem("pxe-asset-filters", JSON.stringify(next));
     } catch {
       // 存不了也照样能筛。
+    }
+  }
+
+  function setFilter(key: keyof Filters, value: string) {
+    saveFilters({ ...filters, [key]: value });
+  }
+
+  // 记着的筛选和地址栏带的筛选一起清掉，不然刷新、再进这页又筛回去了。
+  function clearFilters() {
+    saveFilters(EMPTY);
+    const url = new URL(window.location.href);
+    const keys = Object.keys(EMPTY).filter((key) => url.searchParams.has(key));
+    if (keys.length) {
+      for (const key of keys) url.searchParams.delete(key);
+      window.history.replaceState(null, "", url.pathname + url.search);
     }
   }
 
@@ -645,7 +659,7 @@ export function AssetList({
           control={<Checkbox checked={Boolean(filters.warranty)} onChange={(event) => setFilter("warranty", event.target.checked ? "1" : "")} />}
           label={<Typography variant="body2">只看过保和快到期的</Typography>}
         />
-        {filtering ? <Button onClick={() => setFilters(EMPTY)}>清除筛选</Button> : null}
+        {filtering ? <Button onClick={clearFilters}>清除筛选</Button> : null}
         <Stack direction="row" useFlexGap spacing={1} sx={{ ml: "auto", flexWrap: "wrap" }}>
           {/* 只有这一个入口；勾了机器时变成主按钮并带上台数。 */}
           <Button variant={picked.length ? "contained" : "outlined"} onClick={() => setBatching(true)}>
@@ -721,6 +735,8 @@ export function AssetList({
             rows={shown}
             columns={shownColumns}
             checkboxSelection
+            // 只用上面那排筛选：表头菜单里的筛选「清除筛选」管不到，「筛选后几台」、导出、批量选也不认。
+            disableColumnFilter
             rowSelectionModel={selection}
             onRowSelectionModelChange={onSelection}
             onColumnWidthChange={({ colDef, width }) => saveWidth(colDef.field, width)}
