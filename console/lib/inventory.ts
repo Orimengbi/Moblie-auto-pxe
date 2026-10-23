@@ -586,8 +586,13 @@ export function redfishComponents(raw: RedfishRaw): HwComponent[] {
     );
   }
 
+  // 同一块盘从 Storage 和机箱两条路读到、路径又不一样时，按序列号只算一次。
+  const driveSns = new Set<string>();
   for (const doc of raw.drives) {
     if (rfState(doc) === "Absent") continue;
+    const driveSn = rfStr(doc, "SerialNumber");
+    if (driveSn && driveSns.has(driveSn)) continue;
+    if (driveSn) driveSns.add(driveSn);
     const bytes = num(doc.CapacityBytes) || 0;
     components.push(
       component("disk", rfId(doc), {

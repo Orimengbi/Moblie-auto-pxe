@@ -345,7 +345,7 @@ export async function crawlRedfish(get: RedfishGet, options: { expand?: boolean;
     }
   }
 
-  if (plan.nics || plan.power || plan.slots) raw.chassis = await many(link(root, "Chassis") || "/redfish/v1/Chassis", errors);
+  if (plan.nics || plan.power || plan.slots || plan.drives) raw.chassis = await many(link(root, "Chassis") || "/redfish/v1/Chassis", errors);
   // 带 GPU 底板的机器有上百个机箱，几个一起读。
   await eachLimit(raw.chassis, 4, async (chassis) => {
     if (plan.slots) raw.pcieDevices.push(...(await many(link(chassis, "PCIeDevices"), errors)));
@@ -364,6 +364,26 @@ export async function crawlRedfish(get: RedfishGet, options: { expand?: boolean;
       raw.powerSupplies.push(...list);
     }
   });
+
+  // 超聚变 iBMC 的 Storages 下只有 RAID 卡管的盘，直通的 NVMe、SATA 只挂在机箱的 Links.Drives 里；新的 BMC 还有 Chassis/*/Drives 集合。
+  if (plan.drives) {
+    const seen = new Set(raw.drives.map((doc) => String(doc["@odata.id"] || "")));
+    const paths: string[] = [];
+    for (const chassis of raw.chassis) {
+      const links = (chassis.Links as { Drives?: unknown } | undefined)?.Drives;
+      for (const item of Array.isArray(links) ? links : []) {
+        const id = (item as { "@odata.id"?: string })?.["@odata.id"];
+        if (typeof id === "string" && !seen.has(id)) {
+          seen.add(id);
+          paths.push(id);
+        }
+      }
+    }
+    raw.drives.push(...(await fetchAll(get, paths, errors)));
+    await eachLimit(raw.chassis, 4, async (chassis) => {
+      if (link(chassis, "Drives")) raw.drives.push(...(await many(link(chassis, "Drives"), errors)).filter((doc) => !seen.has(String(doc["@odata.id"] || ""))));
+    });
+  }
 
   // 网卡的口：新的 BMC 在 Ports 下，旧的在 NetworkPorts 下。HGX 会把同一块卡列两遍，口按 @odata.id 去重。
   await eachLimit(raw.networkAdapters, 4, async (adapter) => {

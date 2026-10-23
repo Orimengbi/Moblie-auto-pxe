@@ -384,6 +384,26 @@ test("walks Redfish across pages and maps it to components", async () => {
   assert.match(flaky.errors.join(), /Memory：超时/);
 });
 
+test("finds xFusion pass-through drives that only the chassis links to", async () => {
+  // 超聚变 iBMC：没有 RAID 卡时 Storages 是空的，盘只在 Chassis/1 的 Links.Drives 里；RAID 卡下的盘两边都有。
+  const ibmc: Record<string, RedfishDoc> = {
+    "/redfish/v1/": { Systems: { "@odata.id": "/redfish/v1/Systems" }, Chassis: { "@odata.id": "/redfish/v1/Chassis" } },
+    "/redfish/v1/Systems": { Members: [{ "@odata.id": "/redfish/v1/Systems/1" }] },
+    "/redfish/v1/Systems/1": { "@odata.id": "/redfish/v1/Systems/1", Id: "1", Manufacturer: "XFUSION", Model: "2258H V8", Storage: { "@odata.id": "/redfish/v1/Systems/1/Storages" } },
+    "/redfish/v1/Systems/1/Storages": { Members: [{ "@odata.id": "/redfish/v1/Systems/1/Storages/RAIDStorage0" }] },
+    "/redfish/v1/Systems/1/Storages/RAIDStorage0": { "@odata.id": "/redfish/v1/Systems/1/Storages/RAIDStorage0", Drives: [{ "@odata.id": "/redfish/v1/Chassis/1/Drives/HDDPlaneDisk0" }] },
+    "/redfish/v1/Chassis": { Members: [{ "@odata.id": "/redfish/v1/Chassis/1" }] },
+    "/redfish/v1/Chassis/1": { "@odata.id": "/redfish/v1/Chassis/1", Id: "1", Links: { Drives: [{ "@odata.id": "/redfish/v1/Chassis/1/Drives/HDDPlaneDisk0" }, { "@odata.id": "/redfish/v1/Chassis/1/Drives/HDDPlaneDisk8" }, { "@odata.id": "/redfish/v1/Chassis/1/Drives/HDDPlaneDisk9" }] } },
+    "/redfish/v1/Chassis/1/Drives/HDDPlaneDisk0": { "@odata.id": "/redfish/v1/Chassis/1/Drives/HDDPlaneDisk0", Id: "HDDPlaneDisk0", Model: "SAMSUNG MZ7L3480", SerialNumber: "S6KMNA0W100001", CapacityBytes: 480103981056, MediaType: "SSD", Protocol: "SATA", Status: { State: "Enabled" } },
+    "/redfish/v1/Chassis/1/Drives/HDDPlaneDisk8": { "@odata.id": "/redfish/v1/Chassis/1/Drives/HDDPlaneDisk8", Id: "HDDPlaneDisk8", Model: "KCD8XPUG7T68", SerialNumber: "X3T0A0F1T8M8", CapacityBytes: 7681501126656, MediaType: "SSD", Protocol: "NVMe", Status: { State: "Enabled" } },
+    "/redfish/v1/Chassis/1/Drives/HDDPlaneDisk9": { "@odata.id": "/redfish/v1/Chassis/1/Drives/HDDPlaneDisk9", Id: "HDDPlaneDisk9", Status: { State: "Absent" } },
+  };
+  const raw = await crawlRedfish(async (p) => ibmc[p] ?? null, { kinds: ["disk"] });
+  assert.deepEqual(raw.errors, []);
+  const disks = redfishComponents(raw).filter((c) => c.kind === "disk");
+  assert.deepEqual(disks.map((c) => [c.slot, c.sn]), [["HDDPlaneDisk0", "S6KMNA0W100001"], ["HDDPlaneDisk8", "X3T0A0F1T8M8"]], "RAID 卡下的盘不重复，空盘位不算");
+});
+
 test("reads only what the picked part kinds need from Redfish", async () => {
   const asked: string[] = [];
   const get: RedfishGet = async (p) => {
