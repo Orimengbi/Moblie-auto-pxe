@@ -487,3 +487,9 @@ test("a firmware read with the host off keeps the last HGX versions", () => {
   const on = bmc.saveFirmwareSnapshot("asset-hgx", [item("BIOS", "R08"), item("HGX_FW_GPU_0", "97.11")]).data;
   assert.deepEqual(on.map((entry) => [entry.id, entry.version, entry.keptFrom || ""]), [["BIOS", "R08", ""], ["HGX_FW_GPU_0", "97.11", ""]]);
 });
+
+test("BMCs without an event stream are rechecked every few hours, not treated as dropped", () => {
+  assert.deepEqual([0, 1, 4, 9].map((n) => events.retryDelay(n, false)), [10_000, 30_000, 300_000, 300_000]);
+  assert.equal(events.retryDelay(0, true), events.UNSUPPORTED_RECHECK_MS);
+  assert.equal(events.UNSUPPORTED_RECHECK_MS, 6 * 60 * 60_000);
+});

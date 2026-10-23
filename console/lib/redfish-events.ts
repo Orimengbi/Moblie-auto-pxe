@@ -29,10 +29,26 @@ export interface BmcEvent {
 }
 
 export interface StreamStatus {
-  state: "connecting" | "connected" | "waiting" | "off";
+  /** unsupported：BMC 没有 SSE 事件流（如超聚变 iBMC），不当成断线，隔几个小时再看一次。 */
+  state: "connecting" | "connected" | "waiting" | "unsupported" | "off";
   since: string;
   error: string;
   events: number;
+  /** waiting、unsupported 时下次什么时候再连。 */
+  retryAt?: string;
+}
+
+/** BMC 不支持事件流：没有 ServerSentEventUri、事件服务关着，或者事件流地址回 404/405/501。 */
+export class SseUnsupported extends Error {}
+
+/** BMC 升级固件、开了事件服务后可能就支持了，所以不是永远不连，隔这么久再看一次。 */
+export const UNSUPPORTED_RECHECK_MS = 6 * 60 * 60_000;
+
+/** 第 failures 次失败后等多久再连：断线按 10 秒、30 秒……最长 5 分钟；不支持的隔 6 小时。 */
+export function retryDelay(failures: number, unsupported: boolean): number {
+  if (unsupported) return UNSUPPORTED_RECHECK_MS;
+  const delays = [10, 30, 60, 120, 300];
+  return delays[Math.min(failures, delays.length - 1)] * 1000;
 }
 
 const KEEP_PER_ASSET = 500;
@@ -148,6 +164,8 @@ interface Stream {
   request: ReturnType<typeof https.request> | null;
   timer: ReturnType<typeof setTimeout> | null;
   failures: number;
+  /** 事件流地址回了 404/405/501，关连接时按不支持排下一次。 */
+  unsupported?: boolean;
   stopped: boolean;
 }
 
@@ -173,12 +191,12 @@ function setStatus(stream: Stream, state: StreamStatus["state"], error = ""): vo
   stream.status = { ...stream.status, state, error, since: new Date().toISOString() };
 }
 
-function schedule(assetId: string, stream: Stream): void {
+function schedule(assetId: string, stream: Stream, unsupported = false): void {
   if (stream.stopped) return;
-  const delays = [10, 30, 60, 120, 300];
-  const delay = delays[Math.min(stream.failures, delays.length - 1)] * 1000;
+  const delay = retryDelay(stream.failures, unsupported);
   stream.failures++;
-  setStatus(stream, "waiting", stream.status.error);
+  setStatus(stream, unsupported ? "unsupported" : "waiting", stream.status.error);
+  stream.status.retryAt = new Date(Date.now() + delay).toISOString();
   stream.timer = setTimeout(() => void connect(assetId, stream), delay);
 }
 
@@ -193,12 +211,12 @@ async function connect(assetId: string, stream: Stream): Promise<void> {
     const session = await openSession(asset);
     account = assetBmcAccounts(asset).find((item) => item.user === session.user);
     const service = await rfGet(session, "/redfish/v1/EventService");
-    if (service.ServiceEnabled === false) throw new Error("BMC 的事件服务没开");
+    if (service.ServiceEnabled === false) throw new SseUnsupported("BMC 的事件服务没开");
     ssePath = typeof service.ServerSentEventUri === "string" ? service.ServerSentEventUri : "";
-    if (!ssePath) throw new Error("BMC 不支持 SSE 事件流");
+    if (!ssePath) throw new SseUnsupported("BMC 不支持 SSE 事件流");
   } catch (error) {
     stream.status.error = error instanceof Error ? error.message : "连不上";
-    return schedule(assetId, stream);
+    return schedule(assetId, stream, error instanceof SseUnsupported);
   }
   if (stream.stopped || !account) return;
   const auth = `Basic ${Buffer.from(`${account.user}:${account.password}`).toString("base64")}`;
@@ -207,11 +225,14 @@ async function connect(assetId: string, stream: Stream): Promise<void> {
     (response) => {
       if (response.statusCode !== 200) {
         stream.status.error = `事件流 HTTP ${response.statusCode}`;
+        stream.unsupported = [404, 405, 501].includes(response.statusCode || 0);
         response.resume();
         return;
       }
       stream.failures = 0;
+      stream.unsupported = false;
       setStatus(stream, "connected");
+      delete stream.status.retryAt;
       response.setEncoding("utf8");
       let buffer = "";
       response.on("data", (chunk: string) => {
@@ -237,7 +258,7 @@ async function connect(assetId: string, stream: Stream): Promise<void> {
   });
   request.on("close", () => {
     if (stream.request === request) stream.request = null;
-    if (!stream.stopped) schedule(assetId, stream);
+    if (!stream.stopped) schedule(assetId, stream, stream.unsupported);
   });
   request.end();
 }

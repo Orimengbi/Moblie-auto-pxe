@@ -335,7 +335,9 @@ export function EventStreamLine({ status }: { status: StreamStatus }) {
         ? "正在连接"
         : status.state === "waiting"
           ? `断开了，稍后重连${status.error ? `（${status.error}）` : ""}`
-          : "没有连（这台不在监控范围，或在 设置 → 监控 里关了实时事件）";
+          : status.state === "unsupported"
+            ? `这台 BMC 不支持${status.error ? `（${status.error}）` : ""}。硬件告警照样有：监控每次 BMC 检查读 SEL，间隔在 设置 → 监控 里改${status.retryAt ? `；${formatTime(status.retryAt)} 再看一次支不支持` : ""}`
+            : "没有连（这台不在监控范围，或在 设置 → 监控 里关了实时事件）";
   return (
     <Typography variant="caption" sx={{ display: "block", mt: 1.5, color: "text.secondary" }}>
       BMC 实时事件：
