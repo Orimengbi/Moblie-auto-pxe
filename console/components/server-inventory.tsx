@@ -107,8 +107,9 @@ function PartTable({ kind, items }: { kind: HwKind; items: HwComponent[] }) {
   );
 }
 
-/** 按类别分表列一组部件，没有部件就不显示。 */
-function PartGroups({ title, caption, items }: { title: string; caption?: string; items: HwComponent[] }) {
+/** 按类别分表列一组部件，没有部件就不显示。BIOS、BMC 这类固件在「固件」页看，这里不列。 */
+function PartGroups({ title, caption, items: all }: { title: string; caption?: string; items: HwComponent[] }) {
+  const items = all.filter((item) => item.kind !== "firmware");
   if (!items.length) return null;
   return (
     <Stack component="section" spacing={1}>
